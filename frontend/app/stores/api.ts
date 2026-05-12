@@ -106,6 +106,14 @@ export const useApiStore = defineStore(
       })
     }
 
+    const getImportSession = async (sessionId: string): Promise<{ item: Record<string, any> }> => {
+      return await $api(`/api/import-sessions/${sessionId}`, {
+        headers: {
+          Authorization: `Bearer ${tokenJWT.value}`
+        }
+      })
+    }
+
     const uploadImportFile = async (sessionId: string, file: File): Promise<{ item: Record<string, any> }> => {
       const formData = new FormData()
       formData.append('file', file)
@@ -403,6 +411,7 @@ export const useApiStore = defineStore(
       telemetryTest,
       createImportSession,
       listImportSessions,
+      getImportSession,
       uploadImportFile,
       getImportPreview,
       updateImportPreview,

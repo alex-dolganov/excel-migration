@@ -36,6 +36,7 @@ import {
   buildSessionHistoryRows,
   FILE_ATTACH_IMPORT_SCENARIOS,
 } from '~/utils/importer-ui'
+import { sleepAction } from '~/utils/sleep'
 
 type MappingRow = {
   key: string
@@ -1595,12 +1596,12 @@ async function runImport() {
 
   try {
     const response = await apiStore.runImportSession(String(session.value.id), perRowDedupDecisions.value)
-    importRunData.value = response.item
-    session.value = session.value ? { ...session.value, status: response.item.status } : session.value
+    const queuedImportRun = await resolveImportExecutionResult(String(session.value.id), response.item)
+    importRunData.value = queuedImportRun
     currentStep.value = 7
     setSuccess(
-      response.item?.status === 'cancelled'
-        ? `Импорт остановлен. Не запущено строк: ${Number(response.item?.remaining_rows || 0)}.`
+      queuedImportRun?.status === 'cancelled'
+        ? `Импорт остановлен. Не запущено строк: ${Number(queuedImportRun?.remaining_rows || 0)}.`
         : importRunFailedRows.value > 0
         ? 'Импорт завершен. Часть строк требует внимания.'
         : 'Импорт завершен. Все строки обработаны.',
@@ -1625,15 +1626,15 @@ async function retryFailedRows() {
 
   try {
     const response = await apiStore.retryFailedImportSession(String(session.value.id))
-    importRunData.value = response.item
-    session.value = session.value ? { ...session.value, status: response.item.status } : session.value
+    const queuedImportRun = await resolveImportExecutionResult(String(session.value.id), response.item)
+    importRunData.value = queuedImportRun
     currentStep.value = 7
     setSuccess(
-      response.item?.status === 'cancelled'
-        ? `Повтор остановлен. Не запущено строк: ${Number(response.item?.remaining_rows || 0)}.`
-        : Number(response.item?.failed_rows || 0) > 0
-        ? `Повтор выполнен. Осталось неуспешных строк: ${Number(response.item?.failed_rows || 0)}.`
-        : `Повтор выполнен. Обработано строк: ${Number(response.item?.retried_rows || 0)}.`,
+      queuedImportRun?.status === 'cancelled'
+        ? `Повтор остановлен. Не запущено строк: ${Number(queuedImportRun?.remaining_rows || 0)}.`
+        : Number(queuedImportRun?.failed_rows || 0) > 0
+        ? `Повтор выполнен. Осталось неуспешных строк: ${Number(queuedImportRun?.failed_rows || 0)}.`
+        : `Повтор выполнен. Обработано строк: ${Number(queuedImportRun?.retried_rows || 0)}.`,
     )
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
@@ -1722,6 +1723,80 @@ async function loadHistory() {
   } catch {
     // silently ignore history load failures
   }
+}
+
+function syncSessionSnapshot(snapshot: Record<string, any> | null | undefined) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return
+  }
+
+  session.value = session.value ? { ...session.value, ...snapshot } : snapshot
+}
+
+function buildImportRunFromSnapshot(snapshot: Record<string, any> | null | undefined) {
+  const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
+  const importRun = summary?.import_run
+  if (!importRun || typeof importRun !== 'object') {
+    return null
+  }
+
+  const retryRuns = Array.isArray(summary?.retry_runs) ? summary.retry_runs : []
+  const latestRetryRun = retryRuns.length > 0 && retryRuns[retryRuns.length - 1] && typeof retryRuns[retryRuns.length - 1] === 'object'
+    ? retryRuns[retryRuns.length - 1]
+    : null
+
+  return {
+    session_id: String(snapshot?.session_id || snapshot?.id || session.value?.id || ''),
+    status: String(snapshot?.status || ''),
+    retried_rows: Array.isArray(latestRetryRun?.results) ? latestRetryRun.results.length : 0,
+    retry_result: latestRetryRun,
+    ...importRun,
+  }
+}
+
+async function waitForImportExecutionResult(sessionId: string) {
+  const maxAttempts = 120
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const response = await apiStore.getImportSession(sessionId)
+    const snapshot = response.item
+    syncSessionSnapshot(snapshot)
+
+    const resolvedImportRun = buildImportRunFromSnapshot(snapshot)
+    if (resolvedImportRun) {
+      return resolvedImportRun
+    }
+
+    const currentStatus = String(snapshot?.status || '')
+    if (currentStatus === 'failed') {
+      throw new Error(String(snapshot?.last_error || 'Импорт завершился с ошибкой в фоновом worker.'))
+    }
+
+    if (!['running', 'draft', 'uploaded', 'validated', 'ready'].includes(currentStatus)) {
+      throw new Error('Импорт завершился без итогового отчета.')
+    }
+
+    await sleepAction(1500)
+  }
+
+  throw new Error('Фоновый импорт не завершился за ожидаемое время.')
+}
+
+async function resolveImportExecutionResult(sessionId: string, responseItem: Record<string, any> | null | undefined) {
+  if (responseItem && typeof responseItem === 'object' && Array.isArray(responseItem.results)) {
+    syncSessionSnapshot({
+      id: sessionId,
+      status: responseItem.status,
+      summary: { import_run: responseItem },
+    })
+    await loadHistory()
+    return responseItem
+  }
+
+  syncSessionSnapshot(responseItem)
+  const resolvedImportRun = await waitForImportExecutionResult(sessionId)
+  await loadHistory()
+  return resolvedImportRun
 }
 
 onMounted(loadHistory)

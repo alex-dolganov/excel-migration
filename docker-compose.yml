@@ -202,6 +202,37 @@ services:
     networks:
       - internal-net
 
+  api-python-worker:
+    profiles: ["python-queue"]
+    build:
+      context: ./backends/python
+      dockerfile: api/Dockerfile
+      target: ${BUILD_TARGET:-dev}
+    container_name: api-python-worker
+    env_file: .env
+    environment:
+      DB_HOST: database
+      PORT: 8000
+      NUXT_PUBLIC_API_URL: ${VIRTUAL_HOST}
+    command:
+      - sh
+      - -c
+      - python manage.py migrate --noinput && celery -A api.celery.celery_app worker --loglevel=info
+    volumes:
+      - ./backends/python/api:/var/www/api
+      - ./logs/python:/var/log/python
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      database-postgres:
+        condition: service_healthy
+        required: false
+      database-mysql:
+        condition: service_healthy
+        required: false
+    networks:
+      - internal-net
+
   api-node:
     profiles: ["node"]
     container_name: api

@@ -8,3 +8,5 @@ gunicorn
 environs
 b24pysdk==0.2.3a1
 xlrd
+celery==5.4.0
+kombu==5.3.5

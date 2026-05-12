@@ -77,6 +77,35 @@ class ImportSessionsApiTest(TestCase):
         })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_get_session_returns_single_portal_session_snapshot(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+        )
+
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.CONTACT,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.RUNNING,
+            original_filename="contacts.xlsx",
+            summary={"job": {"state": "queued"}},
+        )
+
+        response = self.client.get(
+            reverse("importer:session-detail", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["id"], str(session.id))
+        self.assertEqual(response.json()["item"]["status"], ImportSession.Status.RUNNING)
+        self.assertEqual(response.json()["item"]["summary"], {"job": {"state": "queued"}})
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_create_session_returns_created_draft(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(
             member_id="member-1",

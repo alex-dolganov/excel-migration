@@ -16,6 +16,11 @@ from main.utils.decorators import auth_required, log_errors
 
 from .models import ImportSession, ImportTemplate, ImporterUserRole
 from .services.b24_fields import fetch_entity_fields
+from .services.background_jobs import (
+    enqueue_import_session_retry,
+    enqueue_import_session_run,
+    is_import_queue_enabled,
+)
 from .services.example_templates import build_example_template_filename, build_example_template_xlsx
 from .services.import_execution import execute_dry_run, execute_import, normalize_entity_dedup_settings
 from .services.mapping import build_candidate_mapping, normalize_saved_mapping
@@ -387,6 +392,13 @@ def load_portal_session(portal_member_id: str, portal_domain: str, session_id):
         )
     except ImportSession.DoesNotExist:
         return None
+
+
+def serialize_session_response_item(session: ImportSession) -> dict:
+    return {
+        "session_id": str(session.id),
+        **serialize_session(session),
+    }
 
 
 def load_portal_template(portal_member_id: str, portal_domain: str, template_id, entity_type: str | None = None):
@@ -1120,6 +1132,24 @@ def import_session_apply_template(request: AuthorizedRequest, session_id):
 
 @xframe_options_exempt
 @require_GET
+@log_errors("import_session_detail")
+@auth_required
+def import_session_detail(request: AuthorizedRequest, session_id):
+    account = request.bitrix24_account
+    portal_member_id = getattr(account, "member_id", "")
+    portal_domain = getattr(account, "domain_url", "")
+
+    session = load_portal_session(portal_member_id, portal_domain, session_id)
+    if session is None:
+        return JsonResponse({"error": "Import session not found"}, status=404)
+    if not can_view_session(account, session):
+        return permission_denied_response()
+
+    return JsonResponse({"item": serialize_session(session)})
+
+
+@xframe_options_exempt
+@require_GET
 @log_errors("import_departments")
 @auth_required
 def import_departments(request: AuthorizedRequest):
@@ -1466,6 +1496,85 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
     )
 
 
+def execute_import_session_run_now(session: ImportSession, account, *, per_row_decisions: dict | None = None) -> dict:
+    preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
+    columns = preview_data.get("columns")
+    selected_sheet_name = preview_data.get("selected_sheet_name") or session.source_sheet_name
+    if not isinstance(columns, list) or not columns or not selected_sheet_name:
+        raise ValueError("Preview data is required before import execution")
+
+    import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
+    saved_mapping = import_settings.get("mapping", {})
+    if not isinstance(saved_mapping, dict) or not saved_mapping:
+        raise ValueError("Saved mapping is required before import execution")
+    task_default_field_values = build_task_default_field_values(
+        session.entity_type,
+        normalize_task_defaults(import_settings.get("task_defaults", {})),
+    )
+    saved_dedup = normalize_entity_dedup_settings(session.entity_type, import_settings.get("dedup", {}))
+
+    normalized_per_row_decisions = per_row_decisions or normalize_per_row_decisions(import_settings.get("per_row_decisions"))
+
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    validation_summary = summary.get("validation")
+    if not isinstance(validation_summary, dict):
+        raise ValueError("Validation is required before import execution")
+
+    session.status = ImportSession.Status.RUNNING
+    session.last_error = ""
+    session.save(update_fields=["status", "last_error", "updated_at"])
+
+    try:
+        fields = fetch_entity_fields(account, session.entity_type)
+        _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+        import_result = execute_import(
+            account=account,
+            entity_type=session.entity_type,
+            rows=rows,
+            row_numbers=row_numbers,
+            columns=columns,
+            data_start_row=session.data_start_row,
+            mapping=saved_mapping,
+            validation_summary=validation_summary,
+            fields=fields,
+            dedup_settings=saved_dedup,
+            should_cancel=lambda: is_session_cancel_requested(session.id),
+            default_field_values=task_default_field_values,
+            per_row_decisions=normalized_per_row_decisions,
+        )
+    except Exception as error:
+        session.status = ImportSession.Status.FAILED
+        session.last_error = str(error)
+        session.save(update_fields=["status", "last_error", "updated_at"])
+        raise
+
+    session.summary = {
+        **summary,
+        "import_run": import_result,
+    }
+    session.status = ImportSession.Status.CANCELLED if import_result.get("cancelled") else ImportSession.Status.COMPLETED
+    session.processed_rows = import_result["checked_rows"]
+    session.successful_rows = import_result["created_rows"] + import_result.get("updated_rows", 0)
+    session.failed_rows = import_result["failed_rows"]
+    session.last_error = ""
+    session.save(
+        update_fields=[
+            "summary",
+            "status",
+            "processed_rows",
+            "successful_rows",
+            "failed_rows",
+            "last_error",
+            "updated_at",
+        ]
+    )
+
+    return {
+        "session_id": str(session.id),
+        "status": session.status,
+        **import_result,
+    }
+
 @xframe_options_exempt
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -1515,64 +1624,27 @@ def import_session_run(request: AuthorizedRequest, session_id):
     if not isinstance(validation_summary, dict):
         return JsonResponse({"error": "Validation is required before import execution"}, status=400)
 
-    session.status = ImportSession.Status.RUNNING
-    session.last_error = ""
-    session.save(update_fields=["status", "last_error", "updated_at"])
+    if is_import_queue_enabled():
+        if getattr(account, "id", None) is None:
+            return JsonResponse({"error": "Queue execution requires a persisted Bitrix24 account"}, status=400)
+
+        session.status = ImportSession.Status.RUNNING
+        session.last_error = ""
+        session.save(update_fields=["status", "last_error", "updated_at"])
+        enqueue_import_session_run(session, account)
+        session.refresh_from_db()
+        return JsonResponse({"item": serialize_session_response_item(session)}, status=202)
 
     try:
-        fields = fetch_entity_fields(account, session.entity_type)
-        _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
-        import_result = execute_import(
+        import_item = execute_import_session_run_now(
+            session=session,
             account=account,
-            entity_type=session.entity_type,
-            rows=rows,
-            row_numbers=row_numbers,
-            columns=columns,
-            data_start_row=session.data_start_row,
-            mapping=saved_mapping,
-            validation_summary=validation_summary,
-            fields=fields,
-            dedup_settings=saved_dedup,
-            should_cancel=lambda: is_session_cancel_requested(session.id),
-            default_field_values=task_default_field_values,
             per_row_decisions=per_row_decisions,
         )
     except Exception as error:
-        session.status = ImportSession.Status.FAILED
-        session.last_error = str(error)
-        session.save(update_fields=["status", "last_error", "updated_at"])
         return JsonResponse({"error": str(error)}, status=400)
 
-    session.summary = {
-        **summary,
-        "import_run": import_result,
-    }
-    session.status = ImportSession.Status.CANCELLED if import_result.get("cancelled") else ImportSession.Status.COMPLETED
-    session.processed_rows = import_result["checked_rows"]
-    session.successful_rows = import_result["created_rows"] + import_result.get("updated_rows", 0)
-    session.failed_rows = import_result["failed_rows"]
-    session.last_error = ""
-    session.save(
-        update_fields=[
-            "summary",
-            "status",
-            "processed_rows",
-            "successful_rows",
-            "failed_rows",
-            "last_error",
-            "updated_at",
-        ]
-    )
-
-    return JsonResponse(
-        {
-            "item": {
-                "session_id": str(session.id),
-                "status": session.status,
-                **import_result,
-            }
-        }
-    )
+    return JsonResponse({"item": import_item})
 
 
 @xframe_options_exempt
@@ -1627,6 +1699,108 @@ def import_session_report_csv(request: AuthorizedRequest, session_id):
     return response
 
 
+def execute_import_session_retry_now(session: ImportSession, account) -> dict:
+    preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
+    columns = preview_data.get("columns")
+    selected_sheet_name = preview_data.get("selected_sheet_name") or session.source_sheet_name
+    if not isinstance(columns, list) or not columns or not selected_sheet_name:
+        raise ValueError("Preview data is required before retry")
+
+    import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
+    saved_mapping = import_settings.get("mapping", {})
+    if not isinstance(saved_mapping, dict) or not saved_mapping:
+        raise ValueError("Saved mapping is required before retry")
+    task_default_field_values = build_task_default_field_values(
+        session.entity_type,
+        normalize_task_defaults(import_settings.get("task_defaults", {})),
+    )
+    saved_dedup = normalize_entity_dedup_settings(session.entity_type, import_settings.get("dedup", {}))
+
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    previous_import_run = summary.get("import_run")
+    if not isinstance(previous_import_run, dict) or not isinstance(previous_import_run.get("results"), list):
+        raise ValueError("Import results are required before retry")
+
+    retry_row_numbers = collect_retryable_row_numbers(previous_import_run.get("results", []))
+    if not retry_row_numbers:
+        raise ValueError("There are no failed rows to retry")
+
+    session.status = ImportSession.Status.RUNNING
+    session.last_error = ""
+    session.save(update_fields=["status", "last_error", "updated_at"])
+
+    try:
+        fields = fetch_entity_fields(account, session.entity_type)
+        _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+        validation_result = build_validation_result(
+            rows=rows,
+            row_numbers=row_numbers,
+            columns=columns,
+            data_start_row=session.data_start_row,
+            mapping=saved_mapping,
+            fields=fields,
+            account=account,
+            default_field_values=task_default_field_values,
+        )
+        retry_rows, retry_row_numbers_filtered = filter_rows_by_row_numbers(rows, row_numbers, retry_row_numbers)
+        retry_result = execute_import(
+            account=account,
+            entity_type=session.entity_type,
+            rows=retry_rows,
+            row_numbers=retry_row_numbers_filtered,
+            columns=columns,
+            data_start_row=session.data_start_row,
+            mapping=saved_mapping,
+            validation_summary=validation_result,
+            fields=fields,
+            dedup_settings=saved_dedup,
+            should_cancel=lambda: is_session_cancel_requested(session.id),
+            default_field_values=task_default_field_values,
+            per_row_decisions=normalize_per_row_decisions(import_settings.get("per_row_decisions")),
+        )
+    except Exception as error:
+        session.status = ImportSession.Status.FAILED
+        session.last_error = str(error)
+        session.save(update_fields=["status", "last_error", "updated_at"])
+        raise
+
+    retry_runs = summary.get("retry_runs", [])
+    if not isinstance(retry_runs, list):
+        retry_runs = []
+    retry_runs = [*retry_runs, retry_result]
+    merged_import_run = merge_import_run_results(previous_import_run, retry_result)
+
+    session.summary = {
+        **summary,
+        "validation": validation_result,
+        "import_run": merged_import_run,
+        "retry_runs": retry_runs,
+    }
+    session.status = ImportSession.Status.CANCELLED if retry_result.get("cancelled") else ImportSession.Status.COMPLETED
+    session.processed_rows = merged_import_run["checked_rows"]
+    session.successful_rows = merged_import_run["created_rows"] + merged_import_run.get("updated_rows", 0)
+    session.failed_rows = merged_import_run["failed_rows"]
+    session.last_error = ""
+    session.save(
+        update_fields=[
+            "summary",
+            "status",
+            "processed_rows",
+            "successful_rows",
+            "failed_rows",
+            "last_error",
+            "updated_at",
+        ]
+    )
+
+    return {
+        "session_id": str(session.id),
+        "status": session.status,
+        "retried_rows": len(retry_row_numbers_filtered),
+        "retry_result": retry_result,
+        **merged_import_run,
+    }
+
 @xframe_options_exempt
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -1671,85 +1845,23 @@ def import_session_retry_failed(request: AuthorizedRequest, session_id):
     if not retry_row_numbers:
         return JsonResponse({"error": "There are no failed rows to retry"}, status=400)
 
-    session.status = ImportSession.Status.RUNNING
-    session.last_error = ""
-    session.save(update_fields=["status", "last_error", "updated_at"])
+    if is_import_queue_enabled():
+        if getattr(account, "id", None) is None:
+            return JsonResponse({"error": "Queue execution requires a persisted Bitrix24 account"}, status=400)
+
+        session.status = ImportSession.Status.RUNNING
+        session.last_error = ""
+        session.save(update_fields=["status", "last_error", "updated_at"])
+        enqueue_import_session_retry(session, account)
+        session.refresh_from_db()
+        return JsonResponse({"item": serialize_session_response_item(session)}, status=202)
 
     try:
-        fields = fetch_entity_fields(account, session.entity_type)
-        _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
-        validation_result = build_validation_result(
-            rows=rows,
-            row_numbers=row_numbers,
-            columns=columns,
-            data_start_row=session.data_start_row,
-            mapping=saved_mapping,
-            fields=fields,
-            account=account,
-            default_field_values=task_default_field_values,
-        )
-        retry_rows, retry_row_numbers_filtered = filter_rows_by_row_numbers(rows, row_numbers, retry_row_numbers)
-        retry_result = execute_import(
-            account=account,
-            entity_type=session.entity_type,
-            rows=retry_rows,
-            row_numbers=retry_row_numbers_filtered,
-            columns=columns,
-            data_start_row=session.data_start_row,
-            mapping=saved_mapping,
-            validation_summary=validation_result,
-            fields=fields,
-            dedup_settings=saved_dedup,
-            should_cancel=lambda: is_session_cancel_requested(session.id),
-            default_field_values=task_default_field_values,
-            per_row_decisions=normalize_per_row_decisions(import_settings.get("per_row_decisions")),
-        )
+        retry_item = execute_import_session_retry_now(session=session, account=account)
     except Exception as error:
-        session.status = ImportSession.Status.FAILED
-        session.last_error = str(error)
-        session.save(update_fields=["status", "last_error", "updated_at"])
         return JsonResponse({"error": str(error)}, status=400)
 
-    retry_runs = summary.get("retry_runs", [])
-    if not isinstance(retry_runs, list):
-        retry_runs = []
-    retry_runs = [*retry_runs, retry_result]
-    merged_import_run = merge_import_run_results(previous_import_run, retry_result)
-
-    session.summary = {
-        **summary,
-        "validation": validation_result,
-        "import_run": merged_import_run,
-        "retry_runs": retry_runs,
-    }
-    session.status = ImportSession.Status.CANCELLED if retry_result.get("cancelled") else ImportSession.Status.COMPLETED
-    session.processed_rows = merged_import_run["checked_rows"]
-    session.successful_rows = merged_import_run["created_rows"] + merged_import_run.get("updated_rows", 0)
-    session.failed_rows = merged_import_run["failed_rows"]
-    session.last_error = ""
-    session.save(
-        update_fields=[
-            "summary",
-            "status",
-            "processed_rows",
-            "successful_rows",
-            "failed_rows",
-            "last_error",
-            "updated_at",
-        ]
-    )
-
-    return JsonResponse(
-        {
-            "item": {
-                "session_id": str(session.id),
-                "status": session.status,
-                "retried_rows": len(retry_row_numbers_filtered),
-                "retry_result": retry_result,
-                **merged_import_run,
-            }
-        }
-    )
+    return JsonResponse({"item": retry_item})
 
 
 @xframe_options_exempt
