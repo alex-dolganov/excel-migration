@@ -3,6 +3,9 @@ import os
 from celery import Celery
 
 
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
+
+
 broker_url = os.getenv(
     "CELERY_BROKER_URL",
     os.getenv("RABBITMQ_DSN", "amqp://queue_user:queue_password@rabbitmq:5672/%2f"),

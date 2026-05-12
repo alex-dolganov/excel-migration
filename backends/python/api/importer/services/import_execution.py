@@ -997,11 +997,21 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
             task_fields["PARENT_ID"] = _resolve_task_reference_id(
                 task_fields.get("PARENT_ID"), "PARENT_ID", task_resolver=task_resolver
             )
-        response = BitrixAPIRequest(
-            bitrix_token=account,
-            api_method="tasks.task.add",
-            params={"fields": task_fields},
-        )
+        task_scope = get_entity_scope(account.client, "task")
+        add_method = getattr(task_scope, "add", None)
+        if add_method is not None:
+            response = invoke_with_fallbacks(
+                [
+                    lambda: add_method(task_fields),
+                    lambda: add_method(fields=task_fields),
+                ]
+            )
+        else:
+            response = BitrixAPIRequest(
+                bitrix_token=account,
+                api_method="tasks.task.add",
+                params={"fields": task_fields},
+            )
         result = unwrap_bitrix_result(response)
         if isinstance(result, dict):
             task_data = result.get("task") or result
@@ -1016,12 +1026,23 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
             if field_id != "TASK_ID"
         }
         if entity_type == "task_checklist_item":
-            child_fields["PARENT_ID"] = _get_or_create_checklist_group(account, parent_task_id, context)
-            response = BitrixAPIRequest(
-                bitrix_token=account,
-                api_method=TASK_CHILD_API_METHODS[entity_type],
-                params={"taskId": parent_task_id, "fields": child_fields},
-            )
+            checklist_scope = get_entity_scope(account.client, "task_checklist_item")
+            add_method = getattr(checklist_scope, "add", None)
+            if add_method is not None:
+                response = invoke_with_fallbacks(
+                    [
+                        lambda: add_method(parent_task_id, child_fields),
+                        lambda: add_method(taskId=parent_task_id, fields=child_fields),
+                        lambda: add_method(task_id=parent_task_id, fields=child_fields),
+                    ]
+                )
+            else:
+                child_fields["PARENT_ID"] = _get_or_create_checklist_group(account, parent_task_id, context)
+                response = BitrixAPIRequest(
+                    bitrix_token=account,
+                    api_method=TASK_CHILD_API_METHODS[entity_type],
+                    params={"taskId": parent_task_id, "fields": child_fields},
+                )
             return _extract_checklist_item_id(unwrap_bitrix_result(response))
 
         if entity_type == "task_comment":

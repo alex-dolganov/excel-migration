@@ -102,12 +102,15 @@ def build_sheet_xml(rows):
 class ImportExecutionApiTest(TestCase):
     def setUp(self):
         super().setUp()
+        self.queue_env_override = patch.dict("os.environ", {"ENABLE_RABBITMQ": "0"}, clear=False)
+        self.queue_env_override.start()
         self.media_root = tempfile.mkdtemp()
         self.media_override = override_settings(MEDIA_ROOT=self.media_root)
         self.media_override.enable()
 
     def tearDown(self):
         self.media_override.disable()
+        self.queue_env_override.stop()
         shutil.rmtree(self.media_root, ignore_errors=True)
         super().tearDown()
 

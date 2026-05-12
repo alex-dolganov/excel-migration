@@ -361,6 +361,7 @@ const maxAvailableStep = computed(() => {
   return 1
 })
 const progressPercent = computed(() => Math.round((currentStep.value / 7) * 100))
+const importJobState = computed(() => String(session.value?.summary?.job?.state || '').trim())
 const footerStatusLabel = computed(() => {
   if (cancelRequested.value) {
     return 'Останавливаем импорт'
@@ -399,10 +400,22 @@ const footerStatusLabel = computed(() => {
   }
 
   if (busyAction.value === 'run') {
+    if (importJobState.value === 'queued') {
+      return 'Задача поставлена в очередь'
+    }
+    if (importJobState.value === 'running') {
+      return 'Импорт выполняется в фоне'
+    }
     return 'Запускаем импорт'
   }
 
   if (busyAction.value === 'retry') {
+    if (importJobState.value === 'queued') {
+      return 'Повтор поставлен в очередь'
+    }
+    if (importJobState.value === 'running') {
+      return 'Повтор выполняется в фоне'
+    }
     return 'Повторяем неуспешные строки'
   }
 
@@ -412,6 +425,10 @@ const footerStatusLabel = computed(() => {
 
   if (busyAction.value === 'example-template') {
     return 'Готовим Excel-шаблон'
+  }
+
+  if (importJobState.value === 'failed') {
+    return 'Фоновая задача завершилась с ошибкой'
   }
 
   if (importRunData.value?.cancelled) {

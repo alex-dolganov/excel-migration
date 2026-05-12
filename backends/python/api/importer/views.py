@@ -363,7 +363,7 @@ def is_session_cancel_requested(session_id) -> bool:
 def build_import_report_csv(import_run: dict) -> str:
     csv_buffer = StringIO()
     csv_writer = csv.writer(csv_buffer)
-    csv_writer.writerow(["№ строки", "статус", "статус (описание)", "ID записи", "ошибка"])
+    csv_writer.writerow(["row_number", "status", "status_label", "record_id", "error"])
 
     for item in import_run.get("results", []) if isinstance(import_run, dict) else []:
         if not isinstance(item, dict):

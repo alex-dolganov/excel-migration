@@ -14,14 +14,16 @@ kombu==5.3.5
 docker compose build api-python
 ```
 
-## 2. Конфигурация Celery (`backends/python/api/celery.py`)
+## 2. Конфигурация Celery (`backends/python/api/app_celery.py`)
 ```python
 import os
 from celery import Celery
 
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
+
 broker_url = os.getenv(
     "CELERY_BROKER_URL",
-    os.getenv("RABBITMQ_DSN", "amqp://queue_user:queue_password@rabbitmq:5672//"),
+    os.getenv("RABBITMQ_DSN", "amqp://queue_user:queue_password@rabbitmq:5672/%2f"),
 )
 
 celery_app = Celery("b24_app", broker=broker_url)
@@ -33,12 +35,12 @@ celery_app.conf.worker_prefetch_multiplier = int(
 
 Добавьте в `backends/python/api/__init__.py`:
 ```python
-from .celery import celery_app  # noqa
+from .app_celery import celery_app  # noqa
 ```
 
 ## 3. Задачи (`backends/python/api/tasks.py`)
 ```python
-from .celery import celery_app
+from .app_celery import celery_app
 
 @celery_app.task(name="bitrix24.process_event")
 def process_event(event_code: str, payload: dict) -> None:
@@ -64,7 +66,7 @@ CELERY_BROKER_URL=${RABBITMQ_DSN}
 ## 6. Запуск воркера
 ```bash
 COMPOSE_PROFILES=python,queue docker compose --env-file .env run --rm \
-  api-python celery -A api.celery.celery_app worker --loglevel=info
+  api-python sh -lc "cd /var/www/api && PYTHONPATH=/var/www:/var/www/api celery -A api.app_celery:celery_app worker --loglevel=info"
 ```
 
 > Для продакшна вынесите воркер в отдельный сервис Docker или управляйте им через Supervisor/systemd.

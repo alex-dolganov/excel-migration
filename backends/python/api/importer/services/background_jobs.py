@@ -25,12 +25,13 @@ def _update_session_job_state(
     error: str = "",
 ):
     summary = session.summary if isinstance(session.summary, dict) else {}
+    previous_job = summary.get("job") if isinstance(summary.get("job"), dict) else {}
     summary = {
         **summary,
         "job": {
             "mode": str(mode or "").strip(),
             "state": str(state or "").strip(),
-            "task_id": str(task_id or "").strip(),
+            "task_id": str(task_id or previous_job.get("task_id") or "").strip(),
             "error": str(error or "").strip(),
         },
     }
@@ -80,8 +81,10 @@ def execute_import_session_run_background(*, session_id: str, account_id: str):
         result = execute_import_session_run_now(session=session, account=account)
     except Exception as error:
         session.refresh_from_db()
+        session.status = ImportSession.Status.FAILED
+        session.last_error = str(error)
         _update_session_job_state(session, mode="run", state="failed", error=str(error))
-        session.save(update_fields=["summary", "updated_at"])
+        session.save(update_fields=["status", "last_error", "summary", "updated_at"])
         raise
     session.refresh_from_db()
     _update_session_job_state(
@@ -108,8 +111,10 @@ def execute_import_session_retry_background(*, session_id: str, account_id: str)
         result = execute_import_session_retry_now(session=session, account=account)
     except Exception as error:
         session.refresh_from_db()
+        session.status = ImportSession.Status.FAILED
+        session.last_error = str(error)
         _update_session_job_state(session, mode="retry", state="failed", error=str(error))
-        session.save(update_fields=["summary", "updated_at"])
+        session.save(update_fields=["status", "last_error", "summary", "updated_at"])
         raise
     session.refresh_from_db()
     _update_session_job_state(

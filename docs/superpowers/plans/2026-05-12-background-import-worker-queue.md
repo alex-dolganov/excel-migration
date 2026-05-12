@@ -23,7 +23,7 @@
 ### Task 2: Background Execution Layer
 
 **Files:**
-- Create: `backends/python/api/celery.py`
+- Create: `backends/python/api/app_celery.py`
 - Create: `backends/python/api/importer/tasks.py`
 - Create: `backends/python/api/importer/services/background_jobs.py`
 - Modify: `backends/python/api/__init__.py`

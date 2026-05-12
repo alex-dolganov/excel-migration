@@ -217,7 +217,7 @@ services:
     command:
       - sh
       - -c
-      - python manage.py migrate --noinput && celery -A api.celery.celery_app worker --loglevel=info
+      - cd /var/www/api && python manage.py migrate --noinput && PYTHONPATH=/var/www:/var/www/api celery -A api.app_celery:celery_app worker --loglevel=info
     volumes:
       - ./backends/python/api:/var/www/api
       - ./logs/python:/var/log/python
