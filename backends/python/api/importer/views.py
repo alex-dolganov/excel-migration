@@ -44,6 +44,7 @@ CELL_REF_RE = re.compile(r"([A-Z]+)")
 IMPORT_RUN_FAILED_STATUSES = {"failed", "skipped"}
 IMPORT_RUN_RETRYABLE_STATUSES = {"failed", "skipped", "cancelled"}
 IMPORT_RUN_SKIPPED_STATUSES = {"skipped", "skipped_duplicate"}
+IMPORT_ACTIVE_JOB_STATES = {"queued", "running"}
 IMPORT_RUN_STATUS_LABELS = {
     "created": "Создано",
     "updated": "Обновлено",
@@ -399,6 +400,16 @@ def serialize_session_response_item(session: ImportSession) -> dict:
         "session_id": str(session.id),
         **serialize_session(session),
     }
+
+
+def has_active_import_job(session: ImportSession) -> bool:
+    if session.status == ImportSession.Status.RUNNING:
+        return True
+
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    job = summary.get("job") if isinstance(summary.get("job"), dict) else {}
+    job_state = str(job.get("state") or "").strip().lower()
+    return job_state in IMPORT_ACTIVE_JOB_STATES
 
 
 def load_portal_template(portal_member_id: str, portal_domain: str, template_id, entity_type: str | None = None):
@@ -1590,6 +1601,8 @@ def import_session_run(request: AuthorizedRequest, session_id):
         return JsonResponse({"error": "Import session not found"}, status=404)
     if not can_run_session(account, session):
         return permission_denied_response()
+    if has_active_import_job(session):
+        return JsonResponse({"error": "Import session is already queued or running"}, status=409)
 
     preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
     columns = preview_data.get("columns")
@@ -1816,6 +1829,8 @@ def import_session_retry_failed(request: AuthorizedRequest, session_id):
         return JsonResponse({"error": "Import session not found"}, status=404)
     if not can_run_session(account, session):
         return permission_denied_response()
+    if has_active_import_job(session):
+        return JsonResponse({"error": "Import session is already queued or running"}, status=409)
 
     preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
     columns = preview_data.get("columns")

@@ -960,6 +960,47 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.json()["item"]["session_id"], str(session.id))
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch("importer.views.enqueue_import_session_run")
+    @patch.dict("os.environ", {"ENABLE_RABBITMQ": "1"}, clear=False)
+    def test_run_returns_conflict_when_background_job_is_already_active(self, enqueue_import_session_run, get_from_jwt_token):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session(
+            [
+                ["Lead title", "Email", "Phone"],
+                ["Alice", "alice@example.com", "+123456789"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+        session.status = ImportSession.Status.RUNNING
+        session.summary = {
+            **(session.summary if isinstance(session.summary, dict) else {}),
+            "job": {
+                "mode": "run",
+                "state": "queued",
+                "task_id": "task-123",
+                "error": "",
+            },
+        }
+        session.save(update_fields=["status", "summary", "updated_at"])
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.json()["error"], "Import session is already queued or running")
+        enqueue_import_session_run.assert_not_called()
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ImportSession.Status.RUNNING)
+        self.assertEqual(session.summary["job"]["state"], "queued")
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     @patch("importer.views.enqueue_import_session_retry")
     @patch.dict("os.environ", {"ENABLE_RABBITMQ": "1"}, clear=False)
     def test_retry_failed_enqueues_background_job_when_queue_enabled(self, enqueue_import_session_retry, get_from_jwt_token):
@@ -1009,6 +1050,64 @@ class ImportExecutionApiTest(TestCase):
         session.refresh_from_db()
         self.assertEqual(session.status, ImportSession.Status.RUNNING)
         self.assertEqual(retry_response.json()["item"]["status"], ImportSession.Status.RUNNING)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch("importer.views.enqueue_import_session_retry")
+    @patch.dict("os.environ", {"ENABLE_RABBITMQ": "1"}, clear=False)
+    def test_retry_failed_returns_conflict_when_background_job_is_already_active(self, enqueue_import_session_retry, get_from_jwt_token):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session(
+            [
+                ["Lead title", "Email", "Phone"],
+                ["Alice", "alice@example.com", "+123456789"],
+                ["Bob", "bob@example.com", "+987654321"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+        session.summary = {
+            **session.summary,
+            "import_run": {
+                "checked_rows": 2,
+                "created_rows": 1,
+                "updated_rows": 0,
+                "failed_rows": 1,
+                "skipped_rows": 0,
+                "cancelled": False,
+                "cancelled_rows": 0,
+                "remaining_rows": 0,
+                "created_ids": [501],
+                "updated_ids": [],
+                "results": [
+                    {"row_number": 2, "status": "created", "record_id": 501},
+                    {"row_number": 3, "status": "failed", "error": 'Bitrix create failed for "Bob"'},
+                ],
+            },
+            "job": {
+                "mode": "retry",
+                "state": "running",
+                "task_id": "task-456",
+                "error": "",
+            },
+        }
+        session.status = ImportSession.Status.RUNNING
+        session.save(update_fields=["summary", "status", "updated_at"])
+
+        response = self.client.post(
+            reverse("importer:session-retry-failed", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.json()["error"], "Import session is already queued or running")
+        enqueue_import_session_retry.assert_not_called()
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ImportSession.Status.RUNNING)
+        self.assertEqual(session.summary["job"]["state"], "running")
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_report_csv_downloads_import_results_after_run(self, get_from_jwt_token):
