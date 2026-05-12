@@ -110,6 +110,42 @@ EXAMPLE_TEMPLATE_DEFINITIONS = {
             ["ЗАДАЧА-002", "https://files.example.com/smeta.xlsx", "смета.xlsx"],
         ],
     },
+    "crm_files_lead": {
+        "sheet_name": "Файлы лидов",
+        "filename": "crm_files_lead-import-example.xlsx",
+        "rows": [
+            ["ID лида", "Ссылка на файл", "Имя файла", "ID поля"],
+            ["101", "https://files.example.com/brif.pdf", "бриф.pdf", "UF_CRM_1_XXXXXXXX"],
+            ["102", "https://files.example.com/contract.pdf", "договор.pdf", "UF_CRM_1_XXXXXXXX"],
+        ],
+    },
+    "crm_files_contact": {
+        "sheet_name": "Файлы контактов",
+        "filename": "crm_files_contact-import-example.xlsx",
+        "rows": [
+            ["ID контакта", "Ссылка на файл", "Имя файла", "ID поля"],
+            ["201", "https://files.example.com/photo.jpg", "фото.jpg", "UF_CRM_3_XXXXXXXX"],
+            ["202", "https://files.example.com/passport.pdf", "паспорт.pdf", "UF_CRM_3_XXXXXXXX"],
+        ],
+    },
+    "crm_files_company": {
+        "sheet_name": "Файлы компаний",
+        "filename": "crm_files_company-import-example.xlsx",
+        "rows": [
+            ["ID компании", "Ссылка на файл", "Имя файла", "ID поля"],
+            ["301", "https://files.example.com/logo.png", "логотип.png", "UF_CRM_5_XXXXXXXX"],
+            ["302", "https://files.example.com/charter.pdf", "устав.pdf", "UF_CRM_5_XXXXXXXX"],
+        ],
+    },
+    "crm_files_deal": {
+        "sheet_name": "Файлы сделок",
+        "filename": "crm_files_deal-import-example.xlsx",
+        "rows": [
+            ["ID сделки", "Ссылка на файл", "Имя файла", "ID поля"],
+            ["401", "https://files.example.com/smeta.xlsx", "смета.xlsx", "UF_CRM_XXXXXXXX"],
+            ["402", "https://files.example.com/act.pdf", "акт.pdf", "UF_CRM_XXXXXXXX"],
+        ],
+    },
     "user": {
         "sheet_name": "Пользователи",
         "filename": "user-import-example.xlsx",

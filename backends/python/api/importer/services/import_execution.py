@@ -1,3 +1,5 @@
+import time
+
 from b24pysdk.bitrix_api.requests import BitrixAPIRequest
 
 from .validation import (
@@ -12,7 +14,7 @@ from .validation import (
     row_has_values,
     split_field_values,
 )
-from .task_attachments import attach_file_to_task, download_attachment_source
+from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, download_attachment_source
 from .task_resolution import BitrixTaskResolver, is_task_reference_field
 from .user_resolution import BitrixUserResolver, is_task_user_reference_field
 
@@ -23,6 +25,7 @@ TASK_CHILD_API_METHODS = {
 }
 
 TASK_ENTITY_TYPES = {"task", "task_comment", "task_checklist_item", "task_attachment"}
+CRM_FILES_ENTITY_TYPES = {"crm_files_lead", "crm_files_contact", "crm_files_company", "crm_files_deal"}
 HR_ENTITY_TYPES = {"user", "department"}
 LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
 LINKED_ENTITY_TYPES = {"company", "contact"}
@@ -31,10 +34,29 @@ LINKED_ENTITY_PREFIXES = {
     "contact": "CONTACT__",
 }
 
-SUPPORTED_DEDUP_STRATEGIES = {"create", "skip", "update"}
+SUPPORTED_DEDUP_STRATEGIES = {"create", "skip", "update", "ask"}
 SUPPORTED_DEDUP_FIELDS = {"EMAIL", "PHONE", "TITLE"}
 BITRIX_MULTIFIELD_IDS = {"PHONE", "EMAIL", "WEB", "IM"}
 TASK_CHILD_ENTITY_TYPES = {"task_comment", "task_checklist_item"}
+
+BITRIX_ROW_DELAY = 0.5
+_RATE_LIMIT_KEYWORDS = frozenset(["query_limit_exceeded", "too many requests", "rate limit", "overloaded", "429"])
+_RATE_LIMIT_RETRY_WAITS = [5, 15, 30]
+
+
+def _is_rate_limit_error(error) -> bool:
+    return any(kw in str(error).lower() for kw in _RATE_LIMIT_KEYWORDS)
+
+
+def _bitrix_retry(fn):
+    for attempt, wait in enumerate([0] + _RATE_LIMIT_RETRY_WAITS):
+        if wait:
+            time.sleep(wait)
+        try:
+            return fn()
+        except Exception as error:
+            if attempt >= len(_RATE_LIMIT_RETRY_WAITS) or not _is_rate_limit_error(error):
+                raise
 
 
 def build_field_index(fields: list[dict]) -> dict[str, dict]:
@@ -171,7 +193,7 @@ def resolve_field_values(field: dict, value: str, mapping_item: dict) -> list[st
     return resolved_values
 
 
-def normalize_typed_field_value(field: dict, target_field: str, value):
+def normalize_typed_field_value(field: dict, target_field: str, value, column_type_override: str = ""):
     normalized_value = normalize_value(value)
     if not normalized_value:
         return ""
@@ -182,7 +204,7 @@ def normalize_typed_field_value(field: dict, target_field: str, value):
         except ValueError:
             return normalized_value
 
-    field_type = resolve_field_validation_type(field, target_field)
+    field_type = resolve_field_validation_type(field, target_field, column_type_override)
 
     if field_type in {"boolean", "bool"}:
         return parse_boolean_value(normalized_value)
@@ -256,8 +278,9 @@ def build_row_payload(
                 resolved_task_ids.append(resolved_task_id)
             resolved_values = resolved_task_ids
 
+        column_type_override = str(mapping_item.get("column_type") or "").strip().lower() if isinstance(mapping_item, dict) else ""
         normalized_values = [
-            normalize_typed_field_value(field, str(target_field), resolved_value)
+            normalize_typed_field_value(field, str(target_field), resolved_value, column_type_override)
             for resolved_value in resolved_values
         ]
         normalized_values = [item for item in normalized_values if item != ""]
@@ -607,7 +630,7 @@ def find_existing_record(account, entity_type: str, row_payload: dict, dedup_set
     if dedup_settings["strategy"] == "create" or not dedup_settings["fields"]:
         return None
 
-    if entity_type in TASK_ENTITY_TYPES:
+    if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES:
         return None
 
     if entity_type in HR_ENTITY_TYPES:
@@ -697,7 +720,7 @@ def resolve_linked_record_action(account, entity_type: str, row_payload: dict, d
     strategy = filtered_dedup_settings.get("strategy")
     if strategy == "update":
         mode = "update"
-    elif strategy == "skip":
+    elif strategy in ("skip", "ask"):
         mode = "reuse"
     else:
         mode = "create"
@@ -781,8 +804,8 @@ def build_linked_record_result(linked_entity: str, row_payload: dict, record_id,
 
 
 def update_entity_record(account, entity_type: str, record_id, fields: dict):
-    if entity_type in TASK_ENTITY_TYPES:
-        raise ValueError("Update is not supported for task entity types")
+    if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES:
+        raise ValueError("Update is not supported for this entity type")
 
     if entity_type == "user":
         _update_user(account, record_id, fields)
@@ -904,6 +927,41 @@ def _get_or_create_checklist_group(account, task_id: int, context: dict | None) 
 
 def create_entity_record(account, entity_type: str, fields: dict, *, context: dict | None = None):
     task_resolver = BitrixTaskResolver(account)
+
+    if entity_type in CRM_FILES_ENTITY_TYPES:
+        raw_id = normalize_value(fields.get("ID"))
+        if not raw_id:
+            raise ValueError("ID is required for CRM file attachment")
+        try:
+            record_id = int(raw_id)
+            if record_id <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            raise ValueError(f"ID must be a positive integer, got: {raw_id!r}")
+
+        file_url = normalize_value(fields.get("FILE_URL"))
+        if not file_url:
+            raise ValueError("FILE_URL is required for CRM file attachment")
+
+        field_id = normalize_value(fields.get("FIELD_ID"))
+        if not field_id:
+            raise ValueError("FIELD_ID is required for CRM file attachment")
+
+        download_result = download_attachment_source(file_url)
+        file_name = (
+            normalize_value(fields.get("FILE_NAME"))
+            or normalize_value(download_result.get("file_name"))
+            or "attachment.bin"
+        )
+        attach_file_to_crm_entity(
+            account,
+            entity_type=entity_type,
+            record_id=record_id,
+            field_id=field_id,
+            file_name=file_name,
+            content=download_result.get("content") or b"",
+        )
+        return record_id
 
     if entity_type == "task_attachment":
         task_id = _resolve_task_reference_id(fields.get("TASK_ID"), "TASK_ID", task_resolver=task_resolver)
@@ -1174,6 +1232,7 @@ def execute_linked_import(
             break
 
         checked_rows += 1
+        time.sleep(BITRIX_ROW_DELAY)
 
         if row_number in invalid_row_numbers:
             skipped_rows += 1
@@ -1210,26 +1269,26 @@ def execute_linked_import(
 
         company_payload = linked_payload.get("company", {})
         contact_payload = linked_payload.get("contact", {})
-        company_action = resolve_linked_record_action(
-            account,
-            "company",
-            company_payload,
-            dedup_settings.get("company", {}),
-        ) if company_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
-        contact_action = resolve_linked_record_action(
-            account,
-            "contact",
-            contact_payload,
-            dedup_settings.get("contact", {}),
-        ) if contact_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
+
+        try:
+            company_action = _bitrix_retry(lambda: resolve_linked_record_action(
+                account, "company", company_payload, dedup_settings.get("company", {}),
+            )) if company_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
+            contact_action = _bitrix_retry(lambda: resolve_linked_record_action(
+                account, "contact", contact_payload, dedup_settings.get("contact", {}),
+            )) if contact_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
+        except Exception as error:
+            failed_rows += 1
+            results.append({"row_number": row_number, "status": "failed", "error": str(error)})
+            continue
 
         company_id = company_action.get("record_id")
         try:
             if company_payload:
                 if company_action["mode"] == "update":
-                    update_entity_record(account, "company", company_action["record_id"], company_payload)
+                    _bitrix_retry(lambda: update_entity_record(account, "company", company_action["record_id"], company_payload))
                 elif company_action["mode"] == "create":
-                    company_id = create_entity_record(account, "company", company_payload)
+                    company_id = _bitrix_retry(lambda: create_entity_record(account, "company", company_payload))
         except Exception as error:
             failed_rows += 1
             results.append(
@@ -1251,11 +1310,11 @@ def execute_linked_import(
         try:
             if contact_payload:
                 if contact_action["mode"] == "update":
-                    update_entity_record(account, "contact", contact_action["record_id"], contact_payload)
+                    _bitrix_retry(lambda: update_entity_record(account, "contact", contact_action["record_id"], contact_payload))
                 elif contact_action["mode"] == "reuse" and company_id is not None and contact_action["record_id"] is not None:
-                    update_entity_record(account, "contact", contact_action["record_id"], {"COMPANY_ID": company_id})
+                    _bitrix_retry(lambda: update_entity_record(account, "contact", contact_action["record_id"], {"COMPANY_ID": company_id}))
                 elif contact_action["mode"] == "create":
-                    contact_record_id = create_entity_record(account, "contact", contact_payload)
+                    contact_record_id = _bitrix_retry(lambda: create_entity_record(account, "contact", contact_payload))
         except Exception as error:
             failed_rows += 1
             results.append(
@@ -1371,6 +1430,7 @@ def execute_dry_run(
     ready_create_rows = 0
     ready_update_rows = 0
     skipped_rows = 0
+    pending_decision_rows = 0
     results = []
 
     for row_index, row_number in enumerate(row_numbers):
@@ -1394,6 +1454,7 @@ def execute_dry_run(
             )
             continue
 
+        time.sleep(BITRIX_ROW_DELAY)
         row_payload = build_row_payload(
             row,
             columns,
@@ -1403,7 +1464,9 @@ def execute_dry_run(
             user_resolver=user_resolver,
             default_field_values=default_field_values,
         )
-        existing_record_match = find_existing_record(account, entity_type, row_payload, normalized_dedup_settings)
+        existing_record_match = _bitrix_retry(
+            lambda: find_existing_record(account, entity_type, row_payload, normalized_dedup_settings)
+        )
         existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
         duplicate_match_fields = existing_record_match.get("duplicate_match_fields", []) if isinstance(existing_record_match, dict) else []
         dedup_missing_fields = existing_record_match.get("dedup_missing_fields", []) if isinstance(existing_record_match, dict) else []
@@ -1422,6 +1485,19 @@ def execute_dry_run(
                     "record_id": existing_record_id,
                     **dedup_result_meta,
                     "error": "Duplicate matched existing record",
+                }
+            )
+            continue
+
+        if existing_record_id is not None and normalized_dedup_settings["strategy"] == "ask":
+            pending_decision_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "pending_decision",
+                    "record_id": existing_record_id,
+                    **dedup_result_meta,
+                    "fields": row_payload,
                 }
             )
             continue
@@ -1456,6 +1532,7 @@ def execute_dry_run(
         "ready_create_rows": ready_create_rows,
         "ready_update_rows": ready_update_rows,
         "skipped_rows": skipped_rows,
+        "pending_decision_rows": pending_decision_rows,
         "results": results,
     }
 
@@ -1474,6 +1551,7 @@ def execute_import(
     dedup_settings=None,
     should_cancel=None,
     default_field_values: dict | None = None,
+    per_row_decisions: dict | None = None,
 ) -> dict:
     if is_linked_import_entity_type(entity_type):
         return execute_linked_import(
@@ -1535,6 +1613,7 @@ def execute_import(
             break
 
         checked_rows += 1
+        time.sleep(BITRIX_ROW_DELAY)
 
         if row_number in invalid_row_numbers:
             skipped_rows += 1
@@ -1548,16 +1627,30 @@ def execute_import(
             )
             continue
 
-        row_payload = build_row_payload(
-            row,
-            columns,
-            mapping,
-            fields,
-            account=account,
-            user_resolver=user_resolver,
-            default_field_values=default_field_values,
-        )
-        existing_record_match = find_existing_record(account, entity_type, row_payload, normalized_dedup_settings)
+        try:
+            row_payload = build_row_payload(
+                row,
+                columns,
+                mapping,
+                fields,
+                account=account,
+                user_resolver=user_resolver,
+                default_field_values=default_field_values,
+            )
+        except Exception as error:
+            failed_rows += 1
+            results.append({"row_number": row_number, "status": "failed", "error": str(error)})
+            continue
+
+        try:
+            existing_record_match = _bitrix_retry(
+                lambda: find_existing_record(account, entity_type, row_payload, normalized_dedup_settings)
+            )
+        except Exception as error:
+            failed_rows += 1
+            results.append({"row_number": row_number, "status": "failed", "error": str(error)})
+            continue
+
         existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
         duplicate_match_fields = existing_record_match.get("duplicate_match_fields", []) if isinstance(existing_record_match, dict) else []
         dedup_missing_fields = existing_record_match.get("dedup_missing_fields", []) if isinstance(existing_record_match, dict) else []
@@ -1580,9 +1673,47 @@ def execute_import(
             )
             continue
 
+        if existing_record_id is not None and normalized_dedup_settings["strategy"] == "ask":
+            decisions = per_row_decisions if isinstance(per_row_decisions, dict) else {}
+            row_decision = str(decisions.get(str(row_number), "skip")).strip().lower()
+            if row_decision not in {"create", "update", "skip"}:
+                row_decision = "skip"
+
+            if row_decision == "skip":
+                skipped_rows += 1
+                results.append(
+                    {
+                        "row_number": row_number,
+                        "status": "skipped_duplicate",
+                        "record_id": existing_record_id,
+                        **dedup_result_meta,
+                        "error": "Duplicate skipped by user decision",
+                    }
+                )
+                continue
+            elif row_decision == "update":
+                try:
+                    _bitrix_retry(lambda: update_entity_record(account, entity_type, existing_record_id, row_payload))
+                except Exception as error:
+                    failed_rows += 1
+                    results.append({"row_number": row_number, "status": "failed", "error": str(error)})
+                    continue
+                updated_rows += 1
+                updated_ids.append(existing_record_id)
+                results.append(
+                    {
+                        "row_number": row_number,
+                        "status": "updated",
+                        "record_id": existing_record_id,
+                        **dedup_result_meta,
+                    }
+                )
+                continue
+            # row_decision == "create" → falls through to create logic below
+
         if existing_record_id is not None and normalized_dedup_settings["strategy"] == "update":
             try:
-                update_entity_record(account, entity_type, existing_record_id, row_payload)
+                _bitrix_retry(lambda: update_entity_record(account, entity_type, existing_record_id, row_payload))
             except Exception as error:
                 failed_rows += 1
                 results.append(
@@ -1607,7 +1738,7 @@ def execute_import(
             continue
 
         try:
-            record_id = create_entity_record(account, entity_type, row_payload, context=import_context)
+            record_id = _bitrix_retry(lambda: create_entity_record(account, entity_type, row_payload, context=import_context))
         except Exception as error:
             failed_rows += 1
             results.append(

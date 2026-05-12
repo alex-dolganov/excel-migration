@@ -376,11 +376,55 @@ DEPARTMENT_FIELDS = [
 ]
 
 
+CRM_FILES_FIELDS = [
+    {
+        "id": "ID",
+        "title": "ID записи",
+        "type": "integer",
+        "required": True,
+        "multiple": False,
+        "is_custom": False,
+        "items": [],
+    },
+    {
+        "id": "FILE_URL",
+        "title": "Ссылка на файл",
+        "type": "string",
+        "required": True,
+        "multiple": False,
+        "is_custom": False,
+        "items": [],
+    },
+    {
+        "id": "FILE_NAME",
+        "title": "Имя файла",
+        "type": "string",
+        "required": False,
+        "multiple": False,
+        "is_custom": False,
+        "items": [],
+    },
+    {
+        "id": "FIELD_ID",
+        "title": "ID поля в Bitrix24",
+        "type": "string",
+        "required": True,
+        "multiple": False,
+        "is_custom": False,
+        "items": [],
+    },
+]
+
+
 STATIC_FIELD_CATALOGS = {
     "task": TASK_FIELDS,
     "task_comment": TASK_COMMENT_FIELDS,
     "task_checklist_item": TASK_CHECKLIST_ITEM_FIELDS,
     "task_attachment": TASK_ATTACHMENT_FIELDS,
+    "crm_files_lead": CRM_FILES_FIELDS,
+    "crm_files_contact": CRM_FILES_FIELDS,
+    "crm_files_company": CRM_FILES_FIELDS,
+    "crm_files_deal": CRM_FILES_FIELDS,
     "user": USER_FIELDS,
     "department": DEPARTMENT_FIELDS,
 }

@@ -199,7 +199,14 @@ def resolve_mapped_field_value(field: dict, value: str, mapping_item: dict | Non
     return items_index.get(normalize_compare_value(normalized_value), "")
 
 
-def resolve_field_validation_type(field: dict, target_field: str) -> str:
+COLUMN_TYPE_OVERRIDES = {"string", "integer", "double", "date", "datetime", "boolean"}
+
+
+def resolve_field_validation_type(field: dict, target_field: str, column_type_override: str = "") -> str:
+    override = str(column_type_override or "").strip().lower()
+    if override in COLUMN_TYPE_OVERRIDES:
+        return override
+
     field_type = str(field.get("type") or "string").lower()
     if field_type != "crm_multifield":
         return field_type
@@ -221,7 +228,8 @@ def validate_field_value(
     task_resolver: BitrixTaskResolver | None = None,
 ):
     field_title = str(field.get("title") or target_field)
-    field_type = resolve_field_validation_type(field, target_field)
+    column_type_override = str((mapping_item or {}).get("column_type") or "").strip().lower()
+    field_type = resolve_field_validation_type(field, target_field, column_type_override)
     task_user_resolver = user_resolver or (BitrixUserResolver(account) if account is not None else None)
     bitrix_task_resolver = task_resolver or (BitrixTaskResolver(account) if account is not None else None)
 

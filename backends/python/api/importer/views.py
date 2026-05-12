@@ -4,6 +4,8 @@ from io import StringIO, TextIOWrapper
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
+import xlrd
+
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.csrf import csrf_exempt
@@ -43,6 +45,7 @@ IMPORT_RUN_STATUS_LABELS = {
     "failed": "Ошибка",
     "skipped": "Пропущено",
     "skipped_duplicate": "Дубль пропущен",
+    "pending_decision": "Ожидает решения",
     "cancelled": "Остановлено",
 }
 
@@ -334,6 +337,17 @@ def merge_import_run_results(previous_import_run: dict, retry_result: dict) -> d
     return build_import_result_summary(merged_results)
 
 
+def normalize_per_row_decisions(raw: object) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for row_num, decision in raw.items():
+        d = str(decision or "").strip().lower()
+        if d in ("create", "update", "skip"):
+            result[str(row_num)] = d
+    return result
+
+
 def is_session_cancel_requested(session_id) -> bool:
     return ImportSession.objects.filter(
         id=session_id,
@@ -492,7 +506,14 @@ def extract_sheet_names(session: ImportSession):
         return ["CSV"]
 
     if session.source_format == ImportSession.SourceFormat.XLS:
-        raise ValueError("XLS preview is not supported yet")
+        if not session.stored_file:
+            raise ValueError("Uploaded file is required")
+        try:
+            with session.stored_file.open("rb") as stored_file:
+                workbook = xlrd.open_workbook(file_contents=stored_file.read())
+            return workbook.sheet_names() or []
+        except Exception as error:
+            raise ValueError("Unable to read XLS workbook") from error
 
     if session.source_format != ImportSession.SourceFormat.XLSX:
         raise ValueError("Unsupported source format")
@@ -505,7 +526,7 @@ def extract_sheet_names(session: ImportSession):
     return sheet_names
 
 
-def extract_rows_from_xlsx_sheet(sheet_xml: bytes, shared_strings: list[str] | None = None, preview_limit: int | None = 10):
+def extract_rows_from_xlsx_sheet(sheet_xml: bytes, shared_strings: list[str] | None = None, preview_limit: int | None = 20):
     try:
         root = ElementTree.fromstring(sheet_xml)
     except ElementTree.ParseError as error:
@@ -552,7 +573,50 @@ def extract_rows_from_xlsx_sheet(sheet_xml: bytes, shared_strings: list[str] | N
     return columns, rows, row_numbers
 
 
-def extract_rows_from_csv(session: ImportSession, preview_limit: int | None = 10):
+def extract_rows_from_xls(session: ImportSession, sheet_name: str, preview_limit: int | None = 20):
+    try:
+        with session.stored_file.open("rb") as stored_file:
+            workbook = xlrd.open_workbook(file_contents=stored_file.read())
+    except Exception as error:
+        raise ValueError("Unable to read XLS workbook") from error
+
+    try:
+        sheet = workbook.sheet_by_name(sheet_name)
+    except xlrd.XLRDError:
+        raise ValueError("Selected sheet does not exist")
+
+    rows = []
+    row_numbers = []
+    max_columns = 0
+    for row_index in range(sheet.nrows):
+        row_values = []
+        for col_index in range(sheet.ncols):
+            cell = sheet.cell(row_index, col_index)
+            if cell.ctype == xlrd.XL_CELL_DATE:
+                try:
+                    dt = xlrd.xldate_as_datetime(cell.value, workbook.datemode)
+                    value = dt.strftime("%d.%m.%Y %H:%M") if dt.hour or dt.minute else dt.strftime("%d.%m.%Y")
+                except Exception:
+                    value = str(cell.value)
+            elif cell.ctype == xlrd.XL_CELL_NUMBER:
+                int_val = int(cell.value)
+                value = str(int_val) if cell.value == int_val else str(cell.value)
+            else:
+                value = str(cell.value)
+            row_values.append(value)
+        if not any(v.strip() for v in row_values):
+            continue
+        rows.append(row_values)
+        row_numbers.append(row_index + 1)
+        max_columns = max(max_columns, len(row_values))
+        if preview_limit is not None and len(rows) >= preview_limit:
+            break
+
+    columns = [column_index_to_letter(index) for index in range(1, max_columns + 1)]
+    return columns, rows, row_numbers
+
+
+def extract_rows_from_csv(session: ImportSession, preview_limit: int | None = 20):
     try:
         with session.stored_file.open("rb") as stored_file:
             reader = csv.reader(TextIOWrapper(stored_file, encoding="utf-8-sig", newline=""))
@@ -572,7 +636,7 @@ def extract_rows_from_csv(session: ImportSession, preview_limit: int | None = 10
     return columns, rows, row_numbers
 
 
-def extract_preview_rows(session: ImportSession, selected_sheet_name: str, preview_limit: int | None = 10):
+def extract_preview_rows(session: ImportSession, selected_sheet_name: str, preview_limit: int | None = 20):
     if not session.stored_file:
         raise ValueError("Uploaded file is required")
 
@@ -582,7 +646,7 @@ def extract_preview_rows(session: ImportSession, selected_sheet_name: str, previ
         return extract_rows_from_csv(session, preview_limit=preview_limit)
 
     if session.source_format == ImportSession.SourceFormat.XLS:
-        raise ValueError("XLS preview is not supported yet")
+        return extract_rows_from_xls(session, selected_sheet_name, preview_limit=preview_limit)
 
     if session.source_format != ImportSession.SourceFormat.XLSX:
         raise ValueError("Unsupported source format")
@@ -1437,6 +1501,15 @@ def import_session_run(request: AuthorizedRequest, session_id):
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
+    per_row_decisions = normalize_per_row_decisions(
+        (request.data or {}).get("per_row_decisions") if isinstance(request.data, dict) else None
+    ) or normalize_per_row_decisions(import_settings.get("per_row_decisions"))
+
+    if per_row_decisions:
+        import_settings = {**import_settings, "per_row_decisions": per_row_decisions}
+        session.import_settings = import_settings
+        session.save(update_fields=["import_settings", "updated_at"])
+
     summary = session.summary if isinstance(session.summary, dict) else {}
     validation_summary = summary.get("validation")
     if not isinstance(validation_summary, dict):
@@ -1462,6 +1535,7 @@ def import_session_run(request: AuthorizedRequest, session_id):
             dedup_settings=saved_dedup,
             should_cancel=lambda: is_session_cancel_requested(session.id),
             default_field_values=task_default_field_values,
+            per_row_decisions=per_row_decisions,
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
@@ -1628,6 +1702,7 @@ def import_session_retry_failed(request: AuthorizedRequest, session_id):
             dedup_settings=saved_dedup,
             should_cancel=lambda: is_session_cancel_requested(session.id),
             default_field_values=task_default_field_values,
+            per_row_decisions=normalize_per_row_decisions(import_settings.get("per_row_decisions")),
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED

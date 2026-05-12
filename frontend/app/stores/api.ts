@@ -254,13 +254,13 @@ export const useApiStore = defineStore(
       })
     }
 
-    const runImportSession = async (sessionId: string): Promise<{ item: Record<string, any> }> => {
+    const runImportSession = async (sessionId: string, perRowDecisions: Record<string, string> = {}): Promise<{ item: Record<string, any> }> => {
       return await $api(`/api/import-sessions/${sessionId}/run`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${tokenJWT.value}`
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ per_row_decisions: perRowDecisions }),
       })
     }
 

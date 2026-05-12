@@ -13,6 +13,10 @@ class EntityType(models.TextChoices):
     TASK_COMMENT = "task_comment", "Task comment"
     TASK_CHECKLIST_ITEM = "task_checklist_item", "Task checklist item"
     TASK_ATTACHMENT = "task_attachment", "Task attachment"
+    CRM_FILES_LEAD = "crm_files_lead", "CRM files: Lead"
+    CRM_FILES_CONTACT = "crm_files_contact", "CRM files: Contact"
+    CRM_FILES_COMPANY = "crm_files_company", "CRM files: Company"
+    CRM_FILES_DEAL = "crm_files_deal", "CRM files: Deal"
     USER = "user", "User"
     DEPARTMENT = "department", "Department"
 

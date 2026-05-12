@@ -36,3 +36,27 @@ def attach_file_to_task(account, *, task_id: int, file_name: str, content: bytes
             "file": [file_name, encoded],
         },
     )
+
+
+_CRM_UPDATE_API_METHODS = {
+    "crm_files_lead": "crm.lead.update",
+    "crm_files_contact": "crm.contact.update",
+    "crm_files_company": "crm.company.update",
+    "crm_files_deal": "crm.deal.update",
+}
+
+
+def attach_file_to_crm_entity(account, *, entity_type: str, record_id: int, field_id: str, file_name: str, content: bytes):
+    api_method = _CRM_UPDATE_API_METHODS.get(str(entity_type or ""))
+    if not api_method:
+        raise ValueError(f"Unsupported CRM file entity type: {entity_type}")
+
+    encoded = base64.b64encode(content).decode("utf-8")
+    return BitrixAPIRequest(
+        bitrix_token=account,
+        api_method=api_method,
+        params={
+            "id": record_id,
+            "fields": {field_id: {"fileData": [file_name, encoded]}},
+        },
+    )

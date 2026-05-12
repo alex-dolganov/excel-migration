@@ -1,6 +1,6 @@
 export const EMPTY_MAPPING_SELECT_VALUE = '__skip_import__'
 export const SUPPORTED_DEDUP_FIELDS = ['EMAIL', 'PHONE', 'TITLE']
-export const SUPPORTED_DEDUP_STRATEGIES = ['create', 'skip', 'update']
+export const SUPPORTED_DEDUP_STRATEGIES = ['create', 'skip', 'update', 'ask']
 export const ASSIGNABLE_IMPORTER_ROLES = ['operator', 'viewer']
 export const IMPORTER_PERMISSION_CODES = [
   'roles.manage',
@@ -175,6 +175,51 @@ const LINKED_IMPORT_SCENARIOS = {
   },
 }
 
+export const FILE_ATTACH_IMPORT_SCENARIOS = {
+  crm_files_lead: {
+    value: 'crm_files_lead',
+    label: 'Лиды',
+    family: 'crm_files',
+    entityLabel: 'Лид',
+    title: 'Массовый импорт файлов в лиды',
+    description: 'Каждая строка прикрепляет файл к лиду по его ID.',
+    minimumFields: ['ID', 'FILE_URL'],
+    destinationLabel: 'Прикрепляет файл к полю типа «Файл» существующего лида по ID.',
+  },
+  crm_files_contact: {
+    value: 'crm_files_contact',
+    label: 'Контакты',
+    family: 'crm_files',
+    entityLabel: 'Контакт',
+    title: 'Массовый импорт файлов в контакты',
+    description: 'Каждая строка прикрепляет файл к контакту по его ID.',
+    minimumFields: ['ID', 'FILE_URL'],
+    destinationLabel: 'Прикрепляет файл к полю типа «Файл» существующего контакта по ID.',
+  },
+  crm_files_company: {
+    value: 'crm_files_company',
+    label: 'Компании',
+    family: 'crm_files',
+    entityLabel: 'Компания',
+    title: 'Массовый импорт файлов в компании',
+    description: 'Каждая строка прикрепляет файл к компании по её ID.',
+    minimumFields: ['ID', 'FILE_URL'],
+    destinationLabel: 'Прикрепляет файл к полю типа «Файл» существующей компании по ID.',
+  },
+  crm_files_deal: {
+    value: 'crm_files_deal',
+    label: 'Сделки',
+    family: 'crm_files',
+    entityLabel: 'Сделка',
+    title: 'Массовый импорт файлов в сделки',
+    description: 'Каждая строка прикрепляет файл к сделке по её ID.',
+    minimumFields: ['ID', 'FILE_URL'],
+    destinationLabel: 'Прикрепляет файл к полю типа «Файл» существующей сделки по ID.',
+  },
+}
+
+const FILE_ATTACH_IMPORT_FAMILY_LABEL = 'Импорт файлов в CRM'
+
 function isTaskImportEntity(entityType) {
   return Object.hasOwn(TASK_IMPORT_SCENARIOS, String(entityType || '').trim())
 }
@@ -185,6 +230,10 @@ function isLinkedImportEntity(entityType) {
 
 function isHrImportEntity(entityType) {
   return Object.hasOwn(HR_IMPORT_SCENARIOS, String(entityType || '').trim())
+}
+
+function isFileAttachEntity(entityType) {
+  return Object.hasOwn(FILE_ATTACH_IMPORT_SCENARIOS, String(entityType || '').trim())
 }
 
 export function buildImportScenarioSections() {
@@ -278,6 +327,19 @@ export function buildScenarioSelectionSummary(entityType) {
       description: hrScenario.description,
       minimumFields: [...hrScenario.minimumFields],
       destinationLabel: hrScenario.destinationLabel,
+    }
+  }
+
+  const fileAttachScenario = FILE_ATTACH_IMPORT_SCENARIOS[normalizedEntityType]
+  if (fileAttachScenario) {
+    return {
+      family: 'crm_files',
+      familyLabel: FILE_ATTACH_IMPORT_FAMILY_LABEL,
+      selectedLabel: fileAttachScenario.label,
+      title: fileAttachScenario.title,
+      description: fileAttachScenario.description,
+      minimumFields: [...fileAttachScenario.minimumFields],
+      destinationLabel: fileAttachScenario.destinationLabel,
     }
   }
 
@@ -555,6 +617,7 @@ export function buildMappingRows({ headers, columns, fields, candidateMapping, s
     const field = targetFieldId ? fieldIndex.get(targetFieldId) : null
     const valueMapping = normalizeValueMapping(mappingItem?.value_mapping)
     const autoMatchType = hasSavedMapping ? '' : String(mappingItem?.match_type || '').trim().toLowerCase()
+    const columnType = String(mappingItem?.column_type || '').trim().toLowerCase()
 
     const row = {
       key: `${column}:${sourceHeader}`,
@@ -568,6 +631,7 @@ export function buildMappingRows({ headers, columns, fields, candidateMapping, s
       targetFieldIsCustom: Boolean(field?.is_custom),
       targetFieldIsMultiple: Boolean(field?.multiple),
       targetFieldGuidanceHints: field ? buildFieldGuidanceHints(field) : [],
+      columnType,
     }
 
     if (autoMatchType) {
@@ -633,6 +697,10 @@ export function buildMappingPayload(rows) {
       source_header: String(row?.sourceHeader || ''),
       column: String(row?.column || ''),
       target_field: targetFieldId,
+    }
+    const columnType = String(row?.columnType || '').trim().toLowerCase()
+    if (columnType) {
+      mappingItem.column_type = columnType
     }
     const valueMapping = normalizeValueMapping(row?.valueMapping)
     if (Object.keys(valueMapping).length > 0) {
@@ -1232,6 +1300,7 @@ export function buildDryRunRows(dryRunData) {
     ready_update: 'Готово к обновлению',
     skipped: 'Пропущено',
     skipped_duplicate: 'Дубль пропущен',
+    pending_decision: 'Ожидает решения',
   }
 
   return (Array.isArray(dryRunData?.results) ? dryRunData.results : []).map((item) => {

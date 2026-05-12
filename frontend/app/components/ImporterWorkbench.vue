@@ -34,6 +34,7 @@ import {
   resolveMappingSelectValue,
   shouldRenderInlineWizardFooter,
   buildSessionHistoryRows,
+  FILE_ATTACH_IMPORT_SCENARIOS,
 } from '~/utils/importer-ui'
 
 type MappingRow = {
@@ -141,6 +142,9 @@ const mappingRows = ref<MappingRow[]>([])
 const taskDefaultResponsibleId = ref('')
 const taskDefaultCommentAuthorId = ref('')
 const dedupStrategy = ref('create')
+const perRowDedupDecisions = ref<Record<string, string>>({})
+const mappingDragSourceIndex = ref<number | null>(null)
+const mappingDragOverIndex = ref<number | null>(null)
 const dedupFields = ref<string[]>([])
 const validationData = ref<Record<string, any> | null>(null)
 const dryRunData = ref<Record<string, any> | null>(null)
@@ -174,8 +178,17 @@ const crmScenarioItems = computed(() => scenarioSections.value.find((section) =>
 const taskScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'task')?.items || [])
 const linkedScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'linked')?.items || [])
 const hrScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'hr')?.items || [])
+const fileAttachCrmEntityItems = computed(() =>
+  Object.values(FILE_ATTACH_IMPORT_SCENARIOS).map((s) => ({ value: s.value, label: s.entityLabel })),
+)
+const isFileAttachMode = computed(() => String(entityType.value || '').startsWith('crm_files_'))
 const currentScenarioSummary = computed(() => buildScenarioSelectionSummary(entityType.value))
 const isTaskEntityImport = computed(() => entityType.value === 'task')
+const DEDUP_NONAPPLICABLE_TYPES = new Set([
+  'task', 'task_comment', 'task_checklist_item', 'task_attachment',
+  'crm_files_lead', 'crm_files_contact', 'crm_files_company', 'crm_files_deal',
+])
+const isDedupApplicable = computed(() => !DEDUP_NONAPPLICABLE_TYPES.has(entityType.value))
 const exampleTemplateDownloadMeta = computed(() => buildExampleTemplateDownloadMeta(entityType.value))
 const currentImportTitle = computed(() => 'Excel Migration')
 const selectedFamily = ref('')
@@ -183,6 +196,7 @@ const selectedCrmEntityType = ref('')
 const selectedTaskEntityType = ref('')
 const selectedLinkedEntityType = ref('')
 const selectedHrEntityType = ref('')
+const selectedFileAttachEntityType = ref('')
 const departments = ref<{ id: string, name: string, parent_id: string | null }[]>([])
 const loadingDepartments = ref(false)
 const departmentsExpanded = ref(false)
@@ -226,6 +240,12 @@ const validationInvalidRows = computed(() => Number(validationData.value?.invali
 const dryRunCheckedRows = computed(() => Number(dryRunData.value?.checked_rows || 0))
 const dryRunReadyRows = computed(() => Number(dryRunData.value?.ready_rows || 0))
 const dryRunSkippedRows = computed(() => Number(dryRunData.value?.skipped_rows || 0))
+const dryRunPendingDecisionRows = computed(() => Number(dryRunData.value?.pending_decision_rows || 0))
+const pendingDecisionRows = computed(() =>
+  (Array.isArray(dryRunData.value?.results) ? dryRunData.value.results : []).filter(
+    (r: any) => r?.status === 'pending_decision'
+  )
+)
 const importRunCheckedRows = computed(() => Number(importRunData.value?.checked_rows || 0))
 const importRunCreatedRows = computed(() => Number(importRunData.value?.created_rows || 0))
 const importRunUpdatedRows = computed(() => Number(importRunData.value?.updated_rows || 0))
@@ -571,6 +591,7 @@ const dedupStrategyItems = [
   { value: 'create', label: 'Всегда создавать' },
   { value: 'update', label: 'Обновлять найденный дубль' },
   { value: 'skip', label: 'Пропускать дубль' },
+  { value: 'ask', label: 'Спросить по каждому дублю' },
 ]
 const dedupFieldOptions = computed(() => {
   const labels: Record<string, string> = {
@@ -687,6 +708,9 @@ const filteredImportRunRows = computed<ImportRunRow[]>(() => (
 const isLinkedCompanyContactImport = computed(() => entityType.value === 'linked_company_contact')
 const stepSixStatusLabel = computed(() => {
   if (dryRunData.value) {
+    if (dryRunPendingDecisionRows.value > 0) {
+      return `Ожидают решения: ${dryRunPendingDecisionRows.value}`
+    }
     return dryRunSkippedRows.value > 0
       ? `Пропусков: ${dryRunSkippedRows.value}`
       : `Готово строк: ${dryRunReadyRows.value}`
@@ -698,11 +722,15 @@ const stepSixStatusLabel = computed(() => {
 })
 const stepSixMetricCards = computed(() => {
   if (dryRunData.value) {
-    return [
+    const cards = [
       { label: 'Проверено', value: dryRunCheckedRows.value },
       { label: 'К записи', value: dryRunReadyRows.value },
       { label: 'Пропущено', value: dryRunSkippedRows.value },
     ]
+    if (dryRunPendingDecisionRows.value > 0) {
+      cards.push({ label: 'Ожидают решения', value: dryRunPendingDecisionRows.value })
+    }
+    return cards
   }
 
   return [
@@ -833,6 +861,18 @@ watch(dryRunData, (value) => {
   if (!buildDedupWeakeningNotice(value).hasWarnings) {
     activeDryRunDedupRiskOnly.value = false
   }
+
+  if (value && dedupStrategy.value === 'ask') {
+    const decisions: Record<string, string> = {}
+    for (const row of (Array.isArray(value.results) ? value.results : [])) {
+      if (row?.status === 'pending_decision') {
+        decisions[String(row.row_number)] = 'skip'
+      }
+    }
+    perRowDedupDecisions.value = decisions
+  } else {
+    perRowDedupDecisions.value = {}
+  }
 })
 
 function goToStep(step: number) {
@@ -898,6 +938,7 @@ function resetFlowState() {
   mappingRows.value = []
   dedupStrategy.value = 'create'
   dedupFields.value = []
+  perRowDedupDecisions.value = {}
   validationData.value = null
   dryRunData.value = null
   importRunData.value = null
@@ -954,6 +995,13 @@ function syncMappingRows() {
 
 watch(dedupStrategy, (value) => {
   if (value === 'create') {
+    dedupFields.value = []
+  }
+})
+
+watch(isDedupApplicable, (applicable) => {
+  if (!applicable) {
+    dedupStrategy.value = 'create'
     dedupFields.value = []
   }
 })
@@ -1025,6 +1073,7 @@ function selectFamily(family: string) {
   selectedTaskEntityType.value = ''
   selectedLinkedEntityType.value = ''
   selectedHrEntityType.value = ''
+  selectedFileAttachEntityType.value = ''
   entityType.value = ''
   departmentsExpanded.value = false
   resetMessages()
@@ -1036,6 +1085,7 @@ function goBackToFamilySelection() {
   selectedTaskEntityType.value = ''
   selectedLinkedEntityType.value = ''
   selectedHrEntityType.value = ''
+  selectedFileAttachEntityType.value = ''
   entityType.value = ''
   departmentsExpanded.value = false
   resetMessages()
@@ -1070,24 +1120,42 @@ function updateScenarioEntityType(family: 'crm' | 'task' | 'linked' | 'hr', valu
     selectedTaskEntityType.value = ''
     selectedLinkedEntityType.value = ''
     selectedHrEntityType.value = ''
+    selectedFileAttachEntityType.value = ''
   } else if (family === 'task') {
     selectedTaskEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
     selectedLinkedEntityType.value = ''
     selectedHrEntityType.value = ''
+    selectedFileAttachEntityType.value = ''
   } else if (family === 'linked') {
     selectedLinkedEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
     selectedHrEntityType.value = ''
+    selectedFileAttachEntityType.value = ''
   } else {
     selectedHrEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
     selectedLinkedEntityType.value = ''
+    selectedFileAttachEntityType.value = ''
   }
 
   selectedFamily.value = family === 'linked' ? 'crm' : family
+  entityType.value = normalizedValue
+  resetMessages()
+}
+
+function updateFileAttachEntityType(value: string) {
+  const normalizedValue = String(value || '').trim()
+  if (!normalizedValue) return
+
+  selectedFileAttachEntityType.value = normalizedValue
+  selectedCrmEntityType.value = ''
+  selectedLinkedEntityType.value = ''
+  selectedHrEntityType.value = ''
+  selectedTaskEntityType.value = ''
+  selectedFamily.value = 'crm'
   entityType.value = normalizedValue
   resetMessages()
 }
@@ -1250,6 +1318,46 @@ function updateMappingFieldSelection(row: MappingRow, value: string) {
   row.targetFieldIsCustom = Boolean(selectedField?.is_custom)
   row.targetFieldIsMultiple = Boolean(selectedField?.multiple)
   row.targetFieldGuidanceHints = selectedField ? buildFieldGuidanceHints(selectedField) : []
+}
+
+function onMappingDragStart(index: number, event: DragEvent) {
+  mappingDragSourceIndex.value = index
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', String(index))
+  }
+}
+
+function onMappingDragOver(index: number, event: DragEvent) {
+  event.preventDefault()
+  if (mappingDragSourceIndex.value !== null && mappingDragSourceIndex.value !== index) {
+    mappingDragOverIndex.value = index
+  }
+}
+
+function onMappingDragLeave() {
+  mappingDragOverIndex.value = null
+}
+
+function onMappingDrop(toIndex: number, event: DragEvent) {
+  event.preventDefault()
+  const fromIndex = mappingDragSourceIndex.value
+  if (fromIndex === null || fromIndex === toIndex) {
+    mappingDragSourceIndex.value = null
+    mappingDragOverIndex.value = null
+    return
+  }
+  const rows = [...mappingRows.value]
+  const [moved] = rows.splice(fromIndex, 1)
+  rows.splice(toIndex, 0, moved)
+  mappingRows.value = rows
+  mappingDragSourceIndex.value = null
+  mappingDragOverIndex.value = null
+}
+
+function onMappingDragEnd() {
+  mappingDragSourceIndex.value = null
+  mappingDragOverIndex.value = null
 }
 
 function updateValueMappingSelection(targetFieldId: string, sourceValue: string, targetValue: string) {
@@ -1486,7 +1594,7 @@ async function runImport() {
   session.value = session.value ? { ...session.value, status: 'running' } : session.value
 
   try {
-    const response = await apiStore.runImportSession(String(session.value.id))
+    const response = await apiStore.runImportSession(String(session.value.id), perRowDedupDecisions.value)
     importRunData.value = response.item
     session.value = session.value ? { ...session.value, status: response.item.status } : session.value
     currentStep.value = 7
@@ -1966,9 +2074,30 @@ onMounted(loadHistory)
                         />
                       </B24FormField>
                     </section>
+                    <section class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
+                      <div class="flex items-center gap-2">
+                        <div class="text-sm font-semibold text-[#314256]">Массовый импорт файлов</div>
+                        <span class="rounded-full bg-[#eaf2ff] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#3d8ef0]">Бета</span>
+                      </div>
+                      <div class="mt-1 text-sm text-[#6f8194]">Прикрепить файлы к полям типа «Файл» у существующих CRM-записей.</div>
+                      <B24FormField label="Выберите CRM-сущность" class="mt-4">
+                        <B24Select
+                          :model-value="selectedFileAttachEntityType"
+                          :items="fileAttachCrmEntityItems"
+                          placeholder="Например, Сделки"
+                          size="lg"
+                          class="w-full"
+                          :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                          @update:model-value="updateFileAttachEntityType(String($event || ''))"
+                        />
+                      </B24FormField>
+                      <div v-if="selectedFileAttachEntityType" class="mt-3 rounded-[12px] border border-[#dce7f7] bg-[#f7fbff] px-3 py-2.5 text-xs text-[#5a7fa8]">
+                        Нужен Excel с колонками <span class="font-semibold">ID</span> (ID записи) и <span class="font-semibold">FILE_URL</span> (ссылка на файл). Поле назначения выбирается на шаге соответствия.
+                      </div>
+                    </section>
                   </div>
                   <div class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                    <B24FormField label="Файл для импорта" class="w-full">
+                    <B24FormField :label="isFileAttachMode ? 'Excel-список файлов' : 'Файл для импорта'" class="w-full">
                       <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange">
                       <div class="space-y-4">
                         <div class="rounded-[16px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-4">
@@ -2483,12 +2612,12 @@ onMounted(loadHistory)
                   <div>
                     <div class="mb-2 text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Значение Bitrix24</div>
                     <B24Select
-                      :model-value="row.selectedTargetValue"
+                      :model-value="row.selectedTargetValue || '__none__'"
                       class="w-full"
                       size="md"
                       placeholder="Не выбрано"
-                      :items="[{ value: '', label: 'Не выбрано' }, ...row.options]"
-                      @update:model-value="updateValueMappingSelection(row.targetFieldId, row.sourceValue, String($event || ''))"
+                      :items="[{ value: '__none__', label: 'Не выбрано' }, ...row.options]"
+                      @update:model-value="updateValueMappingSelection(row.targetFieldId, row.sourceValue, $event === '__none__' ? '' : String($event || ''))"
                     />
                   </div>
                 </div>
@@ -2496,76 +2625,159 @@ onMounted(loadHistory)
             </section>
 
             <div class="overflow-hidden rounded-[20px] border border-[#dfe5eb] bg-white">
-              <B24Table
-                class="w-full"
-                :loading="busyAction === 'start' || busyAction === 'structure' || busyAction === 'mapping' || busyAction === 'template-apply'"
-                loading-color="air-primary"
-                loading-animation="loading"
-                :columns="mappingTableColumns"
-                :data="mappingRows"
-                empty="После загрузки файла здесь появится список колонок для сопоставления."
+              <!-- Пустое состояние -->
+              <div
+                v-if="!mappingRows.length && !(busyAction === 'start' || busyAction === 'structure' || busyAction === 'mapping' || busyAction === 'template-apply')"
+                class="px-6 py-10 text-center text-sm text-[#8ea0b2]"
               >
-                <template #targetFieldId-cell="{ row }">
-                  <div class="min-w-[260px]">
-                    <B24SelectMenu
-                      :model-value="resolveMappingSelectValue(row.original.targetFieldId)"
-                      class="w-full"
-                      size="md"
-                      placeholder="Не импортировать"
-                      :items="mappingFieldItems"
-                      value-key="value"
-                      :filter-fields="['label', 'description']"
-                      :search-input="{ placeholder: 'Поиск полей...' }"
-                      @update:model-value="updateMappingFieldSelection(row.original, String($event || ''))"
-                    />
+                После загрузки файла здесь появится список колонок для сопоставления.
+              </div>
 
-                    <div
-                      v-if="row.original.targetFieldId"
-                      class="mt-2 flex flex-wrap gap-2"
-                    >
-                      <span
-                        v-if="row.original.autoMatchType"
-                        class="rounded-full border border-[#d9e6f5] bg-[#f6f9fd] px-2.5 py-1 text-xs font-medium text-[#58708b]"
-                      >
-                        {{ row.original.autoMatchLabel || 'Автоподбор' }}
-                      </span>
-                      <span class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-2.5 py-1 text-xs font-medium text-[#2e6bd9]">
-                        {{ row.original.targetFieldTypeLabel || 'Поле' }}
-                      </span>
-                      <span
-                        v-if="row.original.targetFieldRequired"
-                        class="rounded-full border border-[#f2d1ac] bg-[#fff8ef] px-2.5 py-1 text-xs font-medium text-[#9a6432]"
-                      >
-                        Обязательное
-                      </span>
-                      <span
-                        v-if="row.original.targetFieldIsCustom"
-                        class="rounded-full border border-[#dcefe1] bg-[#f1fbf4] px-2.5 py-1 text-xs font-medium text-[#2d7a4b]"
-                      >
-                        Кастомное
-                      </span>
-                      <span
-                        v-if="row.original.targetFieldIsMultiple"
-                        class="rounded-full border border-[#efe3cf] bg-[#fff8ef] px-2.5 py-1 text-xs font-medium text-[#9a6432]"
-                      >
-                        Множественное
-                      </span>
-                    </div>
+              <!-- Загрузка -->
+              <div
+                v-else-if="busyAction === 'start' || busyAction === 'structure' || busyAction === 'mapping' || busyAction === 'template-apply'"
+                class="px-6 py-10 text-center text-sm text-[#8ea0b2]"
+              >
+                Загрузка...
+              </div>
 
-                    <div
-                      v-if="row.original.targetFieldGuidanceHints?.length"
-                      class="mt-2 space-y-1 text-xs text-[#6f8194]"
-                    >
-                      <div
-                        v-for="hint in row.original.targetFieldGuidanceHints"
-                        :key="hint"
-                      >
-                        {{ hint }}
+              <!-- Таблица с drag-and-drop -->
+              <table
+                v-else
+                class="w-full border-collapse text-sm"
+              >
+                <thead>
+                  <tr class="border-b border-[#dfe5eb] bg-[#f8fafc]">
+                    <th class="w-8 px-3 py-3" />
+                    <th class="w-[100px] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[#8ea0b2]">
+                      Колонка
+                    </th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[#8ea0b2]">
+                      Колонка файла
+                    </th>
+                    <th class="min-w-[300px] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[#8ea0b2]">
+                      Поле Bitrix24
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="(row, index) in mappingRows"
+                    :key="row.key"
+                    draggable="true"
+                    class="border-b border-[#f0f4f8] transition-colors last:border-0"
+                    :class="{
+                      'bg-[#f0f7ff] border-l-2 border-l-[#3b82f6]': mappingDragOverIndex === index && mappingDragSourceIndex !== index,
+                      'opacity-40': mappingDragSourceIndex === index,
+                      'bg-white hover:bg-[#fafcff]': mappingDragOverIndex !== index && mappingDragSourceIndex !== index,
+                    }"
+                    @dragstart="onMappingDragStart(index, $event)"
+                    @dragover="onMappingDragOver(index, $event)"
+                    @dragleave="onMappingDragLeave"
+                    @drop="onMappingDrop(index, $event)"
+                    @dragend="onMappingDragEnd"
+                  >
+                    <!-- Drag handle -->
+                    <td class="w-8 cursor-grab px-3 py-3 text-[#c0ccd8] active:cursor-grabbing">
+                      <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="3" cy="3" r="1.5" />
+                        <circle cx="9" cy="3" r="1.5" />
+                        <circle cx="3" cy="9" r="1.5" />
+                        <circle cx="9" cy="9" r="1.5" />
+                        <circle cx="3" cy="15" r="1.5" />
+                        <circle cx="9" cy="15" r="1.5" />
+                      </svg>
+                    </td>
+                    <!-- Буква колонки -->
+                    <td class="px-4 py-3 font-medium text-[#8ea0b2]">
+                      {{ row.column }}
+                    </td>
+                    <!-- Название колонки из файла -->
+                    <td class="px-4 py-3 text-[#314256]">
+                      {{ row.sourceHeader || '—' }}
+                    </td>
+                    <!-- Поле Bitrix24 (select + badges) -->
+                    <td class="px-4 py-3">
+                      <div class="min-w-[260px]">
+                        <B24SelectMenu
+                          :model-value="resolveMappingSelectValue(row.targetFieldId)"
+                          class="w-full"
+                          size="md"
+                          placeholder="Не импортировать"
+                          :items="mappingFieldItems"
+                          value-key="value"
+                          :filter-fields="['label', 'description']"
+                          :search-input="{ placeholder: 'Поиск полей...' }"
+                          @update:model-value="updateMappingFieldSelection(row, String($event || ''))"
+                        />
+
+                        <!-- Тип данных колонки (override) -->
+                        <div v-if="row.targetFieldId" class="mt-2">
+                          <B24Select
+                            :model-value="row.columnType || 'auto'"
+                            size="xs"
+                            :items="[
+                              { value: 'auto', label: 'Авто (по полю Bitrix24)' },
+                              { value: 'string', label: 'Текст' },
+                              { value: 'integer', label: 'Число (целое)' },
+                              { value: 'double', label: 'Число (дробное)' },
+                              { value: 'date', label: 'Дата' },
+                              { value: 'datetime', label: 'Дата и время' },
+                              { value: 'boolean', label: 'Логическое (Да/Нет)' },
+                            ]"
+                            @update:model-value="row.columnType = $event === 'auto' ? '' : String($event || '')"
+                          />
+                        </div>
+
+                        <div
+                          v-if="row.targetFieldId"
+                          class="mt-2 flex flex-wrap gap-2"
+                        >
+                          <span
+                            v-if="row.autoMatchType"
+                            class="rounded-full border border-[#d9e6f5] bg-[#f6f9fd] px-2.5 py-1 text-xs font-medium text-[#58708b]"
+                          >
+                            {{ row.autoMatchLabel || 'Автоподбор' }}
+                          </span>
+                          <span class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-2.5 py-1 text-xs font-medium text-[#2e6bd9]">
+                            {{ row.targetFieldTypeLabel || 'Поле' }}
+                          </span>
+                          <span
+                            v-if="row.targetFieldRequired"
+                            class="rounded-full border border-[#f2d1ac] bg-[#fff8ef] px-2.5 py-1 text-xs font-medium text-[#9a6432]"
+                          >
+                            Обязательное
+                          </span>
+                          <span
+                            v-if="row.targetFieldIsCustom"
+                            class="rounded-full border border-[#dcefe1] bg-[#f1fbf4] px-2.5 py-1 text-xs font-medium text-[#2d7a4b]"
+                          >
+                            Кастомное
+                          </span>
+                          <span
+                            v-if="row.targetFieldIsMultiple"
+                            class="rounded-full border border-[#efe3cf] bg-[#fff8ef] px-2.5 py-1 text-xs font-medium text-[#9a6432]"
+                          >
+                            Множественное
+                          </span>
+                        </div>
+
+                        <div
+                          v-if="row.targetFieldGuidanceHints?.length"
+                          class="mt-2 space-y-1 text-xs text-[#6f8194]"
+                        >
+                          <div
+                            v-for="hint in row.targetFieldGuidanceHints"
+                            :key="hint"
+                          >
+                            {{ hint }}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                </template>
-              </B24Table>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </section>
 
@@ -2579,6 +2791,7 @@ onMounted(loadHistory)
 
                 <div class="flex flex-wrap gap-3">
                   <B24Button
+                    v-if="isDedupApplicable"
                     label="Сохранить правила"
                     color="air-secondary-accent-2"
                     size="lg"
@@ -2597,67 +2810,92 @@ onMounted(loadHistory)
                 </div>
               </div>
 
-              <div class="mb-5 text-sm text-[#5f7285]">
-                Отдельно задайте, как искать совпадения и что делать с найденными дублями, чтобы шаг соответствия полей оставался чистым и понятным.
-              </div>
-
-              <div
-                v-if="unmappedValueSummary.hasUnmappedValues"
-                class="mb-5 rounded-[16px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-3 text-sm text-[#8f5b18]"
-              >
-                <div class="font-semibold text-[#a96017]">
-                  Перед проверкой нужно сопоставить значений: {{ unmappedValueSummary.totalValues }}
-                </div>
-                <div class="mt-1 text-xs text-[#a9783d]">
-                  Пока это не сделано, шаг проверки недоступен.
-                </div>
-                <div class="mt-3 flex flex-wrap gap-2">
-                  <span
-                    v-for="group in unmappedValueSummary.groups"
-                    :key="group.fieldId"
-                    class="rounded-full border border-[#f2d1ac] bg-white px-3 py-1.5 text-xs font-medium text-[#8a5a24]"
-                  >
-                    {{ `${group.fieldTitle}: ${group.count}` }}
-                  </span>
-                </div>
-              </div>
-
-              <div class="grid gap-4 lg:grid-cols-[280px,1fr]">
-                <B24Select
-                  :model-value="dedupStrategy"
-                  class="w-full"
-                  size="lg"
-                  :items="dedupStrategyItems"
-                  @update:model-value="dedupStrategy = String($event || 'create')"
-                />
-
-                <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="font-medium text-[#314256]">Ключи поиска дубля</div>
-                  <div class="mt-1 text-xs text-[#7f92a7]">
-                    Первый рабочий срез использует только уже сопоставленные поля `EMAIL`, `PHONE` и `TITLE`. Если выбрано несколько ключей, дубль ищется по их совместному совпадению.
+              <!-- Дедупликация не применима для задач и файлового импорта -->
+              <div v-if="!isDedupApplicable" class="rounded-[16px] border border-[#e5ebf2] bg-white px-5 py-5">
+                <div class="flex items-start gap-3">
+                  <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#f0f4fa] text-[#8ea0b2]">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                   </div>
+                  <div>
+                    <div class="text-sm font-semibold text-[#314256]">Дедупликация не применяется</div>
+                    <div class="mt-1 text-sm text-[#6f8194]">
+                      Для данного типа импорта ({{ currentScenarioSummary.selectedLabel }}) поиск дублей не поддерживается — каждая строка файла обрабатывается независимо. Нажмите «Проверить данные», чтобы перейти дальше.
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-                  <div v-if="dedupFieldOptions.length" class="mt-3 flex flex-wrap gap-3">
-                    <button
-                      v-for="item in dedupFieldOptions"
-                      :key="item.id"
-                      type="button"
-                      class="rounded-full border px-3 py-2 text-sm font-medium transition"
-                      :class="dedupFields.includes(item.id) && dedupStrategy !== 'create'
-                        ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
-                        : 'border-[#d9e2ec] bg-white text-[#516478]'"
-                      :disabled="dedupStrategy === 'create'"
-                      @click="toggleDedupField(item.id)"
+              <!-- Стандартный блок дедупликации для CRM и HR -->
+              <template v-if="isDedupApplicable">
+                <div class="mb-5 text-sm text-[#5f7285]">
+                  Отдельно задайте, как искать совпадения и что делать с найденными дублями, чтобы шаг соответствия полей оставался чистым и понятным.
+                </div>
+
+                <div
+                  v-if="unmappedValueSummary.hasUnmappedValues"
+                  class="mb-5 rounded-[16px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-3 text-sm text-[#8f5b18]"
+                >
+                  <div class="font-semibold text-[#a96017]">
+                    Перед проверкой нужно сопоставить значений: {{ unmappedValueSummary.totalValues }}
+                  </div>
+                  <div class="mt-1 text-xs text-[#a9783d]">
+                    Пока это не сделано, шаг проверки недоступен.
+                  </div>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <span
+                      v-for="group in unmappedValueSummary.groups"
+                      :key="group.fieldId"
+                      class="rounded-full border border-[#f2d1ac] bg-white px-3 py-1.5 text-xs font-medium text-[#8a5a24]"
                     >
-                      {{ item.label }}
-                    </button>
-                  </div>
-
-                  <div v-else class="mt-3 text-sm text-[#7f92a7]">
-                    Сначала сопоставьте одно из полей `EMAIL`, `PHONE` или `TITLE`.
+                      {{ `${group.fieldTitle}: ${group.count}` }}
+                    </span>
                   </div>
                 </div>
-              </div>
+
+                <div class="grid gap-4 lg:grid-cols-[280px,1fr]">
+                  <B24Select
+                    :model-value="dedupStrategy"
+                    class="w-full"
+                    size="lg"
+                    :items="dedupStrategyItems"
+                    @update:model-value="dedupStrategy = String($event || 'create')"
+                  />
+
+                  <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
+                    <div class="font-medium text-[#314256]">Ключи поиска дубля</div>
+                    <div class="mt-1 text-xs text-[#7f92a7]">
+                      Используются сопоставленные поля EMAIL, PHONE и TITLE. Если выбрано несколько ключей, дубль ищется по их совместному совпадению.
+                    </div>
+
+                    <div v-if="dedupFieldOptions.length" class="mt-3 flex flex-wrap gap-3">
+                      <button
+                        v-for="item in dedupFieldOptions"
+                        :key="item.id"
+                        type="button"
+                        class="rounded-full border px-3 py-2 text-sm font-medium transition"
+                        :class="dedupFields.includes(item.id) && dedupStrategy !== 'create'
+                          ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
+                          : 'border-[#d9e2ec] bg-white text-[#516478]'"
+                        :disabled="dedupStrategy === 'create'"
+                        @click="toggleDedupField(item.id)"
+                      >
+                        {{ item.label }}
+                      </button>
+                    </div>
+
+                    <div v-else class="mt-3 text-sm text-[#7f92a7]">
+                      Сначала сопоставьте одно из полей EMAIL, PHONE или TITLE на шаге маппинга.
+                    </div>
+
+                    <div
+                      v-if="dedupStrategy !== 'create' && dedupFieldOptions.length && dedupFields.length === 0"
+                      class="mt-3 rounded-[10px] border border-[#ffd5b3] bg-[#fff7ef] px-3 py-2 text-xs text-[#9a5a10]"
+                    >
+                      Выберите хотя бы один ключ поиска — без него дубли не будут найдены и все строки будут созданы заново.
+                    </div>
+                  </div>
+                </div>
+              </template>
             </section>
           </section>
 
@@ -2749,6 +2987,90 @@ onMounted(loadHistory)
                   >
                     {{ activeDryRunDedupRiskOnly ? 'Сбросить фильтр' : 'Показать только строки риска' }}
                   </button>
+                </div>
+              </div>
+
+              <!-- Секция «Спросить по каждому дублю» — появляется после dry run -->
+              <div
+                v-if="isDedupApplicable && dedupStrategy === 'ask' && dryRunData && pendingDecisionRows.length"
+                class="mb-5 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
+              >
+                <div class="mb-3 flex items-center justify-between">
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Найдены дубли — выберите действие</div>
+                    <div class="mt-1 text-sm text-[#5f7285]">
+                      Для каждой строки с дублем выберите: создать новую запись, обновить найденную или пропустить.
+                    </div>
+                  </div>
+                  <div class="flex gap-2 text-xs">
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#d7e7ff] bg-white px-3 py-1.5 font-medium text-[#2e6bd9] transition hover:bg-[#edf5ff]"
+                      @click="pendingDecisionRows.forEach((r: any) => { perRowDedupDecisions[String(r.row_number)] = 'create' })"
+                    >
+                      Все → Создать
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#d4edda] bg-white px-3 py-1.5 font-medium text-[#1a7f3c] transition hover:bg-[#edf7f0]"
+                      @click="pendingDecisionRows.forEach((r: any) => { perRowDedupDecisions[String(r.row_number)] = 'update' })"
+                    >
+                      Все → Обновить
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 font-medium text-[#6b7280] transition hover:bg-[#f3f4f6]"
+                      @click="pendingDecisionRows.forEach((r: any) => { perRowDedupDecisions[String(r.row_number)] = 'skip' })"
+                    >
+                      Все → Пропустить
+                    </button>
+                  </div>
+                </div>
+
+                <div class="overflow-hidden rounded-[16px] border border-[#dce7f7] bg-white">
+                  <table class="w-full text-sm">
+                    <thead>
+                      <tr class="border-b border-[#e8eef5] bg-[#f5f8fc]">
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Строка</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">ID дубля</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Совпадение по</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Действие</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="row in pendingDecisionRows"
+                        :key="row.row_number"
+                        class="border-b border-[#f0f4f8] last:border-0"
+                      >
+                        <td class="px-4 py-2.5 font-medium text-[#314256]">{{ row.row_number }}</td>
+                        <td class="px-4 py-2.5 text-[#5f7285]">{{ row.record_id || '—' }}</td>
+                        <td class="px-4 py-2.5 text-[#5f7285]">
+                          {{ Array.isArray(row.duplicate_match_fields) ? row.duplicate_match_fields.join(', ') : '—' }}
+                        </td>
+                        <td class="px-4 py-2.5">
+                          <div class="flex gap-1.5">
+                            <button
+                              v-for="opt in [
+                                { value: 'create', label: 'Создать', activeClass: 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]' },
+                                { value: 'update', label: 'Обновить', activeClass: 'border-[#1a7f3c] bg-[#edf7f0] text-[#1a7f3c]' },
+                                { value: 'skip', label: 'Пропустить', activeClass: 'border-[#6b7280] bg-[#f3f4f6] text-[#374151]' },
+                              ]"
+                              :key="opt.value"
+                              type="button"
+                              class="rounded-full border px-2.5 py-1 text-xs font-medium transition"
+                              :class="perRowDedupDecisions[String(row.row_number)] === opt.value
+                                ? opt.activeClass
+                                : 'border-[#e5e7eb] bg-white text-[#6b7280] hover:border-[#c5cfd8]'"
+                              @click="perRowDedupDecisions[String(row.row_number)] = opt.value"
+                            >
+                              {{ opt.label }}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
