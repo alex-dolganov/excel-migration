@@ -1,0 +1,1645 @@
+from b24pysdk.bitrix_api.requests import BitrixAPIRequest
+
+from .validation import (
+    normalize_value,
+    parse_boolean_value,
+    parse_date_value,
+    parse_datetime_value,
+    parse_integer_value,
+    parse_number_value,
+    resolve_default_field_value,
+    resolve_field_validation_type,
+    row_has_values,
+    split_field_values,
+)
+from .task_attachments import attach_file_to_task, download_attachment_source
+from .task_resolution import BitrixTaskResolver, is_task_reference_field
+from .user_resolution import BitrixUserResolver, is_task_user_reference_field
+
+
+TASK_CHILD_API_METHODS = {
+    "task_comment": "tasks.task.chat.message.send",
+    "task_checklist_item": "tasks.task.checklist.add",
+}
+
+TASK_ENTITY_TYPES = {"task", "task_comment", "task_checklist_item", "task_attachment"}
+HR_ENTITY_TYPES = {"user", "department"}
+LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
+LINKED_ENTITY_TYPES = {"company", "contact"}
+LINKED_ENTITY_PREFIXES = {
+    "company": "COMPANY__",
+    "contact": "CONTACT__",
+}
+
+SUPPORTED_DEDUP_STRATEGIES = {"create", "skip", "update"}
+SUPPORTED_DEDUP_FIELDS = {"EMAIL", "PHONE", "TITLE"}
+BITRIX_MULTIFIELD_IDS = {"PHONE", "EMAIL", "WEB", "IM"}
+TASK_CHILD_ENTITY_TYPES = {"task_comment", "task_checklist_item"}
+
+
+def build_field_index(fields: list[dict]) -> dict[str, dict]:
+    return {
+        str(field.get("id")): field
+        for field in fields
+        if isinstance(field, dict) and field.get("id")
+    }
+
+
+def is_linked_import_entity_type(entity_type: str) -> bool:
+    return str(entity_type or "").strip() == LINKED_COMPANY_CONTACT_ENTITY_TYPE
+
+
+def build_linked_field_groups(fields: list[dict]) -> dict[str, list[dict]]:
+    grouped_fields = {entity_name: [] for entity_name in LINKED_ENTITY_TYPES}
+
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+
+        linked_entity = str(field.get("linked_entity") or "").strip().lower()
+        linked_source_id = str(field.get("linked_source_id") or "").strip()
+        if linked_entity not in LINKED_ENTITY_TYPES or not linked_source_id:
+            continue
+
+        grouped_fields[linked_entity].append(
+            {
+                **field,
+                "id": linked_source_id,
+            }
+        )
+
+    return grouped_fields
+
+
+def build_linked_mapping_groups(mapping: dict, fields: list[dict]) -> dict[str, dict]:
+    field_by_id = build_field_index(fields)
+    grouped_mapping = {entity_name: {} for entity_name in LINKED_ENTITY_TYPES}
+
+    for target_field, mapping_item in (mapping or {}).items():
+        if not isinstance(mapping_item, dict):
+            continue
+
+        field = field_by_id.get(str(target_field))
+        if field is None:
+            continue
+
+        linked_entity = str(field.get("linked_entity") or "").strip().lower()
+        linked_source_id = str(field.get("linked_source_id") or "").strip()
+        if linked_entity not in LINKED_ENTITY_TYPES or not linked_source_id:
+            continue
+
+        grouped_mapping[linked_entity][linked_source_id] = {
+            **mapping_item,
+            "target_field": linked_source_id,
+        }
+
+    return grouped_mapping
+
+
+def format_bitrix_field_value(field: dict, value):
+    field_id = str(field.get("id") or "").upper()
+    field_type = str(field.get("type") or "").lower()
+    is_multiple = bool(field.get("multiple"))
+
+    if is_multiple and (field_type in {"phone", "email", "web", "im", "crm_multifield"} or field_id in BITRIX_MULTIFIELD_IDS):
+        if isinstance(value, list):
+            return [
+                {
+                    "VALUE": item,
+                    "VALUE_TYPE": "WORK",
+                }
+                for item in value
+                if normalize_value(item)
+            ]
+        return [
+            {
+                "VALUE": value,
+                "VALUE_TYPE": "WORK",
+            }
+        ]
+
+    if is_multiple:
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    return value
+
+
+def build_field_items_index(field: dict) -> dict[str, str]:
+    items_index = {}
+
+    for item in field.get("items", []):
+        if not isinstance(item, dict):
+            continue
+
+        item_id = normalize_value(item.get("id"))
+        item_title = normalize_value(item.get("title"))
+        if item_id:
+            items_index[item_id.lower()] = item_id
+        if item_title:
+            items_index[item_title.lower()] = item_id
+
+    return items_index
+
+
+def resolve_field_value(field: dict, value: str, mapping_item: dict) -> str:
+    normalized_value = normalize_value(value)
+    if not normalized_value:
+        return ""
+
+    value_mapping = mapping_item.get("value_mapping") if isinstance(mapping_item, dict) else None
+    if isinstance(value_mapping, dict):
+        mapped_value = normalize_value(value_mapping.get(normalized_value))
+        if mapped_value:
+            return mapped_value
+
+    if field.get("items"):
+        return build_field_items_index(field).get(normalized_value.lower(), normalized_value)
+
+    return normalized_value
+
+
+def resolve_field_values(field: dict, value: str, mapping_item: dict) -> list[str]:
+    resolved_values = []
+
+    for item_value in split_field_values(field, value):
+        resolved_value = resolve_field_value(field, item_value, mapping_item)
+        if resolved_value:
+            resolved_values.append(resolved_value)
+
+    return resolved_values
+
+
+def normalize_typed_field_value(field: dict, target_field: str, value):
+    normalized_value = normalize_value(value)
+    if not normalized_value:
+        return ""
+
+    if is_task_reference_field(field, target_field):
+        try:
+            return parse_integer_value(normalized_value)
+        except ValueError:
+            return normalized_value
+
+    field_type = resolve_field_validation_type(field, target_field)
+
+    if field_type in {"boolean", "bool"}:
+        return parse_boolean_value(normalized_value)
+
+    if field_type in {"integer", "int"}:
+        return parse_integer_value(normalized_value)
+
+    if field_type in {"double", "float", "money", "number"}:
+        return parse_number_value(normalized_value)
+
+    if field_type == "date":
+        return parse_date_value(normalized_value).strftime("%Y-%m-%d")
+
+    if field_type == "datetime":
+        return parse_datetime_value(normalized_value).strftime("%Y-%m-%dT%H:%M:%S")
+
+    return normalized_value
+
+
+def build_row_payload(
+    row: list,
+    columns: list[str],
+    mapping: dict,
+    fields: list[dict],
+    account=None,
+    user_resolver: BitrixUserResolver | None = None,
+    default_field_values: dict | None = None,
+) -> dict:
+    column_index_by_name = {
+        str(column): index
+        for index, column in enumerate(columns)
+    }
+    field_by_id = build_field_index(fields)
+    task_user_resolver = user_resolver or (BitrixUserResolver(account) if account is not None else None)
+    task_resolver = BitrixTaskResolver(account) if account is not None else None
+
+    payload = {}
+    for target_field, mapping_item in mapping.items():
+        if not isinstance(mapping_item, dict):
+            continue
+
+        column = str(mapping_item.get("column") or "")
+        column_index = column_index_by_name.get(column)
+        if column_index is None or column_index >= len(row):
+            continue
+
+        value = normalize_value(row[column_index])
+        if not value:
+            continue
+
+        field = field_by_id.get(str(target_field), {})
+        resolved_values = resolve_field_values(field, value, mapping_item)
+        if not resolved_values:
+            continue
+
+        if is_task_user_reference_field(field, str(target_field)) and task_user_resolver is not None:
+            resolved_user_ids = []
+            for resolved_value in resolved_values:
+                resolved_user_id = task_user_resolver.resolve(resolved_value)
+                if resolved_user_id is None:
+                    raise ValueError(f'Unable to resolve Bitrix user "{resolved_value}" for field "{target_field}"')
+                resolved_user_ids.append(resolved_user_id)
+            resolved_values = resolved_user_ids
+
+        if is_task_reference_field(field, str(target_field)) and task_resolver is not None:
+            resolved_task_ids = []
+            for resolved_value in resolved_values:
+                resolved_task_id = task_resolver.resolve(resolved_value)
+                if resolved_task_id is None:
+                    raise ValueError(f'Unable to resolve Bitrix task "{resolved_value}" for field "{target_field}"')
+                resolved_task_ids.append(resolved_task_id)
+            resolved_values = resolved_task_ids
+
+        normalized_values = [
+            normalize_typed_field_value(field, str(target_field), resolved_value)
+            for resolved_value in resolved_values
+        ]
+        normalized_values = [item for item in normalized_values if item != ""]
+        if not normalized_values:
+            continue
+
+        payload_value = normalized_values if field.get("multiple") else normalized_values[0]
+        payload[str(target_field)] = format_bitrix_field_value(field, payload_value)
+
+    for field_id, field in field_by_id.items():
+        default_value = resolve_default_field_value(default_field_values, field_id)
+        if not default_value or field_id in payload:
+            continue
+
+        resolved_values = [default_value]
+        if is_task_user_reference_field(field, str(field_id)) and task_user_resolver is not None:
+            resolved_user_ids = []
+            for resolved_value in resolved_values:
+                resolved_user_id = task_user_resolver.resolve(resolved_value)
+                if resolved_user_id is None:
+                    raise ValueError(f'Unable to resolve Bitrix user "{resolved_value}" for field "{field_id}"')
+                resolved_user_ids.append(resolved_user_id)
+            resolved_values = resolved_user_ids
+
+        normalized_values = [
+            normalize_typed_field_value(field, str(field_id), resolved_value)
+            for resolved_value in resolved_values
+        ]
+        normalized_values = [item for item in normalized_values if item != ""]
+        if not normalized_values:
+            continue
+
+        payload_value = normalized_values if field.get("multiple") else normalized_values[0]
+        payload[str(field_id)] = format_bitrix_field_value(field, payload_value)
+
+    return payload
+
+
+def build_linked_row_payload(
+    row: list,
+    columns: list[str],
+    mapping: dict,
+    fields: list[dict],
+    account=None,
+    user_resolver: BitrixUserResolver | None = None,
+    default_field_values: dict | None = None,
+) -> dict:
+    grouped_fields = build_linked_field_groups(fields)
+    grouped_mapping = build_linked_mapping_groups(mapping, fields)
+
+    return {
+        linked_entity: build_row_payload(
+            row,
+            columns,
+            grouped_mapping.get(linked_entity, {}),
+            grouped_fields.get(linked_entity, []),
+            account=account,
+            user_resolver=user_resolver,
+            default_field_values=default_field_values,
+        )
+        for linked_entity in ("company", "contact")
+    }
+
+
+def get_invalid_row_numbers(validation_summary: dict) -> set[int]:
+    invalid_rows = set()
+
+    for issue in validation_summary.get("issues", []):
+        if not isinstance(issue, dict):
+            continue
+
+        try:
+            invalid_rows.add(int(issue.get("row_number")))
+        except (TypeError, ValueError):
+            continue
+
+    return invalid_rows
+
+
+def unwrap_bitrix_result(response):
+    return getattr(response, "result", response)
+
+
+def normalize_record_id(record_id):
+    if record_id is None or isinstance(record_id, bool):
+        return None
+    try:
+        return int(record_id)
+    except (TypeError, ValueError):
+        return record_id
+
+
+def normalize_dedup_settings(dedup_settings) -> dict:
+    if not isinstance(dedup_settings, dict):
+        return {
+            "strategy": "create",
+            "fields": [],
+        }
+
+    strategy = str(dedup_settings.get("strategy") or "create").strip().lower()
+    if strategy not in SUPPORTED_DEDUP_STRATEGIES:
+        raise ValueError("Unsupported dedup strategy")
+
+    normalized_fields = []
+    for field_name in dedup_settings.get("fields", []):
+        normalized_field_name = str(field_name or "").strip().upper()
+        if normalized_field_name in SUPPORTED_DEDUP_FIELDS and normalized_field_name not in normalized_fields:
+            normalized_fields.append(normalized_field_name)
+
+    return {
+        "strategy": strategy,
+        "fields": normalized_fields,
+    }
+
+
+def normalize_linked_dedup_settings(dedup_settings) -> dict:
+    if isinstance(dedup_settings, dict) and (
+        isinstance(dedup_settings.get("company"), dict)
+        or isinstance(dedup_settings.get("contact"), dict)
+    ):
+        return {
+            "company": normalize_dedup_settings(dedup_settings.get("company", {})),
+            "contact": normalize_dedup_settings(dedup_settings.get("contact", {})),
+        }
+
+    shared_settings = normalize_dedup_settings(dedup_settings)
+    return {
+        "company": dict(shared_settings),
+        "contact": dict(shared_settings),
+    }
+
+
+def normalize_entity_dedup_settings(entity_type: str, dedup_settings):
+    if is_linked_import_entity_type(entity_type):
+        return normalize_linked_dedup_settings(dedup_settings)
+    return normalize_dedup_settings(dedup_settings)
+
+
+def extract_dedup_lookup_value(value):
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+
+            normalized_item_value = normalize_value(item.get("VALUE"))
+            if normalized_item_value:
+                return normalized_item_value
+
+        return ""
+
+    return normalize_value(value)
+
+
+def _find_user_by_email(account, email: str):
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="user.get",
+        params={"filter": {"EMAIL": email}, "select": ["ID"]},
+    )
+    result = unwrap_bitrix_result(response)
+    if isinstance(result, list) and result:
+        return normalize_record_id(result[0].get("ID") or result[0].get("id"))
+    return None
+
+
+def _find_department_by_name(account, name: str):
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="department.get",
+        params={"filter": {"NAME": name}, "select": ["ID"]},
+    )
+    result = unwrap_bitrix_result(response)
+    if isinstance(result, list) and result:
+        return normalize_record_id(result[0].get("ID") or result[0].get("id"))
+    return None
+
+
+def _create_user(account, fields: dict):
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="user.add",
+        params=fields,
+    )
+    result = unwrap_bitrix_result(response)
+    if isinstance(result, dict):
+        return normalize_record_id(result.get("ID") or result.get("id") or result.get("result"))
+    return normalize_record_id(result)
+
+
+def _update_user(account, record_id, fields: dict):
+    BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="user.update",
+        params={"id": record_id, **fields},
+    )
+
+
+def _create_department(account, fields: dict):
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="department.add",
+        params=fields,
+    )
+    result = unwrap_bitrix_result(response)
+    if isinstance(result, dict):
+        return normalize_record_id(result.get("ID") or result.get("id") or result.get("result"))
+    return normalize_record_id(result)
+
+
+def _update_department(account, record_id, fields: dict):
+    BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="department.update",
+        params={"id": record_id, **fields},
+    )
+
+
+def get_entity_scope(client, entity_type: str):
+    if entity_type == "task":
+        tasks_root = getattr(client, "tasks", None)
+        task_scope = getattr(tasks_root, "task", None) or getattr(tasks_root, "tasks", None)
+        if task_scope is None:
+            raise ValueError("Unsupported entity type")
+        return task_scope
+
+    if entity_type == "task_checklist_item":
+        scope = _resolve_task_child_scope(client, "checklistitem")
+        if scope is None:
+            raise ValueError("Unsupported entity type")
+        return scope
+
+    crm_scope = getattr(client, "crm", None)
+    entity_scopes = {
+        "lead": getattr(crm_scope, "lead", None),
+        "contact": getattr(crm_scope, "contact", None),
+        "company": getattr(crm_scope, "company", None),
+        "deal": getattr(crm_scope, "deal", None),
+    }
+
+    scope = entity_scopes.get(entity_type)
+    if scope is None:
+        raise ValueError("Unsupported entity type")
+
+    return scope
+
+
+def invoke_with_fallbacks(callers: list):
+    last_type_error = None
+    for caller in callers:
+        try:
+            return caller()
+        except TypeError as error:
+            last_type_error = error
+
+    if last_type_error is not None:
+        raise last_type_error
+
+    raise ValueError("No Bitrix API call variants were provided")
+
+
+def extract_record_id_from_list_response(response):
+    result = unwrap_bitrix_result(response)
+
+    if isinstance(result, dict):
+        items = result.get("items")
+        if not isinstance(items, list):
+            items = result.get("result")
+    else:
+        items = result
+
+    if not isinstance(items, list) or not items:
+        return None
+
+    first_item = items[0]
+    if not isinstance(first_item, dict):
+        return None
+
+    record_id = first_item.get("ID") or first_item.get("id")
+    if record_id is None:
+        return None
+
+    return normalize_record_id(record_id)
+
+
+def find_record_by_filter(list_method, lookup_filter: dict):
+    if not lookup_filter:
+        return None
+
+    response = invoke_with_fallbacks(
+        [
+            lambda: list_method(filter=lookup_filter, select=["ID"]),
+            lambda: list_method(lookup_filter, ["ID"]),
+            lambda: list_method(filter=lookup_filter),
+        ]
+    )
+    return extract_record_id_from_list_response(response)
+
+
+def build_dedup_lookup_filter(row_payload: dict, dedup_settings: dict) -> tuple[dict, list[str], list[str]]:
+    lookup_filter = {}
+    matched_fields = []
+    missing_fields = []
+
+    for field_name in dedup_settings["fields"]:
+        field_value = extract_dedup_lookup_value(row_payload.get(field_name))
+        if not field_value:
+            missing_fields.append(field_name)
+            continue
+        lookup_filter[field_name] = field_value
+        matched_fields.append(field_name)
+
+    return lookup_filter, matched_fields, missing_fields
+
+
+def _find_hr_existing_record(account, entity_type: str, row_payload: dict, dedup_settings: dict):
+    if dedup_settings["strategy"] == "create" or not dedup_settings["fields"]:
+        return None
+
+    matched_fields = []
+    record_id = None
+
+    if entity_type == "user":
+        email = extract_dedup_lookup_value(row_payload.get("EMAIL"))
+        if email and "EMAIL" in dedup_settings["fields"]:
+            record_id = _find_user_by_email(account, email)
+            if record_id is not None:
+                matched_fields = ["EMAIL"]
+
+    elif entity_type == "department":
+        name = extract_dedup_lookup_value(row_payload.get("NAME"))
+        if name and "TITLE" in dedup_settings["fields"]:
+            record_id = _find_department_by_name(account, name)
+            if record_id is not None:
+                matched_fields = ["NAME"]
+
+    if record_id is None:
+        return None
+
+    return {
+        "record_id": record_id,
+        "duplicate_match_fields": matched_fields,
+        "dedup_missing_fields": [],
+    }
+
+
+def find_existing_record(account, entity_type: str, row_payload: dict, dedup_settings: dict):
+    if dedup_settings["strategy"] == "create" or not dedup_settings["fields"]:
+        return None
+
+    if entity_type in TASK_ENTITY_TYPES:
+        return None
+
+    if entity_type in HR_ENTITY_TYPES:
+        return _find_hr_existing_record(account, entity_type, row_payload, dedup_settings)
+
+    scope = get_entity_scope(account.client, entity_type)
+    list_method = getattr(scope, "list", None)
+    if list_method is None:
+        raise ValueError("Bitrix entity list method is unavailable")
+
+    lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, dedup_settings)
+    dedup_missing_fields = missing_fields if matched_fields and missing_fields else []
+
+    if not lookup_filter:
+        return None
+
+    if len(lookup_filter) > 1:
+        record_id = find_record_by_filter(list_method, lookup_filter)
+        if record_id is None:
+            if dedup_missing_fields:
+                return {
+                    "dedup_missing_fields": dedup_missing_fields,
+                }
+            return None
+
+        return {
+            "record_id": record_id,
+            "duplicate_match_fields": matched_fields,
+            "dedup_missing_fields": dedup_missing_fields,
+        }
+
+    for field_name, field_value in lookup_filter.items():
+        record_id = find_record_by_filter(list_method, {field_name: field_value})
+        if record_id is not None:
+            return {
+                "record_id": record_id,
+                "duplicate_match_fields": [field_name],
+                "dedup_missing_fields": dedup_missing_fields,
+            }
+
+    if dedup_missing_fields:
+        return {
+            "dedup_missing_fields": dedup_missing_fields,
+        }
+
+    return None
+
+
+def filter_dedup_settings_for_payload(dedup_settings: dict, row_payload: dict) -> dict:
+    payload_keys = {str(field_id) for field_id in (row_payload or {}).keys()}
+    return {
+        "strategy": str(dedup_settings.get("strategy") or "create"),
+        "fields": [
+            str(field_name)
+            for field_name in dedup_settings.get("fields", [])
+            if str(field_name) in payload_keys
+        ],
+    }
+
+
+def build_linked_result_meta(match: dict | None) -> dict:
+    if not isinstance(match, dict):
+        return {}
+
+    result_meta = {}
+    duplicate_match_fields = match.get("duplicate_match_fields", [])
+    dedup_missing_fields = match.get("dedup_missing_fields", [])
+    if duplicate_match_fields:
+        result_meta["duplicate_match_fields"] = duplicate_match_fields
+    if dedup_missing_fields:
+        result_meta["dedup_missing_fields"] = dedup_missing_fields
+    return result_meta
+
+
+def resolve_linked_record_action(account, entity_type: str, row_payload: dict, dedup_settings: dict) -> dict:
+    filtered_dedup_settings = filter_dedup_settings_for_payload(dedup_settings, row_payload)
+    existing_record_match = find_existing_record(account, entity_type, row_payload, filtered_dedup_settings)
+    existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
+
+    if existing_record_id is None:
+        return {
+            "mode": "create",
+            "record_id": None,
+            "meta": build_linked_result_meta(existing_record_match),
+        }
+
+    strategy = filtered_dedup_settings.get("strategy")
+    if strategy == "update":
+        mode = "update"
+    elif strategy == "skip":
+        mode = "reuse"
+    else:
+        mode = "create"
+
+    return {
+        "mode": mode,
+        "record_id": existing_record_id,
+        "meta": build_linked_result_meta(existing_record_match),
+    }
+
+
+def build_linked_result_fields(linked_payload: dict) -> dict:
+    flattened_fields = {}
+
+    for linked_entity, prefix in LINKED_ENTITY_PREFIXES.items():
+        entity_payload = linked_payload.get(linked_entity, {})
+        if not isinstance(entity_payload, dict):
+            continue
+
+        for field_id, value in entity_payload.items():
+            flattened_fields[f"{prefix}{field_id}"] = value
+
+    return flattened_fields
+
+
+def extract_linked_display_value(value) -> str:
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                normalized_item_value = normalize_value(item.get("VALUE"))
+                if normalized_item_value:
+                    return normalized_item_value
+            else:
+                normalized_item_value = normalize_value(item)
+                if normalized_item_value:
+                    return normalized_item_value
+        return ""
+
+    return normalize_value(value)
+
+
+def build_linked_record_title(linked_entity: str, row_payload: dict) -> str:
+    if linked_entity == "company":
+        return normalize_value(row_payload.get("TITLE"))
+
+    if linked_entity == "contact":
+        parts = [
+            normalize_value(row_payload.get("NAME")),
+            normalize_value(row_payload.get("LAST_NAME")),
+        ]
+        full_name = " ".join(part for part in parts if part).strip()
+        if full_name:
+            return full_name
+
+        for fallback_field in ("EMAIL", "PHONE"):
+            fallback_value = extract_linked_display_value(row_payload.get(fallback_field))
+            if fallback_value:
+                return fallback_value
+
+    return ""
+
+
+def build_linked_record_result(linked_entity: str, row_payload: dict, record_id, action_mode: str) -> dict | None:
+    normalized_record_id = normalize_record_id(record_id)
+    title = build_linked_record_title(linked_entity, row_payload)
+    if normalized_record_id is None and not title:
+        return None
+
+    status_by_mode = {
+        "create": "created",
+        "update": "updated",
+        "reuse": "existing",
+        "skip_payload": "skipped",
+    }
+
+    return {
+        "id": normalized_record_id,
+        "title": title,
+        "status": status_by_mode.get(action_mode, action_mode),
+    }
+
+
+def update_entity_record(account, entity_type: str, record_id, fields: dict):
+    if entity_type in TASK_ENTITY_TYPES:
+        raise ValueError("Update is not supported for task entity types")
+
+    if entity_type == "user":
+        _update_user(account, record_id, fields)
+        return True
+
+    if entity_type == "department":
+        _update_department(account, record_id, fields)
+        return True
+
+    scope = get_entity_scope(account.client, entity_type)
+    update_method = getattr(scope, "update", None)
+    if update_method is None:
+        raise ValueError("Bitrix entity update method is unavailable")
+
+    response = invoke_with_fallbacks(
+        [
+            lambda: update_method(record_id, fields),
+            lambda: update_method(id=record_id, fields=fields),
+            lambda: update_method(record_id, fields=fields),
+        ]
+    )
+    return unwrap_bitrix_result(response)
+
+
+def _resolve_task_child_scope(client, attribute_name: str):
+    for tasks_root_name in ("tasks", "task"):
+        tasks_root = getattr(client, tasks_root_name, None)
+        if tasks_root is None:
+            continue
+        scope = getattr(tasks_root, attribute_name, None)
+        if scope is not None:
+            return scope
+    return None
+
+
+def _extract_task_child_parent_id(fields: dict) -> int:
+    return _resolve_task_reference_id(fields.get("TASK_ID"), "TASK_ID")
+
+
+def _resolve_task_reference_id(value, field_name: str, *, task_resolver: BitrixTaskResolver | None = None) -> int:
+    if value in (None, ""):
+        raise ValueError(f"{field_name} is required")
+
+    if isinstance(value, int):
+        if value > 0:
+            return value
+        raise ValueError(f"{field_name} must be a positive integer")
+
+    normalized_value = normalize_value(value)
+    if not normalized_value:
+        raise ValueError(f"{field_name} is required")
+
+    try:
+        resolved_id = int(normalized_value)
+    except (TypeError, ValueError):
+        resolved_id = None
+
+    if resolved_id is not None:
+        if resolved_id > 0:
+            return resolved_id
+        raise ValueError(f"{field_name} must be a positive integer")
+
+    if task_resolver is not None:
+        resolved_id = task_resolver.resolve(normalized_value)
+        if resolved_id is not None:
+            return resolved_id
+
+    raise ValueError(f"{field_name} must be a positive integer or valid Bitrix task reference")
+
+
+def _extract_checklist_item_id(result) -> int:
+    if isinstance(result, dict):
+        checklist_item = result.get("checkListItem")
+        if isinstance(checklist_item, dict):
+            return normalize_record_id(checklist_item.get("id") or checklist_item.get("ID"))
+        return normalize_record_id(result.get("id") or result.get("ID") or result.get("result"))
+    return normalize_record_id(result)
+
+
+def _extract_task_comment_message_id(result):
+    if isinstance(result, dict):
+        message_id = result.get("id") or result.get("ID")
+        if message_id is not None:
+            return normalize_record_id(message_id)
+
+        nested_result = result.get("result")
+        if isinstance(nested_result, dict):
+            nested_message_id = (
+                nested_result.get("id")
+                or nested_result.get("ID")
+                or nested_result.get("messageId")
+                or nested_result.get("MESSAGE_ID")
+            )
+            if nested_message_id is not None:
+                return normalize_record_id(nested_message_id)
+
+        return None
+
+    return normalize_record_id(result)
+
+
+def _get_or_create_checklist_group(account, task_id: int, context: dict | None) -> int:
+    cache = (context or {}).get("checklist_group_cache")
+    if cache is not None and task_id in cache:
+        return cache[task_id]
+
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="tasks.task.checklist.add",
+        params={"taskId": task_id, "fields": {"TITLE": "Чек-лист", "PARENT_ID": 0}},
+    )
+    group_id = _extract_checklist_item_id(unwrap_bitrix_result(response))
+
+    if cache is not None:
+        cache[task_id] = group_id
+
+    return group_id
+
+
+def create_entity_record(account, entity_type: str, fields: dict, *, context: dict | None = None):
+    task_resolver = BitrixTaskResolver(account)
+
+    if entity_type == "task_attachment":
+        task_id = _resolve_task_reference_id(fields.get("TASK_ID"), "TASK_ID", task_resolver=task_resolver)
+        file_url = normalize_value(fields.get("FILE_URL"))
+        if not file_url:
+            raise ValueError("FILE_URL is required for task attachments")
+
+        download_result = download_attachment_source(file_url)
+        file_name = normalize_value(fields.get("FILE_NAME")) or normalize_value(download_result.get("file_name")) or "attachment.bin"
+        attachment_result = attach_file_to_task(
+            account,
+            task_id=task_id,
+            file_name=file_name,
+            content=download_result.get("content") or b"",
+            content_type=normalize_value(download_result.get("content_type")) or "application/octet-stream",
+        )
+        attachment_payload = unwrap_bitrix_result(attachment_result)
+        if isinstance(attachment_payload, dict):
+            attachment_id = (
+                attachment_payload.get("attachment_id")
+                or attachment_payload.get("ID")
+                or attachment_payload.get("id")
+                or attachment_payload.get("result")
+            )
+            if attachment_id is not None:
+                return normalize_record_id(attachment_id)
+
+        return normalize_record_id(attachment_payload)
+
+    if entity_type == "task":
+        task_fields = dict(fields)
+        if "PARENT_ID" in task_fields:
+            task_fields["PARENT_ID"] = _resolve_task_reference_id(
+                task_fields.get("PARENT_ID"), "PARENT_ID", task_resolver=task_resolver
+            )
+        response = BitrixAPIRequest(
+            bitrix_token=account,
+            api_method="tasks.task.add",
+            params={"fields": task_fields},
+        )
+        result = unwrap_bitrix_result(response)
+        if isinstance(result, dict):
+            task_data = result.get("task") or result
+            return normalize_record_id(task_data.get("id") or task_data.get("ID"))
+        return normalize_record_id(result)
+
+    if entity_type in TASK_CHILD_ENTITY_TYPES:
+        parent_task_id = _resolve_task_reference_id(fields.get("TASK_ID"), "TASK_ID", task_resolver=task_resolver)
+        child_fields = {
+            field_id: value
+            for field_id, value in fields.items()
+            if field_id != "TASK_ID"
+        }
+        if entity_type == "task_checklist_item":
+            child_fields["PARENT_ID"] = _get_or_create_checklist_group(account, parent_task_id, context)
+            response = BitrixAPIRequest(
+                bitrix_token=account,
+                api_method=TASK_CHILD_API_METHODS[entity_type],
+                params={"taskId": parent_task_id, "fields": child_fields},
+            )
+            return _extract_checklist_item_id(unwrap_bitrix_result(response))
+
+        if entity_type == "task_comment":
+            comment_text = normalize_value(child_fields.get("POST_MESSAGE"))
+            author_id = normalize_record_id(child_fields.get("AUTHOR_ID"))
+
+            if author_id is not None:
+                response = BitrixAPIRequest(
+                    bitrix_token=account,
+                    api_method="task.commentitem.add",
+                    params={
+                        "TASKID": parent_task_id,
+                        "FIELDS": {
+                            "POST_MESSAGE": comment_text,
+                            "AUTHOR_ID": author_id,
+                        },
+                    },
+                )
+                return normalize_record_id(unwrap_bitrix_result(response))
+
+            response = BitrixAPIRequest(
+                bitrix_token=account,
+                api_method=TASK_CHILD_API_METHODS[entity_type],
+                params={
+                    "fields": {
+                        "taskId": parent_task_id,
+                        "text": comment_text,
+                    }
+                },
+            )
+            return _extract_task_comment_message_id(unwrap_bitrix_result(response))
+
+    if entity_type == "user":
+        return _create_user(account, fields)
+
+    if entity_type == "department":
+        return _create_department(account, fields)
+
+    scope = get_entity_scope(account.client, entity_type)
+
+    return unwrap_bitrix_result(scope.add(fields))
+
+
+def execute_linked_dry_run(
+    *,
+    account,
+    rows: list[list],
+    row_numbers: list[int],
+    columns: list[str],
+    data_start_row: int,
+    mapping: dict,
+    validation_summary: dict,
+    fields: list[dict],
+    dedup_settings: dict,
+    default_field_values: dict | None = None,
+) -> dict:
+    invalid_row_numbers = get_invalid_row_numbers(validation_summary)
+    user_resolver = BitrixUserResolver(account)
+    checked_rows = 0
+    ready_rows = 0
+    ready_create_rows = 0
+    ready_update_rows = 0
+    skipped_rows = 0
+    results = []
+
+    for row_index, row_number in enumerate(row_numbers):
+        if row_number < data_start_row:
+            continue
+
+        row = rows[row_index] if row_index < len(rows) else []
+        if not row_has_values(row):
+            continue
+
+        checked_rows += 1
+
+        if row_number in invalid_row_numbers:
+            skipped_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "skipped",
+                    "error": "Row has validation issues",
+                }
+            )
+            continue
+
+        linked_payload = build_linked_row_payload(
+            row,
+            columns,
+            mapping,
+            fields,
+            account=account,
+            user_resolver=user_resolver,
+            default_field_values=default_field_values,
+        )
+
+        company_action = resolve_linked_record_action(
+            account,
+            "company",
+            linked_payload.get("company", {}),
+            dedup_settings.get("company", {}),
+        ) if linked_payload.get("company") else {"mode": "skip_payload", "record_id": None, "meta": {}}
+
+        contact_action = resolve_linked_record_action(
+            account,
+            "contact",
+            linked_payload.get("contact", {}),
+            dedup_settings.get("contact", {}),
+        ) if linked_payload.get("contact") else {"mode": "skip_payload", "record_id": None, "meta": {}}
+
+        result_meta = {}
+        company_meta = company_action.get("meta", {})
+        contact_meta = contact_action.get("meta", {})
+        if company_meta:
+            result_meta["company"] = company_meta
+        if contact_meta:
+            result_meta["contact"] = contact_meta
+
+        has_updates = company_action.get("mode") == "update" or contact_action.get("mode") == "update"
+
+        ready_rows += 1
+        if has_updates:
+            ready_update_rows += 1
+            result_item = {
+                "row_number": row_number,
+                "status": "ready_update",
+                "fields": build_linked_result_fields(linked_payload),
+            }
+        else:
+            ready_create_rows += 1
+            result_item = {
+                "row_number": row_number,
+                "status": "ready",
+                "fields": build_linked_result_fields(linked_payload),
+            }
+
+        if contact_action.get("record_id") is not None:
+            result_item["record_id"] = contact_action["record_id"]
+
+        if result_meta:
+            result_item["linked"] = result_meta
+        results.append(result_item)
+
+    return {
+        "checked_rows": checked_rows,
+        "ready_rows": ready_rows,
+        "ready_create_rows": ready_create_rows,
+        "ready_update_rows": ready_update_rows,
+        "skipped_rows": skipped_rows,
+        "results": results,
+    }
+
+
+def execute_linked_import(
+    *,
+    account,
+    rows: list[list],
+    row_numbers: list[int],
+    columns: list[str],
+    data_start_row: int,
+    mapping: dict,
+    validation_summary: dict,
+    fields: list[dict],
+    dedup_settings: dict,
+    should_cancel=None,
+    default_field_values: dict | None = None,
+) -> dict:
+    invalid_row_numbers = get_invalid_row_numbers(validation_summary)
+    user_resolver = BitrixUserResolver(account)
+    checked_rows = 0
+    created_rows = 0
+    updated_rows = 0
+    failed_rows = 0
+    skipped_rows = 0
+    cancelled_rows = 0
+    created_ids = []
+    updated_ids = []
+    results = []
+    was_cancelled = False
+
+    for row_index, row_number in enumerate(row_numbers):
+        if row_number < data_start_row:
+            continue
+
+        row = rows[row_index] if row_index < len(rows) else []
+        if not row_has_values(row):
+            continue
+
+        if callable(should_cancel) and should_cancel():
+            was_cancelled = True
+            for remaining_index in range(row_index, len(row_numbers)):
+                remaining_row_number = row_numbers[remaining_index]
+                if remaining_row_number < data_start_row:
+                    continue
+
+                remaining_row = rows[remaining_index] if remaining_index < len(rows) else []
+                if not row_has_values(remaining_row):
+                    continue
+
+                cancelled_rows += 1
+                results.append(
+                    {
+                        "row_number": remaining_row_number,
+                        "status": "cancelled",
+                        "error": "Import was cancelled before row execution",
+                    }
+                )
+            break
+
+        checked_rows += 1
+
+        if row_number in invalid_row_numbers:
+            skipped_rows += 1
+            failed_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "skipped",
+                    "error": "Row has validation issues",
+                }
+            )
+            continue
+
+        try:
+            linked_payload = build_linked_row_payload(
+                row,
+                columns,
+                mapping,
+                fields,
+                account=account,
+                user_resolver=user_resolver,
+                default_field_values=default_field_values,
+            )
+        except Exception as error:
+            failed_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "failed",
+                    "error": str(error),
+                }
+            )
+            continue
+
+        company_payload = linked_payload.get("company", {})
+        contact_payload = linked_payload.get("contact", {})
+        company_action = resolve_linked_record_action(
+            account,
+            "company",
+            company_payload,
+            dedup_settings.get("company", {}),
+        ) if company_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
+        contact_action = resolve_linked_record_action(
+            account,
+            "contact",
+            contact_payload,
+            dedup_settings.get("contact", {}),
+        ) if contact_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
+
+        company_id = company_action.get("record_id")
+        try:
+            if company_payload:
+                if company_action["mode"] == "update":
+                    update_entity_record(account, "company", company_action["record_id"], company_payload)
+                elif company_action["mode"] == "create":
+                    company_id = create_entity_record(account, "company", company_payload)
+        except Exception as error:
+            failed_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "failed",
+                    "error": str(error),
+                }
+            )
+            continue
+
+        if company_id is not None and contact_payload:
+            contact_payload = {
+                **contact_payload,
+                "COMPANY_ID": normalize_record_id(company_id) or company_id,
+            }
+
+        contact_record_id = contact_action.get("record_id")
+        try:
+            if contact_payload:
+                if contact_action["mode"] == "update":
+                    update_entity_record(account, "contact", contact_action["record_id"], contact_payload)
+                elif contact_action["mode"] == "reuse" and company_id is not None and contact_action["record_id"] is not None:
+                    update_entity_record(account, "contact", contact_action["record_id"], {"COMPANY_ID": company_id})
+                elif contact_action["mode"] == "create":
+                    contact_record_id = create_entity_record(account, "contact", contact_payload)
+        except Exception as error:
+            failed_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "failed",
+                    "error": str(error),
+                }
+            )
+            continue
+
+        result_meta = {}
+        company_meta = company_action.get("meta", {})
+        contact_meta = contact_action.get("meta", {})
+        if company_meta:
+            result_meta["company"] = company_meta
+        if contact_meta:
+            result_meta["contact"] = contact_meta
+
+        has_contact_link_update = (
+            contact_action.get("mode") == "reuse"
+            and company_id is not None
+            and contact_action.get("record_id") is not None
+        )
+        has_updates = company_action.get("mode") == "update" or contact_action.get("mode") == "update" or has_contact_link_update
+        result_item = {
+            "row_number": row_number,
+            "status": "updated" if has_updates else "created",
+        }
+        if result_meta:
+            result_item["linked"] = result_meta
+        linked_records = {}
+        company_record = build_linked_record_result(
+            "company",
+            company_payload,
+            company_id,
+            company_action.get("mode", ""),
+        )
+        contact_record = build_linked_record_result(
+            "contact",
+            contact_payload,
+            contact_record_id,
+            contact_action.get("mode", ""),
+        )
+        if company_record is not None:
+            linked_records["company"] = company_record
+        if contact_record is not None:
+            linked_records["contact"] = contact_record
+        if linked_records:
+            result_item["linked_records"] = linked_records
+        if contact_record_id is not None:
+            result_item["record_id"] = contact_record_id
+
+        if has_updates:
+            updated_rows += 1
+            if contact_record_id is not None:
+                updated_ids.append(contact_record_id)
+        else:
+            created_rows += 1
+            if contact_record_id is not None:
+                created_ids.append(contact_record_id)
+
+        results.append(result_item)
+
+    return {
+        "checked_rows": checked_rows,
+        "created_rows": created_rows,
+        "updated_rows": updated_rows,
+        "failed_rows": failed_rows,
+        "skipped_rows": skipped_rows,
+        "cancelled": was_cancelled,
+        "cancelled_rows": cancelled_rows,
+        "remaining_rows": cancelled_rows,
+        "created_ids": created_ids,
+        "updated_ids": updated_ids,
+        "results": results,
+    }
+
+
+def execute_dry_run(
+    *,
+    account,
+    entity_type: str,
+    rows: list[list],
+    row_numbers: list[int],
+    columns: list[str],
+    data_start_row: int,
+    mapping: dict,
+    validation_summary: dict,
+    fields: list[dict],
+    dedup_settings=None,
+    default_field_values: dict | None = None,
+) -> dict:
+    if is_linked_import_entity_type(entity_type):
+        return execute_linked_dry_run(
+            account=account,
+            rows=rows,
+            row_numbers=row_numbers,
+            columns=columns,
+            data_start_row=data_start_row,
+            mapping=mapping,
+            validation_summary=validation_summary,
+            fields=fields,
+            dedup_settings=normalize_linked_dedup_settings(dedup_settings),
+            default_field_values=default_field_values,
+        )
+
+    invalid_row_numbers = get_invalid_row_numbers(validation_summary)
+    normalized_dedup_settings = normalize_dedup_settings(dedup_settings)
+    user_resolver = BitrixUserResolver(account)
+    checked_rows = 0
+    ready_rows = 0
+    ready_create_rows = 0
+    ready_update_rows = 0
+    skipped_rows = 0
+    results = []
+
+    for row_index, row_number in enumerate(row_numbers):
+        if row_number < data_start_row:
+            continue
+
+        row = rows[row_index] if row_index < len(rows) else []
+        if not row_has_values(row):
+            continue
+
+        checked_rows += 1
+
+        if row_number in invalid_row_numbers:
+            skipped_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "skipped",
+                    "error": "Row has validation issues",
+                }
+            )
+            continue
+
+        row_payload = build_row_payload(
+            row,
+            columns,
+            mapping,
+            fields,
+            account=account,
+            user_resolver=user_resolver,
+            default_field_values=default_field_values,
+        )
+        existing_record_match = find_existing_record(account, entity_type, row_payload, normalized_dedup_settings)
+        existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
+        duplicate_match_fields = existing_record_match.get("duplicate_match_fields", []) if isinstance(existing_record_match, dict) else []
+        dedup_missing_fields = existing_record_match.get("dedup_missing_fields", []) if isinstance(existing_record_match, dict) else []
+        dedup_result_meta = {}
+        if duplicate_match_fields:
+            dedup_result_meta["duplicate_match_fields"] = duplicate_match_fields
+        if dedup_missing_fields:
+            dedup_result_meta["dedup_missing_fields"] = dedup_missing_fields
+
+        if existing_record_id is not None and normalized_dedup_settings["strategy"] == "skip":
+            skipped_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "skipped_duplicate",
+                    "record_id": existing_record_id,
+                    **dedup_result_meta,
+                    "error": "Duplicate matched existing record",
+                }
+            )
+            continue
+
+        ready_rows += 1
+        if existing_record_id is not None and normalized_dedup_settings["strategy"] == "update":
+            ready_update_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "ready_update",
+                    "record_id": existing_record_id,
+                    **dedup_result_meta,
+                    "fields": row_payload,
+                }
+            )
+            continue
+
+        ready_create_rows += 1
+        results.append(
+            {
+                "row_number": row_number,
+                "status": "ready",
+                **dedup_result_meta,
+                "fields": row_payload,
+            }
+        )
+
+    return {
+        "checked_rows": checked_rows,
+        "ready_rows": ready_rows,
+        "ready_create_rows": ready_create_rows,
+        "ready_update_rows": ready_update_rows,
+        "skipped_rows": skipped_rows,
+        "results": results,
+    }
+
+
+def execute_import(
+    *,
+    account,
+    entity_type: str,
+    rows: list[list],
+    row_numbers: list[int],
+    columns: list[str],
+    data_start_row: int,
+    mapping: dict,
+    validation_summary: dict,
+    fields: list[dict],
+    dedup_settings=None,
+    should_cancel=None,
+    default_field_values: dict | None = None,
+) -> dict:
+    if is_linked_import_entity_type(entity_type):
+        return execute_linked_import(
+            account=account,
+            rows=rows,
+            row_numbers=row_numbers,
+            columns=columns,
+            data_start_row=data_start_row,
+            mapping=mapping,
+            validation_summary=validation_summary,
+            fields=fields,
+            dedup_settings=normalize_linked_dedup_settings(dedup_settings),
+            should_cancel=should_cancel,
+            default_field_values=default_field_values,
+        )
+
+    invalid_row_numbers = get_invalid_row_numbers(validation_summary)
+    normalized_dedup_settings = normalize_dedup_settings(dedup_settings)
+    user_resolver = BitrixUserResolver(account)
+    import_context = {"checklist_group_cache": {}} if entity_type == "task_checklist_item" else None
+    checked_rows = 0
+    created_rows = 0
+    updated_rows = 0
+    failed_rows = 0
+    skipped_rows = 0
+    cancelled_rows = 0
+    created_ids = []
+    updated_ids = []
+    results = []
+    was_cancelled = False
+
+    for row_index, row_number in enumerate(row_numbers):
+        if row_number < data_start_row:
+            continue
+
+        row = rows[row_index] if row_index < len(rows) else []
+        if not row_has_values(row):
+            continue
+
+        if callable(should_cancel) and should_cancel():
+            was_cancelled = True
+            for remaining_index in range(row_index, len(row_numbers)):
+                remaining_row_number = row_numbers[remaining_index]
+                if remaining_row_number < data_start_row:
+                    continue
+
+                remaining_row = rows[remaining_index] if remaining_index < len(rows) else []
+                if not row_has_values(remaining_row):
+                    continue
+
+                cancelled_rows += 1
+                results.append(
+                    {
+                        "row_number": remaining_row_number,
+                        "status": "cancelled",
+                        "error": "Import was cancelled before row execution",
+                    }
+                )
+            break
+
+        checked_rows += 1
+
+        if row_number in invalid_row_numbers:
+            skipped_rows += 1
+            failed_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "skipped",
+                    "error": "Row has validation issues",
+                }
+            )
+            continue
+
+        row_payload = build_row_payload(
+            row,
+            columns,
+            mapping,
+            fields,
+            account=account,
+            user_resolver=user_resolver,
+            default_field_values=default_field_values,
+        )
+        existing_record_match = find_existing_record(account, entity_type, row_payload, normalized_dedup_settings)
+        existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
+        duplicate_match_fields = existing_record_match.get("duplicate_match_fields", []) if isinstance(existing_record_match, dict) else []
+        dedup_missing_fields = existing_record_match.get("dedup_missing_fields", []) if isinstance(existing_record_match, dict) else []
+        dedup_result_meta = {}
+        if duplicate_match_fields:
+            dedup_result_meta["duplicate_match_fields"] = duplicate_match_fields
+        if dedup_missing_fields:
+            dedup_result_meta["dedup_missing_fields"] = dedup_missing_fields
+
+        if existing_record_id is not None and normalized_dedup_settings["strategy"] == "skip":
+            skipped_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "skipped_duplicate",
+                    "record_id": existing_record_id,
+                    **dedup_result_meta,
+                    "error": "Duplicate matched existing record",
+                }
+            )
+            continue
+
+        if existing_record_id is not None and normalized_dedup_settings["strategy"] == "update":
+            try:
+                update_entity_record(account, entity_type, existing_record_id, row_payload)
+            except Exception as error:
+                failed_rows += 1
+                results.append(
+                    {
+                        "row_number": row_number,
+                        "status": "failed",
+                        "error": str(error),
+                    }
+                )
+                continue
+
+            updated_rows += 1
+            updated_ids.append(existing_record_id)
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "updated",
+                    "record_id": existing_record_id,
+                    **dedup_result_meta,
+                }
+            )
+            continue
+
+        try:
+            record_id = create_entity_record(account, entity_type, row_payload, context=import_context)
+        except Exception as error:
+            failed_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "failed",
+                    "error": str(error),
+                }
+            )
+            continue
+
+        created_rows += 1
+        result_item = {
+            "row_number": row_number,
+            "status": "created",
+            **dedup_result_meta,
+        }
+        if record_id is not None:
+            created_ids.append(record_id)
+            result_item["record_id"] = record_id
+        results.append(result_item)
+
+    return {
+        "checked_rows": checked_rows,
+        "created_rows": created_rows,
+        "updated_rows": updated_rows,
+        "failed_rows": failed_rows,
+        "skipped_rows": skipped_rows,
+        "cancelled": was_cancelled,
+        "cancelled_rows": cancelled_rows,
+        "remaining_rows": cancelled_rows,
+        "created_ids": created_ids,
+        "updated_ids": updated_ids,
+        "results": results,
+    }
