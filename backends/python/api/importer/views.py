@@ -1,6 +1,7 @@
 import csv
 import os
 import re
+from datetime import timedelta
 from io import StringIO, TextIOWrapper
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
@@ -8,6 +9,7 @@ from zipfile import BadZipFile, ZipFile
 import xlrd
 
 from django.http import HttpResponse, JsonResponse
+from django.utils import timezone
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
@@ -42,6 +44,8 @@ from .services.validation import build_validation_result
 XLSX_MAIN_NS = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 XLSX_REL_NS = {"rel": "http://schemas.openxmlformats.org/package/2006/relationships"}
 CELL_REF_RE = re.compile(r"([A-Z]+)")
+
+MAX_IMPORT_ROWS = 100_000
 
 _ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 _XLSX_MAGIC = b"PK\x03\x04"          # ZIP / OOXML
@@ -896,6 +900,24 @@ def parse_positive_int(value, field_name):
     return parsed_value
 
 
+_STUCK_SESSION_TIMEOUT_MINUTES = 90
+
+
+def release_stuck_sessions(portal_member_id: str, portal_domain: str) -> int:
+    cutoff = timezone.now() - timedelta(minutes=_STUCK_SESSION_TIMEOUT_MINUTES)
+    stuck = ImportSession.objects.filter(
+        portal_member_id=portal_member_id,
+        portal_domain=portal_domain,
+        status=ImportSession.Status.RUNNING,
+        updated_at__lt=cutoff,
+    )
+    count = stuck.update(
+        status=ImportSession.Status.FAILED,
+        last_error=f"Сессия автоматически остановлена: не было активности более {_STUCK_SESSION_TIMEOUT_MINUTES} минут",
+    )
+    return count
+
+
 def apply_preview_structure_overrides(columns, preview_rows, row_numbers, structure, payload):
     header_row = parse_positive_int(payload.get("header_row"), "Header row") or structure["header_row"]
     data_start_row = parse_positive_int(payload.get("data_start_row"), "Data start row") or structure["data_start_row"]
@@ -927,6 +949,8 @@ def import_sessions(request: AuthorizedRequest):
     if request.method == "GET":
         if not has_permission(account, "sessions.view"):
             return permission_denied_response()
+
+        release_stuck_sessions(portal_member_id, portal_domain)
 
         sessions = ImportSession.objects.filter(
             portal_member_id=portal_member_id,
@@ -1582,6 +1606,11 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
         fields = fetch_entity_fields(account, session.entity_type)
         _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
         session.total_rows = sum(1 for rn in row_numbers if rn >= session.data_start_row)
+        if session.total_rows > MAX_IMPORT_ROWS:
+            raise ValueError(
+                f"Файл содержит слишком много строк данных ({session.total_rows:,}). "
+                f"Максимум: {MAX_IMPORT_ROWS:,} строк за один импорт."
+            )
         session.save(update_fields=["total_rows", "updated_at"])
         import_result = execute_import(
             account=account,

@@ -144,6 +144,7 @@ const mappingRows = ref<MappingRow[]>([])
 const taskDefaultResponsibleId = ref('')
 const taskDefaultCommentAuthorId = ref('')
 const dedupStrategy = ref('create')
+const dedupCondition = ref<'any' | 'all'>('any')
 const perRowDedupDecisions = ref<Record<string, string>>({})
 const mappingDragSourceIndex = ref<number | null>(null)
 const mappingDragOverIndex = ref<number | null>(null)
@@ -956,6 +957,7 @@ function resetFlowState() {
   mappingData.value = null
   mappingRows.value = []
   dedupStrategy.value = 'create'
+  dedupCondition.value = 'any'
   dedupFields.value = []
   perRowDedupDecisions.value = {}
   validationData.value = null
@@ -988,6 +990,7 @@ function syncDedupSettings() {
   const payload = buildDedupPayload(mappingData.value?.saved_dedup || {})
   dedupStrategy.value = payload.strategy
   dedupFields.value = payload.fields
+  dedupCondition.value = payload.condition as 'any' | 'all'
 }
 
 function syncMappingRows() {
@@ -996,6 +999,7 @@ function syncMappingRows() {
     taskDefaultResponsibleId.value = ''
     taskDefaultCommentAuthorId.value = ''
     dedupStrategy.value = 'create'
+    dedupCondition.value = 'any'
     dedupFields.value = []
     return
   }
@@ -1429,6 +1433,7 @@ async function saveMapping() {
       buildDedupPayload({
         strategy: dedupStrategy.value,
         fields: dedupFields.value,
+        condition: dedupCondition.value,
       }),
       {
         default_responsible_id: taskDefaultResponsibleId.value,
@@ -1467,6 +1472,7 @@ async function saveDedupSettings() {
       buildDedupPayload({
         strategy: dedupStrategy.value,
         fields: dedupFields.value,
+        condition: dedupCondition.value,
       }),
       {
         default_responsible_id: taskDefaultResponsibleId.value,
@@ -1501,6 +1507,7 @@ async function saveTemplate() {
       buildDedupPayload({
         strategy: dedupStrategy.value,
         fields: dedupFields.value,
+        condition: dedupCondition.value,
       }),
     )
     await refreshTemplates()
@@ -2961,6 +2968,34 @@ onMounted(loadHistory)
 
                     <div v-else class="mt-3 text-sm text-[#7f92a7]">
                       Сначала сопоставьте одно из полей EMAIL, PHONE или TITLE на шаге маппинга.
+                    </div>
+
+                    <div
+                      v-if="dedupStrategy !== 'create' && dedupFields.length >= 2"
+                      class="mt-4 flex items-center gap-3"
+                    >
+                      <span class="text-xs text-[#7f92a7]">Режим совпадения:</span>
+                      <div class="flex gap-1 rounded-[10px] border border-[#e5ebf2] bg-[#f4f7fa] p-1">
+                        <button
+                          type="button"
+                          class="rounded-[8px] px-3 py-1 text-xs font-medium transition"
+                          :class="dedupCondition === 'any' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
+                          @click="dedupCondition = 'any'"
+                        >
+                          Любое поле (OR)
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded-[8px] px-3 py-1 text-xs font-medium transition"
+                          :class="dedupCondition === 'all' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
+                          @click="dedupCondition = 'all'"
+                        >
+                          Все поля (AND)
+                        </button>
+                      </div>
+                      <span class="text-xs text-[#7f92a7]">
+                        {{ dedupCondition === 'all' ? 'Дубль найден только если совпали все выбранные поля' : 'Дубль найден если совпало хотя бы одно поле' }}
+                      </span>
                     </div>
 
                     <div

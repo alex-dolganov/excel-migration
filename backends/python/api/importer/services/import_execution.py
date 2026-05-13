@@ -433,6 +433,7 @@ def normalize_dedup_settings(dedup_settings) -> dict:
         return {
             "strategy": "create",
             "fields": [],
+            "condition": "any",
         }
 
     strategy = str(dedup_settings.get("strategy") or "create").strip().lower()
@@ -445,9 +446,14 @@ def normalize_dedup_settings(dedup_settings) -> dict:
         if normalized_field_name in SUPPORTED_DEDUP_FIELDS and normalized_field_name not in normalized_fields:
             normalized_fields.append(normalized_field_name)
 
+    condition = str(dedup_settings.get("condition") or "any").strip().lower()
+    if condition not in {"all", "any"}:
+        condition = "any"
+
     return {
         "strategy": strategy,
         "fields": normalized_fields,
+        "condition": condition,
     }
 
 
@@ -702,21 +708,22 @@ def find_existing_record(account, entity_type: str, row_payload: dict, dedup_set
     if not lookup_filter:
         return None
 
-    if len(lookup_filter) > 1:
+    condition = str(dedup_settings.get("condition") or "any")
+
+    if condition == "all":
+        # All fields must match simultaneously (AND)
         record_id = find_record_by_filter(list_method, lookup_filter)
         if record_id is None:
             if dedup_missing_fields:
-                return {
-                    "dedup_missing_fields": dedup_missing_fields,
-                }
+                return {"dedup_missing_fields": dedup_missing_fields}
             return None
-
         return {
             "record_id": record_id,
             "duplicate_match_fields": matched_fields,
             "dedup_missing_fields": dedup_missing_fields,
         }
 
+    # condition == "any": match by each field independently, return first hit (OR)
     for field_name, field_value in lookup_filter.items():
         record_id = find_record_by_filter(list_method, {field_name: field_value})
         if record_id is not None:
@@ -738,6 +745,7 @@ def filter_dedup_settings_for_payload(dedup_settings: dict, row_payload: dict) -
     payload_keys = {str(field_id) for field_id in (row_payload or {}).keys()}
     return {
         "strategy": str(dedup_settings.get("strategy") or "create"),
+        "condition": str(dedup_settings.get("condition") or "any"),
         "fields": [
             str(field_name)
             for field_name in dedup_settings.get("fields", [])

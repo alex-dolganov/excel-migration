@@ -821,9 +821,12 @@ export function buildDedupPayload(settings) {
       .filter((field) => SUPPORTED_DEDUP_FIELDS.includes(field)),
   ))
 
+  const condition = String(settings?.condition || 'any') === 'all' ? 'all' : 'any'
+
   return {
     strategy,
     fields: strategy === 'create' ? [] : fields,
+    condition,
   }
 }
 
