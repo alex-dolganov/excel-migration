@@ -18,13 +18,23 @@ from main.utils import AuthorizedRequest
 from main.utils.decorators import auth_required, log_errors
 
 from .models import ImportSession, ImportTemplate, ImporterUserRole
-from .services.b24_fields import fetch_entity_fields
+from .services.b24_fields import (
+    SMART_PROCESS_ENTITY_TYPE,
+    fetch_entity_fields,
+    fetch_smart_process_types,
+    normalize_smart_process_entity_config,
+)
 from .services.background_jobs import (
     enqueue_import_session_retry,
     enqueue_import_session_run,
     is_import_queue_enabled,
 )
-from .services.example_templates import build_example_template_filename, build_example_template_xlsx
+from .services.example_templates import (
+    build_example_template_filename,
+    build_example_template_xlsx,
+    build_smart_process_example_template_filename,
+    build_smart_process_example_template_xlsx,
+)
 from .services.import_execution import execute_dry_run, execute_import, normalize_entity_dedup_settings
 from .services.mapping import build_candidate_mapping, normalize_saved_mapping, resolve_field_item_value
 from .services.permissions import (
@@ -91,9 +101,11 @@ IMPORT_RUN_STATUS_LABELS = {
 
 
 def serialize_session(session: ImportSession) -> dict:
+    import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
     return {
         "id": str(session.id),
         "entity_type": session.entity_type,
+        "entity_config": import_settings.get("entity_config") if isinstance(import_settings.get("entity_config"), dict) else None,
         "source_format": session.source_format,
         "status": session.status,
         "original_filename": session.original_filename,
@@ -117,6 +129,7 @@ def serialize_template(template: ImportTemplate) -> dict:
     return {
         "id": str(template.id),
         "entity_type": template.entity_type,
+        "entity_config": template.entity_config if isinstance(template.entity_config, dict) and template.entity_config else None,
         "name": template.name,
         "mapping_schema": template.mapping_schema,
         "column_settings": template.column_settings,
@@ -229,10 +242,16 @@ def import_example_template_xlsx(request: AuthorizedRequest):
     if not has_permission(account, "sessions.create"):
         return permission_denied_response()
 
-    entity_type = request.GET.get("entity_type")
+    entity_type = str(request.GET.get("entity_type") or "").strip()
     try:
-        template_content = build_example_template_xlsx(str(entity_type or ""))
-        filename = build_example_template_filename(str(entity_type or ""))
+        if entity_type == SMART_PROCESS_ENTITY_TYPE:
+            entity_config = normalize_session_entity_config(entity_type, request.GET)
+            fields = fetch_entity_fields(account, entity_type, entity_config=entity_config)
+            template_content = build_smart_process_example_template_xlsx(entity_config, fields)
+            filename = build_smart_process_example_template_filename(entity_config)
+        else:
+            template_content = build_example_template_xlsx(entity_type)
+            filename = build_example_template_filename(entity_type)
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
@@ -450,7 +469,26 @@ def has_active_import_job(session: ImportSession) -> bool:
     return job_state in IMPORT_ACTIVE_JOB_STATES
 
 
-def load_portal_template(portal_member_id: str, portal_domain: str, template_id, entity_type: str | None = None):
+def build_template_entity_scope(entity_type: str, entity_config: dict | None = None) -> str:
+    if entity_type == SMART_PROCESS_ENTITY_TYPE:
+        normalized_config = normalize_smart_process_entity_config(entity_config or {})
+        return f"smart_process:{normalized_config['entityTypeId']}"
+    return ""
+
+
+def build_template_entity_config(entity_type: str, entity_config: dict | None = None) -> dict:
+    if entity_type == SMART_PROCESS_ENTITY_TYPE:
+        return normalize_smart_process_entity_config(entity_config or {})
+    return {}
+
+
+def load_portal_template(
+    portal_member_id: str,
+    portal_domain: str,
+    template_id,
+    entity_type: str | None = None,
+    entity_scope_key: str | None = None,
+):
     filters = {
         "id": template_id,
         "portal_member_id": portal_member_id,
@@ -459,6 +497,8 @@ def load_portal_template(portal_member_id: str, portal_domain: str, template_id,
     }
     if entity_type:
         filters["entity_type"] = entity_type
+    if entity_scope_key is not None:
+        filters["entity_scope_key"] = entity_scope_key
 
     try:
         return ImportTemplate.objects.get(**filters)
@@ -911,6 +951,30 @@ def build_unmapped_mapping_values(observed_values: dict[str, list[str]], mapping
     return unmapped_values
 
 
+def normalize_session_entity_config(entity_type: str, payload) -> dict:
+    if entity_type == SMART_PROCESS_ENTITY_TYPE:
+        payload_dict = payload if isinstance(payload, dict) else {}
+        raw_entity_config = payload_dict.get("entity_config")
+        if isinstance(raw_entity_config, dict):
+            return normalize_smart_process_entity_config(raw_entity_config)
+        return normalize_smart_process_entity_config(payload_dict)
+    return {}
+
+
+def get_session_entity_config(session: ImportSession) -> dict:
+    import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
+    entity_config = import_settings.get("entity_config")
+    return entity_config if isinstance(entity_config, dict) else {}
+
+
+def fetch_session_entity_fields(account, session: ImportSession) -> list[dict]:
+    return fetch_entity_fields(
+        account,
+        session.entity_type,
+        entity_config=get_session_entity_config(session),
+    )
+
+
 def count_mapping_values(values_by_field: dict[str, list[str]]) -> int:
     if not isinstance(values_by_field, dict):
         return 0
@@ -1018,6 +1082,11 @@ def import_sessions(request: AuthorizedRequest):
             status=400,
         )
 
+    try:
+        entity_config = normalize_session_entity_config(str(entity_type or "").strip(), payload)
+    except ValueError as error:
+        return JsonResponse({"error": str(error)}, status=400)
+
     session = ImportSession.objects.create(
         portal_member_id=portal_member_id,
         portal_domain=portal_domain,
@@ -1026,6 +1095,7 @@ def import_sessions(request: AuthorizedRequest):
         source_format=source_format,
         status=ImportSession.Status.DRAFT,
         original_filename=original_filename,
+        import_settings={"entity_config": entity_config} if entity_config else {},
     )
 
     return JsonResponse({"item": serialize_session(session)}, status=201)
@@ -1046,6 +1116,12 @@ def import_templates(request: AuthorizedRequest):
             return permission_denied_response()
 
         entity_type = str((request.GET or {}).get("entity_type") or "").strip()
+        entity_config = {}
+        if entity_type == SMART_PROCESS_ENTITY_TYPE:
+            try:
+                entity_config = normalize_session_entity_config(entity_type, request.GET)
+            except ValueError as error:
+                return JsonResponse({"error": str(error)}, status=400)
 
         templates = ImportTemplate.objects.filter(
             portal_member_id=portal_member_id,
@@ -1054,6 +1130,8 @@ def import_templates(request: AuthorizedRequest):
         )
         if entity_type:
             templates = templates.filter(entity_type=entity_type)
+        if entity_type == SMART_PROCESS_ENTITY_TYPE and entity_config:
+            templates = templates.filter(entity_scope_key=build_template_entity_scope(entity_type, entity_config))
 
         return JsonResponse({"items": [serialize_template(item) for item in templates.order_by("name")]})
 
@@ -1083,7 +1161,7 @@ def import_templates(request: AuthorizedRequest):
             return JsonResponse({"error": "Preview data is required before template save"}, status=400)
 
         try:
-            fields = fetch_entity_fields(account, session.entity_type)
+            fields = fetch_session_entity_fields(account, session)
             saved_mapping = normalize_saved_mapping(mapping_payload.get("mapping", {}), headers, columns, fields)
         except ValueError as error:
             return JsonResponse({"error": str(error)}, status=400)
@@ -1107,12 +1185,16 @@ def import_templates(request: AuthorizedRequest):
     if not selected_sheet_name:
         return JsonResponse({"error": "Preview data is required before template save"}, status=400)
 
+    template_entity_config = build_template_entity_config(session.entity_type, get_session_entity_config(session))
+    template_entity_scope = build_template_entity_scope(session.entity_type, template_entity_config)
     template, _created = ImportTemplate.objects.update_or_create(
         portal_member_id=portal_member_id,
         portal_domain=portal_domain,
         entity_type=session.entity_type,
+        entity_scope_key=template_entity_scope,
         name=template_name,
         defaults={
+            "entity_config": template_entity_config,
             "mapping_schema": saved_mapping,
             "column_settings": {
                 "sheet_name": selected_sheet_name,
@@ -1152,6 +1234,7 @@ def import_session_apply_template(request: AuthorizedRequest, session_id):
         portal_domain,
         template_id,
         entity_type=session.entity_type,
+        entity_scope_key=build_template_entity_scope(session.entity_type, get_session_entity_config(session)),
     )
     if template is None:
         return JsonResponse({"error": "Import template not found"}, status=404)
@@ -1173,7 +1256,7 @@ def import_session_apply_template(request: AuthorizedRequest, session_id):
                 "data_start_row": column_settings.get("data_start_row"),
             },
         )
-        fields = fetch_entity_fields(account, session.entity_type)
+        fields = fetch_session_entity_fields(account, session)
         saved_mapping = normalize_saved_mapping(
             template.mapping_schema if isinstance(template.mapping_schema, dict) else {},
             structure["headers"],
@@ -1292,21 +1375,49 @@ def import_fields(request: AuthorizedRequest):
     if not has_permission(request.bitrix24_account, "sessions.view"):
         return permission_denied_response()
 
-    entity_type = (request.data or {}).get("entity_type")
+    request_payload = {
+        **((request.GET or {}) if hasattr(request, "GET") else {}),
+        **((request.data or {}) if isinstance(request.data, dict) else {}),
+    }
+
+    entity_type = request_payload.get("entity_type")
     if not entity_type:
         return JsonResponse({"error": "entity_type is required"}, status=400)
 
     try:
-        items = fetch_entity_fields(request.bitrix24_account, str(entity_type))
+        entity_type_str = str(entity_type)
+        entity_config = normalize_session_entity_config(entity_type_str, request_payload)
+        items = fetch_entity_fields(
+            request.bitrix24_account,
+            entity_type_str,
+            entity_config=entity_config,
+        )
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
     return JsonResponse(
         {
-            "entity_type": str(entity_type),
+            "entity_type": entity_type_str,
+            **({"entity_config": entity_config} if entity_config else {}),
             "items": items,
         }
     )
+
+
+@xframe_options_exempt
+@require_GET
+@log_errors("import_smart_processes")
+@auth_required
+def import_smart_processes(request: AuthorizedRequest):
+    if not has_permission(request.bitrix24_account, "sessions.create"):
+        return permission_denied_response()
+
+    try:
+        items = fetch_smart_process_types(request.bitrix24_account)
+    except ValueError as error:
+        return JsonResponse({"error": str(error)}, status=400)
+
+    return JsonResponse({"items": items})
 
 
 @xframe_options_exempt
@@ -1335,7 +1446,7 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
         return JsonResponse({"error": "Preview data is required before mapping"}, status=400)
 
     try:
-        fields = fetch_entity_fields(account, session.entity_type)
+        fields = fetch_session_entity_fields(account, session)
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
@@ -1458,7 +1569,7 @@ def import_session_validate(request: AuthorizedRequest, session_id):
     )
 
     try:
-        fields = fetch_entity_fields(account, session.entity_type)
+        fields = fetch_session_entity_fields(account, session)
         _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
@@ -1566,7 +1677,7 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
         return JsonResponse({"error": "Validation is required before dry run"}, status=400)
 
     try:
-        fields = fetch_entity_fields(account, session.entity_type)
+        fields = fetch_session_entity_fields(account, session)
         _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
         dry_run_result = execute_dry_run(
             account=account,
@@ -1640,7 +1751,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
         session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
 
     try:
-        fields = fetch_entity_fields(account, session.entity_type)
+        fields = fetch_session_entity_fields(account, session)
         _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
         session.total_rows = sum(1 for rn in row_numbers if rn >= session.data_start_row)
         if session.total_rows > MAX_IMPORT_ROWS:
@@ -1664,6 +1775,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
             default_field_values=task_default_field_values,
             per_row_decisions=normalized_per_row_decisions,
             progress_callback=_save_progress,
+            entity_config=get_session_entity_config(session),
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
@@ -1755,7 +1867,12 @@ def import_session_run(request: AuthorizedRequest, session_id):
 
         session.status = ImportSession.Status.RUNNING
         session.last_error = ""
-        session.save(update_fields=["status", "last_error", "updated_at"])
+        session.processed_rows = 0
+        session.successful_rows = 0
+        session.failed_rows = 0
+        session.save(
+            update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"]
+        )
         enqueue_import_session_run(session, account)
         session.refresh_from_db()
         return JsonResponse({"item": serialize_session_response_item(session)}, status=202)
@@ -1865,7 +1982,7 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
         session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
 
     try:
-        fields = fetch_entity_fields(account, session.entity_type)
+        fields = fetch_session_entity_fields(account, session)
         _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
         validation_result = build_validation_result(
             rows=rows,
@@ -1893,6 +2010,7 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
             default_field_values=task_default_field_values,
             per_row_decisions=normalize_per_row_decisions(import_settings.get("per_row_decisions")),
             progress_callback=_save_progress,
+            entity_config=get_session_entity_config(session),
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
@@ -1989,7 +2107,12 @@ def import_session_retry_failed(request: AuthorizedRequest, session_id):
 
         session.status = ImportSession.Status.RUNNING
         session.last_error = ""
-        session.save(update_fields=["status", "last_error", "updated_at"])
+        session.processed_rows = 0
+        session.successful_rows = 0
+        session.failed_rows = 0
+        session.save(
+            update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"]
+        )
         enqueue_import_session_retry(session, account)
         session.refresh_from_db()
         return JsonResponse({"item": serialize_session_response_item(session)}, status=202)

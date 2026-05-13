@@ -8,6 +8,7 @@ from importer.services.import_execution import (
     build_linked_row_payload,
     build_row_payload,
     create_entity_record,
+    normalize_entity_dedup_settings,
 )
 
 
@@ -570,6 +571,81 @@ class ImportExecutionServiceTest(SimpleTestCase):
                         }
                     ],
                 }
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    def test_create_crm_note_uses_timeline_comment_api(self, bitrix_api_request):
+        bitrix_api_request.return_value = SimpleNamespace(result=927)
+        account = SimpleNamespace(client=SimpleNamespace())
+
+        result = create_entity_record(
+            account,
+            "crm_note",
+            {
+                "ENTITY_TYPE": "deal",
+                "ENTITY_ID": "55",
+                "COMMENT": "Договор согласован, ожидаем подписания",
+                "CREATED_TIME": "2026-05-17T11:30:00",
+            },
+        )
+
+        self.assertEqual(result, 927)
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="crm.timeline.comment.add",
+            params={
+                "fields": {
+                    "ENTITY_TYPE": "DEAL",
+                    "ENTITY_ID": 55,
+                    "COMMENT": "Договор согласован, ожидаем подписания",
+                    "CREATED_TIME": "2026-05-17T11:30:00",
+                }
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    def test_create_smart_process_item_uses_universal_crm_item_api(self, bitrix_api_request):
+        bitrix_api_request.return_value = SimpleNamespace(result={"item": {"id": 501}})
+        account = SimpleNamespace(client=SimpleNamespace())
+
+        result = create_entity_record(
+            account,
+            "smart_process",
+            {
+                "title": "Новый элемент",
+                "stageId": "DT128_0:NEW",
+            },
+            context={"entity_config": {"entityTypeId": 128}},
+        )
+
+        self.assertEqual(result, 501)
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="crm.item.add",
+            params={
+                "entityTypeId": 128,
+                "fields": {
+                    "title": "Новый элемент",
+                    "stageId": "DT128_0:NEW",
+                },
+            },
+        )
+
+    def test_smart_process_dedup_is_forced_to_create_only(self):
+        self.assertEqual(
+            normalize_entity_dedup_settings(
+                "smart_process",
+                {
+                    "strategy": "update",
+                    "fields": ["title"],
+                    "condition": "all",
+                },
+            ),
+            {
+                "strategy": "create",
+                "fields": [],
+                "condition": "any",
             },
         )
 

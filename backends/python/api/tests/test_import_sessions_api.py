@@ -149,3 +149,42 @@ class ImportSessionsApiTest(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["item"]["status"], "draft")
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_create_smart_process_session_persists_entity_config(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+        )
+
+        response = self.client.post(
+            reverse("importer:sessions"),
+            data={
+                "entity_type": "smart_process",
+                "source_format": "xlsx",
+                "original_filename": "spa.xlsx",
+                "entity_config": {
+                    "entityTypeId": 128,
+                    "title": "Согласования",
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["item"]["status"], "draft")
+        self.assertEqual(response.json()["item"]["entity_config"], {
+            "entityTypeId": 128,
+            "title": "Согласования",
+        })
+
+        session = ImportSession.objects.get(id=response.json()["item"]["id"])
+        self.assertEqual(
+            session.import_settings.get("entity_config"),
+            {
+                "entityTypeId": 128,
+                "title": "Согласования",
+            },
+        )

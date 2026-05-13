@@ -35,6 +35,7 @@ import {
   buildImportRunStatusFilters,
   buildImportRunRetryState,
   buildLinkedImportRunSummary,
+  shouldWaitForImportExecutionSnapshot,
   filterImportRunRows,
   resolveImportRunFilterId,
   buildUnmappedValueSummary,
@@ -1577,6 +1578,51 @@ test('builds import run summary from top-level session counters when import_run 
     updated_ids: [],
     results: [],
   })
+})
+
+test('keeps waiting for queued import snapshot while status is still running even if counters are already filled', () => {
+  assert.equal(shouldWaitForImportExecutionSnapshot({
+    id: 'session-running-1',
+    status: 'running',
+    processed_rows: 1,
+    successful_rows: 1,
+    failed_rows: 0,
+    summary: {
+      validation: {
+        checked_rows: 1,
+        valid_rows: 1,
+      },
+    },
+  }), true)
+
+  assert.equal(shouldWaitForImportExecutionSnapshot({
+    id: 'session-running-2',
+    status: 'running',
+    summary: {
+      import_run: {
+        checked_rows: 2,
+        created_rows: 1,
+        failed_rows: 1,
+        results: [
+          { row_number: 2, status: 'created', record_id: 501 },
+          { row_number: 3, status: 'failed', error: 'Boom' },
+        ],
+      },
+      job: {
+        mode: 'retry',
+        state: 'queued',
+      },
+    },
+  }), true)
+
+  assert.equal(shouldWaitForImportExecutionSnapshot({
+    id: 'session-completed-1',
+    status: 'completed',
+    processed_rows: 1,
+    successful_rows: 1,
+    failed_rows: 0,
+    summary: {},
+  }), false)
 })
 
 test('builds collapsed state for recent import history panel', () => {

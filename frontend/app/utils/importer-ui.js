@@ -18,6 +18,7 @@ export const SUPPORTED_IMPORT_ENTITIES = [
   { value: 'contact', label: 'Контакты' },
   { value: 'company', label: 'Компании' },
   { value: 'deal', label: 'Сделки' },
+  { value: 'smart_process', label: 'Смарт-процессы' },
   { value: 'crm_activity', label: 'Активности CRM' },
   { value: 'crm_note', label: 'Заметки CRM' },
   { value: 'linked_company_contact', label: 'Компания + Контакт' },
@@ -401,6 +402,7 @@ export function buildFieldTypeLabel(fieldType) {
     string: 'Текст',
     text: 'Текст',
     crm_status: 'Статус',
+    crm_category: 'Воронка',
     enumeration: 'Список',
     list: 'Список',
     boolean: 'Да/нет',
@@ -453,7 +455,7 @@ export function buildFieldGuidanceHints(field) {
   }
 
   if (
-    ['enumeration', 'list', 'crm_status'].includes(normalizedType)
+    ['enumeration', 'list', 'crm_status', 'crm_category'].includes(normalizedType)
     || (Array.isArray(field?.items) && field.items.length > 0)
   ) {
     hints.push('Выберите соответствие значений в блоке маппинга списков ниже.')
@@ -478,8 +480,14 @@ export function buildFieldGuidanceHints(field) {
   return hints
 }
 
-export function getImportEntityLabel(entityType) {
+export function getImportEntityLabel(entityType, entityConfig = null) {
   const normalizedEntityType = String(entityType || '').trim()
+  if (normalizedEntityType === 'smart_process') {
+    const smartProcessTitle = String(entityConfig?.title || '').trim()
+    if (smartProcessTitle) {
+      return `Смарт-процесс: ${smartProcessTitle}`
+    }
+  }
   return IMPORT_ENTITY_LABELS.get(normalizedEntityType) || normalizedEntityType || '—'
 }
 
@@ -1243,6 +1251,12 @@ function hasOwnImportRunField(importRun, fieldName) {
   return Boolean(importRun) && Object.prototype.hasOwnProperty.call(importRun, fieldName)
 }
 
+export function shouldWaitForImportExecutionSnapshot(snapshot) {
+  const status = String(snapshot?.status || '').trim().toLowerCase()
+
+  return ['draft', 'uploaded', 'validated', 'ready', 'running'].includes(status)
+}
+
 export function buildImportRunSummaryFromSessionSnapshot(snapshot) {
   const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
   const rawImportRun = summary?.import_run
@@ -1570,7 +1584,7 @@ export function buildSessionHistoryRows(sessions) {
       key: String(session?.id || ''),
       fileName: String(session?.original_filename || '').trim() || 'Без имени',
       status,
-      entityType: getImportEntityLabel(session?.entity_type),
+      entityType: getImportEntityLabel(session?.entity_type, session?.entity_config),
       statusLabel: statusLabels[status] || status || '—',
       resultLabel: resultMeta.resultLabel,
       resultTone: resultMeta.resultTone,

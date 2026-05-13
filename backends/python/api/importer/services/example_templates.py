@@ -1,4 +1,5 @@
 from io import BytesIO
+import re
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -36,8 +37,8 @@ EXAMPLE_TEMPLATE_DEFINITIONS = {
         "filename": "deal-import-example.xlsx",
         "rows": [
             ["Название сделки", "Сумма", "Валюта", "Стадия"],
-            ["Редизайн сайта", "150000", "RUB", "Новая"],
-            ["Подключение телефонии", "85000", "RUB", "В работе"],
+            ["Редизайн сайта", "150000", "Рубли", "Новая"],
+            ["Подключение телефонии", "85000", "Рубли", "В работе"],
         ],
     },
     "linked_company_contact": {
@@ -77,7 +78,7 @@ EXAMPLE_TEMPLATE_DEFINITIONS = {
         "sheet_name": "Задачи",
         "filename": "task-import-example.xlsx",
         "rows": [
-            ["Название задачи", "Внешний ID", "ID родительской задачи", "Ответственный (ID)", "Крайний срок"],
+            ["Название задачи", "Внешний код", "Родительская задача", "Ответственный", "Крайний срок"],
             ["Подготовить план запуска", "ЗАДАЧА-001", "5001", "59", "20.05.2026 18:00"],
             ["Согласовать смету", "ЗАДАЧА-002", "ЗАДАЧА-001", "73", "22.05.2026 12:00"],
         ],
@@ -95,10 +96,9 @@ EXAMPLE_TEMPLATE_DEFINITIONS = {
         "sheet_name": "Чек-лист",
         "filename": "task_checklist_item-import-example.xlsx",
         "rows": [
-            ["ID задачи", "Пункт чек-листа", "Выполнено"],
-            ["12345", "Согласовать смету", "Нет"],
-            ["12345", "Подтвердить запуск", "Нет"],
-            ["12345", "Отправить клиенту", "Да"],
+            ["Задача", "Пункт чек-листа", "Выполнено"],
+            ["ЗАДАЧА-001", "Согласовать смету", "Нет"],
+            ["ЗАДАЧА-001", "Подтвердить запуск", "Да"],
         ],
     },
     "task_attachment": {
@@ -177,9 +177,9 @@ EXAMPLE_TEMPLATE_DEFINITIONS = {
         "sheet_name": "Заметки",
         "filename": "crm_note-import-example.xlsx",
         "rows": [
-            ["Тип сущности CRM", "ID записи CRM", "Текст заметки"],
-            ["contact", "101", "Клиент заинтересован, ждёт коммерческое предложение"],
-            ["deal", "55", "Договор согласован, ожидаем подписания со стороны клиента"],
+            ["Тип сущности CRM", "ID записи CRM", "Текст заметки", "Дата создания"],
+            ["Контакт", "101", "Клиент заинтересован, ждёт коммерческое предложение", "17.05.2026 11:30"],
+            ["Сделка", "55", "Договор согласован, ожидаем подписания со стороны клиента", "18.05.2026 15:45"],
         ],
     },
 }
@@ -199,6 +199,95 @@ def build_example_template_filename(entity_type: str) -> str:
 
 def build_example_template_xlsx(entity_type: str) -> bytes:
     template_definition = get_example_template_definition(entity_type)
+    return build_xlsx_from_definition(template_definition)
+
+
+def build_smart_process_example_template_filename(entity_config: dict | None = None) -> str:
+    normalized_config = entity_config if isinstance(entity_config, dict) else {}
+    entity_type_id = int(normalized_config.get("entityTypeId") or 0)
+    if entity_type_id <= 0:
+        raise ValueError("entity_type_id is required for smart_process")
+    return f"smart-process-{entity_type_id}-import-example.xlsx"
+
+
+def build_smart_process_example_template_xlsx(entity_config: dict | None, fields: list[dict]) -> bytes:
+    normalized_config = entity_config if isinstance(entity_config, dict) else {}
+    entity_type_id = int(normalized_config.get("entityTypeId") or 0)
+    if entity_type_id <= 0:
+        raise ValueError("entity_type_id is required for smart_process")
+
+    process_title = str(normalized_config.get("title") or "").strip() or f"Smart Process {entity_type_id}"
+    selected_fields = select_smart_process_template_fields(fields)
+    rows = [
+        [str(field.get("title") or field.get("id") or "") for field in selected_fields],
+        [build_smart_process_example_value(field, process_title) for field in selected_fields],
+    ]
+    template_definition = {
+        "sheet_name": build_smart_process_sheet_name(process_title),
+        "filename": build_smart_process_example_template_filename(normalized_config),
+        "rows": rows,
+    }
+    return build_xlsx_from_definition(template_definition)
+
+
+def build_smart_process_sheet_name(process_title: str) -> str:
+    normalized_title = re.sub(r"[\\/*?:\\[\\]]+", " ", str(process_title or "")).strip()
+    return (normalized_title or "Смарт-процесс")[:31]
+
+
+def select_smart_process_template_fields(fields: list[dict]) -> list[dict]:
+    safe_fields = [field for field in (fields or []) if isinstance(field, dict)]
+    prioritized_ids = {"title", "categoryid", "stageid"}
+    selected_fields = []
+    selected_ids = set()
+
+    for field in safe_fields:
+        field_id = str(field.get("id") or "").strip().lower()
+        if field_id in prioritized_ids and field_id not in selected_ids:
+            selected_fields.append(field)
+            selected_ids.add(field_id)
+
+    for field in safe_fields:
+        field_id = str(field.get("id") or "").strip().lower()
+        if field.get("required") and field_id not in selected_ids:
+            selected_fields.append(field)
+            selected_ids.add(field_id)
+
+    if selected_fields:
+        return selected_fields
+
+    return safe_fields[:3]
+
+
+def build_smart_process_example_value(field: dict, process_title: str) -> str:
+    field_id = str(field.get("id") or "").strip().lower()
+    field_type = str(field.get("type") or "string").strip().lower()
+    field_items = field.get("items") if isinstance(field.get("items"), list) else []
+
+    if field_items:
+        first_item = field_items[0] if isinstance(field_items[0], dict) else {}
+        return str(first_item.get("title") or first_item.get("id") or "Значение")
+
+    if field_id == "title":
+        return process_title
+
+    if field_type in {"boolean", "bool"}:
+        return "Да"
+    if field_type in {"integer", "int"}:
+        return "1"
+    if field_type in {"double", "float", "money", "number"}:
+        return "1000"
+    if field_type == "date":
+        return "20.05.2026"
+    if field_type == "datetime":
+        return "20.05.2026 10:00"
+    if field_type in {"crm_status", "crm_category", "enumeration", "list"}:
+        return ""
+
+    return "Пример"
+
+
+def build_xlsx_from_definition(template_definition: dict) -> bytes:
     sheet_name = str(template_definition["sheet_name"])
     rows = template_definition["rows"]
 

@@ -234,6 +234,26 @@ class ImportValidationApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_crm_note_session(self, rows, *, filename="crm-note.xlsx"):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="crm_note",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets([("Notes", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def save_mapping(self, session):
         preview_response = self.client.get(
             reverse("importer:session-preview", kwargs={"session_id": session.id}),
@@ -286,6 +306,36 @@ class ImportValidationApiTest(TestCase):
                     "STAGE_ID": {
                         "source_header": "Stage",
                         "column": "B",
+                    },
+                }
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+    def save_crm_note_mapping(self, session):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "ENTITY_TYPE": {
+                        "source_header": "Тип сущности CRM",
+                        "column": "A",
+                    },
+                    "ENTITY_ID": {
+                        "source_header": "ID записи CRM",
+                        "column": "B",
+                    },
+                    "COMMENT": {
+                        "source_header": "Текст заметки",
+                        "column": "C",
                     },
                 }
             },
@@ -411,6 +461,32 @@ class ImportValidationApiTest(TestCase):
 
         session = self.create_uploaded_session_with_exact_stage_values()
         self.save_stage_mapping(session)
+
+        response = self.client.post(
+            reverse("importer:session-validate", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["checked_rows"], 2)
+        self.assertEqual(response.json()["item"]["valid_rows"], 2)
+        self.assertEqual(response.json()["item"]["invalid_rows"], 0)
+        self.assertEqual(response.json()["item"]["issue_count"], 0)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_validation_accepts_exact_crm_note_entity_type_titles_without_manual_value_mapping(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_crm_note_session(
+            [
+                ["Тип сущности CRM", "ID записи CRM", "Текст заметки"],
+                ["Контакт", "101", "Клиент заинтересован"],
+                ["Сделка", "55", "Договор согласован"],
+            ]
+        )
+        self.save_crm_note_mapping(session)
 
         response = self.client.post(
             reverse("importer:session-validate", kwargs={"session_id": session.id}),

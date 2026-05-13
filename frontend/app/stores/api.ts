@@ -88,6 +88,7 @@ export const useApiStore = defineStore(
       entity_type: string
       source_format: string
       original_filename: string
+      entity_config?: Record<string, any>
     }): Promise<{ item: Record<string, any> }> => {
       return await $api('/api/import-sessions', {
         method: 'POST',
@@ -95,6 +96,14 @@ export const useApiStore = defineStore(
           Authorization: `Bearer ${tokenJWT.value}`
         },
         body: JSON.stringify(data),
+      })
+    }
+
+    const getImportSmartProcesses = async (): Promise<{ items: Record<string, any>[] }> => {
+      return await $api('/api/import-smart-processes', {
+        headers: {
+          Authorization: `Bearer ${tokenJWT.value}`
+        }
       })
     }
 
@@ -157,10 +166,16 @@ export const useApiStore = defineStore(
       })
     }
 
-    const getImportTemplates = async (entityType: string): Promise<{ items: Record<string, any>[] }> => {
+    const getImportTemplates = async (
+      entityType: string,
+      entityConfig?: Record<string, any> | null,
+    ): Promise<{ items: Record<string, any>[] }> => {
       const searchParams = new URLSearchParams()
       if (entityType) {
         searchParams.set('entity_type', entityType)
+      }
+      if (entityType === 'smart_process' && entityConfig?.entityTypeId) {
+        searchParams.set('entity_type_id', String(entityConfig.entityTypeId))
       }
 
       return await $api(`/api/import-templates?${searchParams.toString()}`, {
@@ -362,10 +377,19 @@ export const useApiStore = defineStore(
       })
     }
 
-    const downloadImportExampleTemplateXlsx = async (entityType: string): Promise<{ blob: Blob, filename: string }> => {
+    const downloadImportExampleTemplateXlsx = async (
+      entityType: string,
+      entityConfig?: Record<string, any> | null,
+    ): Promise<{ blob: Blob, filename: string }> => {
       const searchParams = new URLSearchParams()
       if (entityType) {
         searchParams.set('entity_type', entityType)
+      }
+      if (entityType === 'smart_process' && entityConfig?.entityTypeId) {
+        searchParams.set('entity_type_id', String(entityConfig.entityTypeId))
+      }
+      if (entityType === 'smart_process' && entityConfig?.title) {
+        searchParams.set('entity_title', String(entityConfig.title))
       }
 
       const response = await fetch(`${apiUrl}/api/import-example-template.xlsx?${searchParams.toString()}`, {
@@ -443,6 +467,7 @@ export const useApiStore = defineStore(
       postInstall,
       telemetryTest,
       createImportSession,
+      getImportSmartProcesses,
       listImportSessions,
       getImportSession,
       uploadImportFile,

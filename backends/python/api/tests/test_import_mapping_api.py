@@ -236,6 +236,26 @@ class ImportMappingApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_crm_note_session(self, rows, *, filename="crm-note.xlsx"):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="crm_note",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets([("Notes", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def create_uploaded_session_with_many_stage_values(self):
         rows = [["Lead title", "Stage"]]
         rows.extend([[f"Lead {index}", f"Stage {index}"] for index in range(1, 12)])
@@ -524,6 +544,55 @@ class ImportMappingApiTest(TestCase):
         })
         self.assertEqual(mapping_response.json()["item"]["unmapped_values"], {
             "STAGE_ID": ["Paused"],
+        })
+        self.assertEqual(mapping_response.json()["item"]["unmapped_value_count"], 1)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_treats_exact_crm_note_entity_types_as_already_resolved(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_crm_note_session(
+            [
+                ["Тип сущности CRM", "ID записи CRM", "Текст заметки"],
+                ["Контакт", "101", "Клиент заинтересован"],
+                ["Сделка", "55", "Договор согласован"],
+                ["Партнер", "77", "Неизвестный тип"],
+            ]
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "ENTITY_TYPE": {
+                        "source_header": "Тип сущности CRM",
+                        "column": "A",
+                    },
+                    "ENTITY_ID": {
+                        "source_header": "ID записи CRM",
+                        "column": "B",
+                    },
+                    "COMMENT": {
+                        "source_header": "Текст заметки",
+                        "column": "C",
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(mapping_response.status_code, 200)
+        self.assertEqual(mapping_response.json()["item"]["observed_values"], {
+            "ENTITY_TYPE": ["Контакт", "Сделка", "Партнер"],
+        })
+        self.assertEqual(mapping_response.json()["item"]["unmapped_values"], {
+            "ENTITY_TYPE": ["Партнер"],
         })
         self.assertEqual(mapping_response.json()["item"]["unmapped_value_count"], 1)
 

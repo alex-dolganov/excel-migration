@@ -8,6 +8,7 @@ class EntityType(models.TextChoices):
     CONTACT = "contact", "Contact"
     COMPANY = "company", "Company"
     DEAL = "deal", "Deal"
+    SMART_PROCESS = "smart_process", "Smart process"
     LINKED_COMPANY_CONTACT = "linked_company_contact", "Linked company + contact"
     TASK = "task", "Task"
     TASK_COMMENT = "task_comment", "Task comment"
@@ -80,6 +81,8 @@ class ImportTemplate(models.Model):
     portal_member_id = models.CharField(max_length=255, db_index=True)
     portal_domain = models.CharField(max_length=255)
     entity_type = models.CharField(max_length=32, choices=EntityType.choices)
+    entity_scope_key = models.CharField(max_length=128, default="", blank=True)
+    entity_config = models.JSONField(default=dict, blank=True)
     name = models.CharField(max_length=255)
     mapping_schema = models.JSONField(default=dict)
     column_settings = models.JSONField(default=dict, blank=True)
@@ -93,8 +96,8 @@ class ImportTemplate(models.Model):
         ordering = ["name"]
         constraints = [
             models.UniqueConstraint(
-                fields=["portal_member_id", "entity_type", "name"],
-                name="uniq_import_template_per_portal_entity_name",
+                fields=["portal_member_id", "entity_type", "entity_scope_key", "name"],
+                name="uniq_import_template_per_portal_scope_name",
             ),
         ]
 

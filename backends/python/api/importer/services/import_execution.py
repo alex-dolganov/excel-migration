@@ -18,6 +18,7 @@ from .validation import (
 from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, download_attachment_source
 from .task_resolution import BitrixTaskResolver, is_task_reference_field
 from .user_resolution import BitrixUserResolver, is_task_user_reference_field
+from .b24_fields import SMART_PROCESS_ENTITY_TYPE, normalize_smart_process_entity_config
 
 
 TASK_CHILD_API_METHODS = {
@@ -507,6 +508,8 @@ def normalize_linked_dedup_settings(dedup_settings) -> dict:
 def normalize_entity_dedup_settings(entity_type: str, dedup_settings):
     if is_linked_import_entity_type(entity_type):
         return normalize_linked_dedup_settings(dedup_settings)
+    if str(entity_type or "").strip() == SMART_PROCESS_ENTITY_TYPE:
+        return normalize_dedup_settings({})
     return normalize_dedup_settings(dedup_settings)
 
 
@@ -1239,6 +1242,24 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
         )
         return normalize_record_id(unwrap_bitrix_result(response))
 
+    if entity_type == SMART_PROCESS_ENTITY_TYPE:
+        smart_process_config = normalize_smart_process_entity_config((context or {}).get("entity_config"))
+        response = BitrixAPIRequest(
+            bitrix_token=account,
+            api_method="crm.item.add",
+            params={
+                "entityTypeId": smart_process_config["entityTypeId"],
+                "fields": dict(fields),
+            },
+        )
+        result = unwrap_bitrix_result(response)
+        if isinstance(result, dict):
+            item = result.get("item")
+            if isinstance(item, dict):
+                return normalize_record_id(item.get("id") or item.get("ID"))
+            return normalize_record_id(result.get("id") or result.get("ID") or result.get("result"))
+        return normalize_record_id(result)
+
     if entity_type == "user":
         return _create_user(account, fields)
 
@@ -1747,6 +1768,7 @@ def execute_import(
     default_field_values: dict | None = None,
     per_row_decisions: dict | None = None,
     progress_callback=None,
+    entity_config: dict | None = None,
 ) -> dict:
     if is_linked_import_entity_type(entity_type):
         return execute_linked_import(
@@ -1767,7 +1789,13 @@ def execute_import(
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
     normalized_dedup_settings = normalize_dedup_settings(dedup_settings)
     user_resolver = BitrixUserResolver(account)
-    import_context = {"checklist_group_cache": {}} if entity_type == "task_checklist_item" else None
+    import_context = {}
+    if entity_type == "task_checklist_item":
+        import_context["checklist_group_cache"] = {}
+    if entity_type == SMART_PROCESS_ENTITY_TYPE and isinstance(entity_config, dict):
+        import_context["entity_config"] = dict(entity_config)
+    if not import_context:
+        import_context = None
     checked_rows = 0
     created_rows = 0
     updated_rows = 0

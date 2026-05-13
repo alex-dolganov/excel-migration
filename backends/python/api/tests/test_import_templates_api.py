@@ -160,6 +160,36 @@ class ImportTemplatesApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_smart_process_session(self, *, rows=None, entity_type_id=128, title="Согласования"):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.SMART_PROCESS,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="smart-process.xlsx",
+            import_settings={
+                "entity_config": {
+                    "entityTypeId": entity_type_id,
+                    "title": title,
+                }
+            },
+        )
+        session.stored_file.save(
+            "smart-process.xlsx",
+            SimpleUploadedFile(
+                "smart-process.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        ("Items", rows or [["Название", "Стадия"], ["Согласование договора", "Новая"]]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def prepare_session_mapping(self, session):
         preview_response = self.client.get(
             reverse("importer:session-preview", kwargs={"session_id": session.id}),
@@ -298,6 +328,7 @@ class ImportTemplatesApiTest(TestCase):
         self.assertEqual(response.json()["item"]["dedup_settings"], {
             "strategy": "update",
             "fields": ["PHONE"],
+            "condition": "any",
         })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
@@ -349,6 +380,7 @@ class ImportTemplatesApiTest(TestCase):
         self.assertEqual(response.json()["item"]["dedup_settings"], {
             "strategy": "skip",
             "fields": ["TITLE"],
+            "condition": "any",
         })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
@@ -421,6 +453,7 @@ class ImportTemplatesApiTest(TestCase):
             dedup_settings={
                 "strategy": "update",
                 "fields": ["PHONE"],
+                "condition": "any",
             },
         )
 
@@ -468,7 +501,11 @@ class ImportTemplatesApiTest(TestCase):
         self.assertEqual(session.header_row, 1)
         self.assertEqual(session.data_start_row, 2)
         self.assertEqual(session.import_settings["mapping"], template.mapping_schema)
-        self.assertEqual(session.import_settings["dedup"], template.dedup_settings)
+        self.assertEqual(session.import_settings["dedup"], {
+            "strategy": "update",
+            "fields": ["PHONE"],
+            "condition": "any",
+        })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_apply_template_restores_stage_value_mapping_for_new_session(self, get_from_jwt_token):
@@ -503,6 +540,7 @@ class ImportTemplatesApiTest(TestCase):
             dedup_settings={
                 "strategy": "create",
                 "fields": [],
+                "condition": "any",
             },
         )
 
@@ -543,3 +581,132 @@ class ImportTemplatesApiTest(TestCase):
             "STAGE_ID": ["Paused"],
         })
         self.assertEqual(mapping_response.json()["item"]["unmapped_value_count"], 1)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_create_template_for_smart_process_persists_entity_scope_and_lists_only_matching_process(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_smart_process_session(entity_type_id=128, title="Согласования")
+        session.preview_data = {
+            "sheet_names": ["Items"],
+            "selected_sheet_name": "Items",
+            "columns": ["A", "B"],
+            "preview_rows": [["Название", "Стадия"], ["Согласование договора", "Новая"]],
+            "header_row": 1,
+            "data_start_row": 2,
+            "headers": ["Название", "Стадия"],
+        }
+        session.import_settings = {
+            **session.import_settings,
+            "mapping": {
+                "title": {
+                    "source_header": "Название",
+                    "column": "A",
+                    "target_field": "title",
+                },
+                "stageId": {
+                    "source_header": "Стадия",
+                    "column": "B",
+                    "target_field": "stageId",
+                },
+            },
+            "dedup": {
+                "strategy": "create",
+                "fields": [],
+                "condition": "any",
+            },
+        }
+        session.source_sheet_name = "Items"
+        session.save(update_fields=["preview_data", "import_settings", "source_sheet_name", "updated_at"])
+
+        response = self.client.post(
+            reverse("importer:templates"),
+            data={
+                "session_id": str(session.id),
+                "name": "Согласования базовый",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["item"]["entity_config"], {
+            "entityTypeId": 128,
+            "title": "Согласования",
+        })
+
+        template = ImportTemplate.objects.get(id=response.json()["item"]["id"])
+        self.assertEqual(template.entity_scope_key, "smart_process:128")
+        self.assertEqual(template.entity_config, {
+            "entityTypeId": 128,
+            "title": "Согласования",
+        })
+
+        ImportTemplate.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            entity_type=ImportTemplate.EntityType.SMART_PROCESS,
+            entity_scope_key="smart_process:144",
+            entity_config={"entityTypeId": 144, "title": "Закупки"},
+            name="Закупки базовый",
+            mapping_schema={"title": {"target_field": "title"}},
+        )
+
+        list_response = self.client.get(
+            f"{reverse('importer:templates')}?entity_type=smart_process&entity_type_id=128",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(
+            [(item["name"], item["entity_config"]) for item in list_response.json()["items"]],
+            [("Согласования базовый", {"entityTypeId": 128, "title": "Согласования"})],
+        )
+
+    @patch("importer.views.fetch_session_entity_fields")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_apply_template_rejects_smart_process_template_from_another_process(self, get_from_jwt_token, fetch_session_entity_fields):
+        get_from_jwt_token.return_value = self.create_account()
+        fetch_session_entity_fields.return_value = [
+            {"id": "title", "title": "Название", "type": "string", "required": True, "multiple": False, "items": []},
+            {"id": "stageId", "title": "Стадия", "type": "crm_status", "required": False, "multiple": False, "items": []},
+        ]
+
+        session = self.create_uploaded_smart_process_session(entity_type_id=128, title="Согласования")
+
+        foreign_template = ImportTemplate.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            entity_type=ImportTemplate.EntityType.SMART_PROCESS,
+            entity_scope_key="smart_process:144",
+            entity_config={"entityTypeId": 144, "title": "Закупки"},
+            name="Чужой шаблон",
+            mapping_schema={
+                "title": {
+                    "source_header": "Название",
+                    "column": "A",
+                    "target_field": "title",
+                },
+            },
+            column_settings={
+                "sheet_name": "Items",
+                "header_row": 1,
+                "data_start_row": 2,
+            },
+            dedup_settings={
+                "strategy": "create",
+                "fields": [],
+                "condition": "any",
+            },
+        )
+
+        response = self.client.post(
+            reverse("importer:session-apply-template", kwargs={"session_id": session.id}),
+            data={
+                "template_id": str(foreign_template.id),
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["error"], "Import template not found")

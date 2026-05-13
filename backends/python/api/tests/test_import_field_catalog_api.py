@@ -340,6 +340,40 @@ class ImportFieldCatalogApiTest(TestCase):
         self.assertFalse(communications_field["required"])
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_static_crm_note_fields_catalog(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "crm_note"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["entity_type"], "crm_note")
+
+        items = response.json()["items"]
+        entity_type_field = next(item for item in items if item["id"] == "ENTITY_TYPE")
+        created_time_field = next(item for item in items if item["id"] == "CREATED_TIME")
+
+        self.assertEqual(
+            entity_type_field["items"],
+            [
+                {"id": "lead", "title": "Лид"},
+                {"id": "contact", "title": "Контакт"},
+                {"id": "company", "title": "Компания"},
+                {"id": "deal", "title": "Сделка"},
+            ],
+        )
+        self.assertEqual(created_time_field["title"], "Дата создания")
+        self.assertEqual(created_time_field["type"], "datetime")
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_returns_static_task_comment_fields_catalog(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(
             member_id="member-1",
@@ -630,4 +664,324 @@ class ImportFieldCatalogApiTest(TestCase):
                 "linked_entity": "contact",
                 "linked_source_id": "EMAIL",
             },
+        )
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_smart_process_fields_catalog_for_selected_entity_type_id(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+        bitrix_api_request.side_effect = [
+            SimpleNamespace(
+                result={
+                    "id": {
+                        "title": "ID",
+                        "type": "integer",
+                        "isRequired": False,
+                        "isReadOnly": True,
+                    },
+                    "title": {
+                        "title": "Название",
+                        "type": "string",
+                        "isRequired": True,
+                        "isReadOnly": False,
+                        "upperName": "TITLE",
+                    },
+                    "stageId": {
+                        "title": "Стадия",
+                        "type": "crm_status",
+                        "isRequired": False,
+                        "isReadOnly": False,
+                        "upperName": "STAGE_ID",
+                    },
+                    "ufCrmSmartFlag": {
+                        "title": "Кастомный флаг",
+                        "type": "boolean",
+                        "isRequired": False,
+                        "isReadOnly": False,
+                        "upperName": "UF_CRM_SMART_FLAG",
+                    },
+                }
+            ),
+            SimpleNamespace(result=[]),
+        ]
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "smart_process", "entity_type_id": "128"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["entity_type"], "smart_process")
+        self.assertEqual(response.json()["entity_config"], {"entityTypeId": 128})
+        self.assertEqual(
+            response.json()["items"],
+            [
+                {
+                    "id": "title",
+                    "title": "Название",
+                    "type": "string",
+                    "required": True,
+                    "multiple": False,
+                    "is_custom": False,
+                    "items": [],
+                },
+                {
+                    "id": "stageId",
+                    "title": "Стадия",
+                    "type": "crm_status",
+                    "required": False,
+                    "multiple": False,
+                    "is_custom": False,
+                    "items": [],
+                },
+                {
+                    "id": "ufCrmSmartFlag",
+                    "title": "Кастомный флаг",
+                    "type": "boolean",
+                    "required": False,
+                    "multiple": False,
+                    "is_custom": True,
+                    "items": [],
+                },
+            ],
+        )
+        self.assertEqual(
+            [call.kwargs for call in bitrix_api_request.call_args_list],
+            [
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.item.fields",
+                    "params": {"entityTypeId": 128},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.status.list",
+                    "params": {"filter": {"ENTITY_ID": "DYNAMIC_128_STAGE"}},
+                },
+            ],
+        )
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_smart_process_stage_and_category_items(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+        bitrix_api_request.side_effect = [
+            SimpleNamespace(
+                result={
+                    "title": {
+                        "title": "Название",
+                        "type": "string",
+                        "isRequired": True,
+                        "isReadOnly": False,
+                        "upperName": "TITLE",
+                    },
+                    "categoryId": {
+                        "title": "Воронка",
+                        "type": "crm_category",
+                        "isRequired": False,
+                        "isReadOnly": False,
+                        "upperName": "CATEGORY_ID",
+                    },
+                    "stageId": {
+                        "title": "Стадия",
+                        "type": "crm_status",
+                        "isRequired": False,
+                        "isReadOnly": False,
+                        "upperName": "STAGE_ID",
+                    },
+                }
+            ),
+            SimpleNamespace(
+                result={
+                    "categories": [
+                        {"id": 0, "name": "Основная"},
+                        {"id": 7, "name": "Повторные продажи"},
+                    ]
+                }
+            ),
+            SimpleNamespace(
+                result=[
+                    {
+                        "ENTITY_ID": "DYNAMIC_128_STAGE_0",
+                        "STATUS_ID": "DT128_0:NEW",
+                        "NAME": "Новая",
+                    },
+                ]
+            ),
+            SimpleNamespace(
+                result=[
+                    {
+                        "ENTITY_ID": "DYNAMIC_128_STAGE_7",
+                        "STATUS_ID": "DT128_7:PREPARE",
+                        "NAME": "Подготовка",
+                    },
+                ]
+            ),
+        ]
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "smart_process", "entity_type_id": "128"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+        self.assertEqual(
+            items_by_id["categoryId"]["items"],
+            [
+                {"id": "0", "title": "Основная"},
+                {"id": "7", "title": "Повторные продажи"},
+            ],
+        )
+        self.assertEqual(
+            items_by_id["stageId"]["items"],
+            [
+                {"id": "DT128_0:NEW", "title": "Новая"},
+                {"id": "DT128_7:PREPARE", "title": "Подготовка"},
+            ],
+        )
+        self.assertEqual(
+            [call.kwargs for call in bitrix_api_request.call_args_list],
+            [
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.item.fields",
+                    "params": {"entityTypeId": 128},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.category.list",
+                    "params": {"entityTypeId": 128},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.status.list",
+                    "params": {"filter": {"ENTITY_ID": "DYNAMIC_128_STAGE_0"}},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.status.list",
+                    "params": {"filter": {"ENTITY_ID": "DYNAMIC_128_STAGE_7"}},
+                },
+            ],
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_smart_process_fields_require_entity_type_id(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "smart_process"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "entity_type_id is required for smart_process")
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_smart_process_fields_catalog_when_bitrix_wraps_fields_key(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+        bitrix_api_request.side_effect = [
+            SimpleNamespace(
+                result={
+                    "fields": {
+                        "id": {
+                            "title": "ID",
+                            "type": "integer",
+                            "isRequired": False,
+                            "isReadOnly": True,
+                        },
+                        "title": {
+                            "title": "Название",
+                            "type": "string",
+                            "isRequired": True,
+                            "isReadOnly": False,
+                            "upperName": "TITLE",
+                        },
+                        "stageId": {
+                            "title": "Стадия",
+                            "type": "crm_status",
+                            "isRequired": True,
+                            "isReadOnly": False,
+                            "upperName": "STAGE_ID",
+                        },
+                    }
+                }
+            ),
+            SimpleNamespace(
+                result={
+                    "categories": []
+                }
+            ),
+            SimpleNamespace(
+                result={
+                    "statuses": [
+                        {
+                            "ENTITY_ID": "DYNAMIC_128_STAGE_0",
+                            "STATUS_ID": "DT128_0:NEW",
+                            "NAME": "Новая",
+                        },
+                    ]
+                }
+            ),
+        ]
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "smart_process", "entity_type_id": "128"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(
+            response.json()["items"],
+            [
+                {
+                    "id": "title",
+                    "title": "Название",
+                    "type": "string",
+                    "required": True,
+                    "multiple": False,
+                    "is_custom": False,
+                    "items": [],
+                },
+                {
+                    "id": "stageId",
+                    "title": "Стадия",
+                    "type": "crm_status",
+                    "required": True,
+                    "multiple": False,
+                    "is_custom": False,
+                    "items": [
+                        {"id": "DT128_0:NEW", "title": "Новая"},
+                    ],
+                },
+            ],
         )

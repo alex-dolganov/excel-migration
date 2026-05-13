@@ -174,3 +174,207 @@ class ImportExampleTemplatesApiTest(TestCase):
             "+79991234567",
         ]:
             self.assertIn(value, sheet_xml)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_operator_can_download_example_template_for_crm_note_with_russian_entity_values(self, get_from_jwt_token):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        get_from_jwt_token.return_value = self.create_account(is_admin=False)
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=crm_note",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("crm_note-import-example.xlsx", response["Content-Disposition"])
+
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        for value in [
+            "Тип сущности CRM",
+            "Текст заметки",
+            "Дата создания",
+            "Контакт",
+            "Сделка",
+            "17.05.2026 11:30",
+        ]:
+            self.assertIn(value, sheet_xml)
+        for value in [
+            "contact",
+            "deal",
+        ]:
+            self.assertNotIn(value, sheet_xml)
+
+    @patch("importer.views.fetch_entity_fields")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_operator_can_download_dynamic_example_template_for_smart_process(self, get_from_jwt_token, fetch_entity_fields):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        account = self.create_account(is_admin=False)
+        get_from_jwt_token.return_value = account
+        fetch_entity_fields.return_value = [
+            {
+                "id": "title",
+                "title": "Название",
+                "type": "string",
+                "required": True,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+            {
+                "id": "categoryId",
+                "title": "Воронка",
+                "type": "crm_category",
+                "required": True,
+                "multiple": False,
+                "is_custom": False,
+                "items": [
+                    {"id": "0", "title": "Основная"},
+                    {"id": "7", "title": "Повторные продажи"},
+                ],
+            },
+            {
+                "id": "stageId",
+                "title": "Стадия",
+                "type": "crm_status",
+                "required": True,
+                "multiple": False,
+                "is_custom": False,
+                "items": [
+                    {"id": "DT128_0:NEW", "title": "Новая"},
+                    {"id": "DT128_7:PREPARE", "title": "Подготовка"},
+                ],
+            },
+            {
+                "id": "ufCrmAmount",
+                "title": "Сумма",
+                "type": "double",
+                "required": False,
+                "multiple": False,
+                "is_custom": True,
+                "items": [],
+            },
+        ]
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=smart_process&entity_type_id=128&entity_title=%D0%A1%D0%BE%D0%B3%D0%BB%D0%B0%D1%81%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("smart-process-128-import-example.xlsx", response["Content-Disposition"])
+
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        self.assertEqual(sheet_xml.count("<row r="), 2)
+        for value in [
+            "Название",
+            "Воронка",
+            "Стадия",
+            "Согласования",
+            "Основная",
+            "Новая",
+        ]:
+            self.assertIn(value, sheet_xml)
+        self.assertNotIn("Сумма", sheet_xml)
+
+        fetch_entity_fields.assert_called_once_with(
+            account,
+            "smart_process",
+            entity_config={
+                "entityTypeId": 128,
+                "title": "Согласования",
+            },
+        )
+
+    @patch("importer.views.fetch_entity_fields")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_smart_process_template_keeps_title_and_stage_when_only_boolean_is_required(self, get_from_jwt_token, fetch_entity_fields):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        account = self.create_account(is_admin=False)
+        get_from_jwt_token.return_value = account
+        fetch_entity_fields.return_value = [
+            {
+                "id": "title",
+                "title": "Название",
+                "type": "string",
+                "required": False,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+            {
+                "id": "stageId",
+                "title": "Стадия",
+                "type": "crm_status",
+                "required": False,
+                "multiple": False,
+                "is_custom": False,
+                "items": [
+                    {"id": "DT128_0:NEW", "title": "Новая"},
+                ],
+            },
+            {
+                "id": "availableForAll",
+                "title": "Доступно для всех",
+                "type": "boolean",
+                "required": True,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+        ]
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=smart_process&entity_type_id=128&entity_title=%D0%A1%D0%BE%D0%B3%D0%BB%D0%B0%D1%81%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        for value in [
+            "Название",
+            "Стадия",
+            "Доступно для всех",
+            "Согласования",
+            "Новая",
+            "Да",
+        ]:
+            self.assertIn(value, sheet_xml)
+
+    @patch("importer.views.fetch_entity_fields")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_smart_process_template_does_not_use_placeholder_for_stage_without_items(self, get_from_jwt_token, fetch_entity_fields):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        account = self.create_account(is_admin=False)
+        get_from_jwt_token.return_value = account
+        fetch_entity_fields.return_value = [
+            {
+                "id": "title",
+                "title": "Название",
+                "type": "string",
+                "required": True,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+            {
+                "id": "stageId",
+                "title": "Стадия",
+                "type": "crm_status",
+                "required": True,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+        ]
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=smart_process&entity_type_id=128&entity_title=%D0%A1%D0%BE%D0%B3%D0%BB%D0%B0%D1%81%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        self.assertIn("Название", sheet_xml)
+        self.assertIn("Стадия", sheet_xml)
+        self.assertIn("Согласования", sheet_xml)
+        self.assertNotIn("Пример", sheet_xml)

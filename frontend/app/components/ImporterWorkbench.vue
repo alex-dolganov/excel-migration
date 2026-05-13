@@ -17,6 +17,7 @@ import {
   buildLinkedImportRunSummary,
   buildImportRunStatusFilters,
   buildImportRunRetryState,
+  shouldWaitForImportExecutionSnapshot,
   buildMappingFieldItems,
   buildMappingPayload,
   buildMappingRows,
@@ -54,6 +55,7 @@ type MappingRow = {
   targetFieldIsMultiple?: boolean
   targetFieldGuidanceHints?: string[]
   valueMapping?: Record<string, string>
+  columnType?: string
 }
 
 type ValueMappingRow = {
@@ -190,6 +192,7 @@ const isTaskEntityImport = computed(() => entityType.value === 'task')
 const DEDUP_NONAPPLICABLE_TYPES = new Set([
   'task', 'task_comment', 'task_checklist_item', 'task_attachment',
   'crm_files_lead', 'crm_files_contact', 'crm_files_company', 'crm_files_deal',
+  'crm_activity', 'crm_note', 'smart_process',
 ])
 const isDedupApplicable = computed(() => !DEDUP_NONAPPLICABLE_TYPES.has(entityType.value))
 const exampleTemplateDownloadMeta = computed(() => buildExampleTemplateDownloadMeta(entityType.value))
@@ -200,9 +203,34 @@ const selectedTaskEntityType = ref('')
 const selectedLinkedEntityType = ref('')
 const selectedHrEntityType = ref('')
 const selectedFileAttachEntityType = ref('')
+const smartProcesses = ref<Record<string, any>[]>([])
+const loadingSmartProcesses = ref(false)
+const selectedSmartProcessId = ref('')
 const departments = ref<{ id: string, name: string, parent_id: string | null }[]>([])
 const loadingDepartments = ref(false)
 const departmentsExpanded = ref(false)
+const smartProcessOptions = computed(() => (
+  smartProcesses.value.map((item) => ({
+    value: String(item?.entityTypeId || ''),
+    label: String(item?.title || `Smart Process ${String(item?.entityTypeId || '')}`),
+  }))
+))
+const selectedSmartProcessConfig = computed(() => {
+  if (entityType.value !== 'smart_process') {
+    return null
+  }
+
+  const normalizedId = Number.parseInt(String(selectedSmartProcessId.value || '').trim(), 10)
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    return null
+  }
+
+  const matched = smartProcesses.value.find((item) => Number(item?.entityTypeId || 0) === normalizedId)
+  return {
+    entityTypeId: normalizedId,
+    ...(matched?.title ? { title: String(matched.title) } : {}),
+  }
+})
 const fieldOptions = computed(() => Array.isArray(mappingData.value?.fields) ? mappingData.value.fields : [])
 const fieldOptionsIndex = computed(() => new Map(
   fieldOptions.value
@@ -258,6 +286,7 @@ const importRunRetryState = computed(() => buildImportRunRetryState(importRunDat
 const canStart = computed(() => (
   importerPermissionState.value.canCreateSessions
   && Boolean(entityType.value)
+  && (entityType.value !== 'smart_process' || Boolean(selectedSmartProcessConfig.value?.entityTypeId))
   && Boolean(selectedFile.value)
   && Boolean(sourceFormat.value)
   && !busyAction.value
@@ -265,6 +294,7 @@ const canStart = computed(() => (
 const canDownloadExampleTemplate = computed(() => (
   importerPermissionState.value.canCreateSessions
   && Boolean(entityType.value)
+  && (entityType.value !== 'smart_process' || Boolean(selectedSmartProcessConfig.value?.entityTypeId))
   && !busyAction.value
 ))
 const canApplyStructure = computed(() => (
@@ -614,21 +644,26 @@ const dedupStrategyItems = [
   { value: 'ask', label: 'Спросить по каждому дублю' },
 ]
 const dedupFieldOptions = computed(() => {
-  const labels: Record<string, string> = {
+  const wellKnownLabels: Record<string, string> = {
+    ID: 'Bitrix24 ID',
     EMAIL: 'Email',
     PHONE: 'Телефон',
     TITLE: 'Название / заголовок',
+    NAME: 'Имя',
+    LAST_NAME: 'Фамилия',
+    COMPANY_TITLE: 'Название компании',
   }
-  const supportedFields = new Set(['EMAIL', 'PHONE', 'TITLE'])
+  const fieldPattern = /^[A-Z][A-Z0-9_]*$/
   const selectedFields = new Set(
     mappingRows.value
       .map((row) => normalizeMappingSelectValue(row.targetFieldId))
-      .filter((fieldId) => supportedFields.has(fieldId)),
+      .filter((fieldId) => fieldId && fieldPattern.test(fieldId)),
   )
 
   return Array.from(selectedFields).map((fieldId) => ({
     id: fieldId,
-    label: labels[fieldId] || fieldId,
+    label: wellKnownLabels[fieldId] || fieldId,
+    hint: fieldId === 'ID' ? 'Прямой поиск по ID записи Bitrix24' : undefined,
   }))
 })
 const previewTableRows = computed(() => {
@@ -704,6 +739,7 @@ const valueMappingRows = computed<ValueMappingRow[]>(() => buildValueMappingRows
   savedMapping: mappingData.value?.saved_mapping,
 }))
 const valueMappingStatus = computed(() => buildValueMappingStatus(valueMappingRows.value))
+const valueMappingExpanded = ref(false)
 const validationIssueRows = computed<ValidationIssueRow[]>(() => buildValidationIssueRows(validationData.value))
 const dryRunRows = computed<DryRunRow[]>(() => buildDryRunRows(dryRunData.value))
 const importRunRows = computed<ImportRunRow[]>(() => buildImportRunRows(importRunData.value))
@@ -1040,6 +1076,9 @@ watch(entityType, (value) => {
     selectedTaskEntityType.value = ''
     selectedLinkedEntityType.value = ''
     selectedHrEntityType.value = ''
+    if (normalizedValue !== 'smart_process') {
+      selectedSmartProcessId.value = ''
+    }
   }
 
   if (taskScenarioItems.value.some((item) => item.value === normalizedValue)) {
@@ -1047,6 +1086,7 @@ watch(entityType, (value) => {
     selectedCrmEntityType.value = ''
     selectedLinkedEntityType.value = ''
     selectedHrEntityType.value = ''
+    selectedSmartProcessId.value = ''
   }
 
   if (linkedScenarioItems.value.some((item) => item.value === normalizedValue)) {
@@ -1054,6 +1094,7 @@ watch(entityType, (value) => {
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
     selectedHrEntityType.value = ''
+    selectedSmartProcessId.value = ''
   }
 
   if (hrScenarioItems.value.some((item) => item.value === normalizedValue)) {
@@ -1061,8 +1102,22 @@ watch(entityType, (value) => {
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
     selectedLinkedEntityType.value = ''
+    selectedSmartProcessId.value = ''
   }
 }, { immediate: true })
+
+watch(selectedCrmEntityType, async (value) => {
+  if (String(value || '').trim() !== 'smart_process') {
+    selectedSmartProcessId.value = ''
+    return
+  }
+
+  if (smartProcesses.value.length > 0 || loadingSmartProcesses.value) {
+    return
+  }
+
+  await loadSmartProcesses()
+})
 
 watch(dedupFieldOptions, (options) => {
   const allowed = new Set(options.map((option) => option.id))
@@ -1097,6 +1152,7 @@ function selectFamily(family: string) {
   selectedLinkedEntityType.value = ''
   selectedHrEntityType.value = ''
   selectedFileAttachEntityType.value = ''
+  selectedSmartProcessId.value = ''
   entityType.value = ''
   departmentsExpanded.value = false
   resetMessages()
@@ -1109,6 +1165,7 @@ function goBackToFamilySelection() {
   selectedLinkedEntityType.value = ''
   selectedHrEntityType.value = ''
   selectedFileAttachEntityType.value = ''
+  selectedSmartProcessId.value = ''
   entityType.value = ''
   departmentsExpanded.value = false
   resetMessages()
@@ -1132,6 +1189,18 @@ async function toggleDepartments() {
   }
 }
 
+async function loadSmartProcesses() {
+  loadingSmartProcesses.value = true
+  try {
+    const response = await apiStore.getImportSmartProcesses()
+    smartProcesses.value = Array.isArray(response.items) ? response.items : []
+  } catch {
+    smartProcesses.value = []
+  } finally {
+    loadingSmartProcesses.value = false
+  }
+}
+
 function updateScenarioEntityType(family: 'crm' | 'task' | 'linked' | 'hr', value: string) {
   const normalizedValue = String(value || '').trim()
   if (!normalizedValue) {
@@ -1144,24 +1213,30 @@ function updateScenarioEntityType(family: 'crm' | 'task' | 'linked' | 'hr', valu
     selectedLinkedEntityType.value = ''
     selectedHrEntityType.value = ''
     selectedFileAttachEntityType.value = ''
+    if (normalizedValue !== 'smart_process') {
+      selectedSmartProcessId.value = ''
+    }
   } else if (family === 'task') {
     selectedTaskEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
     selectedLinkedEntityType.value = ''
     selectedHrEntityType.value = ''
     selectedFileAttachEntityType.value = ''
+    selectedSmartProcessId.value = ''
   } else if (family === 'linked') {
     selectedLinkedEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
     selectedHrEntityType.value = ''
     selectedFileAttachEntityType.value = ''
+    selectedSmartProcessId.value = ''
   } else {
     selectedHrEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
     selectedLinkedEntityType.value = ''
     selectedFileAttachEntityType.value = ''
+    selectedSmartProcessId.value = ''
   }
 
   selectedFamily.value = family === 'linked' ? 'crm' : family
@@ -1178,6 +1253,7 @@ function updateFileAttachEntityType(value: string) {
   selectedLinkedEntityType.value = ''
   selectedHrEntityType.value = ''
   selectedTaskEntityType.value = ''
+  selectedSmartProcessId.value = ''
   selectedFamily.value = 'crm'
   entityType.value = normalizedValue
   resetMessages()
@@ -1198,7 +1274,7 @@ async function refreshMapping() {
 }
 
 async function refreshTemplates() {
-  const response = await apiStore.getImportTemplates(entityType.value)
+  const response = await apiStore.getImportTemplates(entityType.value, selectedSmartProcessConfig.value)
   importTemplates.value = (Array.isArray(response.items) ? response.items : []).map((item: Record<string, any>) => ({
     id: String(item.id || ''),
     name: String(item.name || ''),
@@ -1238,6 +1314,11 @@ async function startImporterSetup() {
     return
   }
 
+  if (entityType.value === 'smart_process' && !selectedSmartProcessConfig.value?.entityTypeId) {
+    setError('Сначала выберите конкретный смарт-процесс.')
+    return
+  }
+
   if (!sourceFormat.value) {
     setError('Можно загрузить только файлы .xlsx, .xls или .csv.')
     return
@@ -1252,6 +1333,7 @@ async function startImporterSetup() {
       entity_type: entityType.value,
       source_format: sourceFormat.value,
       original_filename: selectedFile.value.name,
+      ...(selectedSmartProcessConfig.value ? { entity_config: selectedSmartProcessConfig.value } : {}),
     })
     session.value = createResponse.item
 
@@ -1722,7 +1804,10 @@ async function downloadExampleTemplate() {
   busyAction.value = 'example-template'
 
   try {
-    const { blob, filename } = await apiStore.downloadImportExampleTemplateXlsx(entityType.value)
+    const { blob, filename } = await apiStore.downloadImportExampleTemplateXlsx(
+      entityType.value,
+      selectedSmartProcessConfig.value,
+    )
     const downloadUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = downloadUrl
@@ -1771,7 +1856,7 @@ async function waitForImportExecutionResult(sessionId: string) {
     syncSessionSnapshot(snapshot)
 
     const resolvedImportRun = buildImportRunFromSnapshot(snapshot)
-    if (resolvedImportRun) {
+    if (resolvedImportRun && !shouldWaitForImportExecutionSnapshot(snapshot)) {
       return resolvedImportRun
     }
 
@@ -1780,7 +1865,7 @@ async function waitForImportExecutionResult(sessionId: string) {
       throw new Error(String(snapshot?.last_error || 'Импорт завершился с ошибкой в фоновом worker.'))
     }
 
-    if (!['running', 'draft', 'uploaded', 'validated', 'ready'].includes(currentStatus)) {
+    if (!shouldWaitForImportExecutionSnapshot(snapshot)) {
       throw new Error('Импорт завершился без итогового отчета.')
     }
 
@@ -2140,6 +2225,28 @@ onMounted(loadHistory)
                           :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
                           @update:model-value="updateScenarioEntityType('crm', String($event || ''))"
                         />
+                      </B24FormField>
+                      <B24FormField
+                        v-if="selectedCrmEntityType === 'smart_process'"
+                        label="Выберите смарт-процесс"
+                        class="mt-4"
+                      >
+                        <B24Select
+                          :model-value="selectedSmartProcessId"
+                          :items="smartProcessOptions"
+                          placeholder="Например, Согласования"
+                          size="lg"
+                          class="w-full"
+                          :disabled="loadingSmartProcesses || !importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                          @update:model-value="selectedSmartProcessId = String($event || '')"
+                        />
+                        <div class="mt-2 text-xs text-[#7f92a7]">
+                          {{ loadingSmartProcesses
+                            ? 'Загружаем список смарт-процессов портала...'
+                            : smartProcessOptions.length
+                              ? 'Выберите конкретный смарт-процесс, в который пойдёт импорт.'
+                              : 'Смарт-процессы не найдены или недоступны для текущего пользователя.' }}
+                        </div>
                       </B24FormField>
                     </section>
                     <section class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
@@ -2654,52 +2761,72 @@ onMounted(loadHistory)
 
             <section
               v-if="valueMappingRows.length"
-              class="mb-5 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
+              class="mb-5 rounded-[20px] border bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
+              :class="valueMappingStatus.hasUnmappedValues ? 'border-[#ffc89a]' : 'border-[#dce7f7]'"
             >
-              <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Маппинг статусов и списков</div>
-              <div class="mb-3 text-sm text-[#5f7285]">
-                Для полей типа статус, этап или список сопоставьте значения из файла с целевыми значениями Bitrix24.
-              </div>
-              <div
-                class="mb-4 flex flex-wrap items-center gap-3 rounded-[14px] border px-3 py-2 text-sm"
-                :class="valueMappingStatus.hasUnmappedValues
-                  ? 'border-[#ffe1c7] bg-[#fff7ef] text-[#a96017]'
-                  : 'border-[#d7e7ff] bg-[#f4f9ff] text-[#2e6bd9]'"
+              <!-- Заголовок-кнопка -->
+              <button
+                class="flex w-full items-center justify-between gap-3 text-left"
+                @click="valueMappingExpanded = !valueMappingExpanded"
               >
-                <span class="font-semibold">
-                  {{ valueMappingStatus.hasUnmappedValues
-                    ? `Не сопоставлено: ${valueMappingStatus.unmappedValues}`
-                    : 'Все значения сопоставлены' }}
-                </span>
-                <span class="text-[#6f8194]">
-                  {{ `Всего значений: ${valueMappingStatus.totalValues}` }}
-                </span>
-              </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-sm font-semibold text-[#314256]">Сопоставление значений</span>
+                  <span
+                    class="rounded-full px-2.5 py-0.5 text-xs font-medium"
+                    :class="valueMappingStatus.hasUnmappedValues
+                      ? 'bg-[#fff0e0] text-[#a96017]'
+                      : 'bg-[#e6f4ea] text-[#2d7a3a]'"
+                  >
+                    {{ valueMappingStatus.hasUnmappedValues
+                      ? `${valueMappingStatus.unmappedValues} из ${valueMappingStatus.totalValues} не выбрано`
+                      : `Всё готово · ${valueMappingStatus.totalValues} значений` }}
+                  </span>
+                </div>
+                <svg
+                  class="shrink-0 text-[#8ea0b2] transition-transform duration-200"
+                  :class="valueMappingExpanded ? 'rotate-180' : ''"
+                  width="18" height="18" viewBox="0 0 20 20" fill="none"
+                >
+                  <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
 
-              <div class="space-y-3">
+              <!-- Подсказка (всегда видна) -->
+              <p class="mt-2 text-xs text-[#6f8194]">
+                {{ valueMappingStatus.hasUnmappedValues
+                  ? 'Система нашла значения из вашего файла, которые нужно привязать к вариантам Bitrix24. Для каждого — выберите соответствующий вариант из списка справа.'
+                  : 'Все значения из файла успешно сопоставлены с вариантами Bitrix24. Можно продолжить.' }}
+              </p>
+
+              <!-- Сворачиваемый список -->
+              <div v-if="valueMappingExpanded" class="mt-4 space-y-3">
                 <div
                   v-for="row in valueMappingRows"
                   :key="row.key"
                   class="grid gap-3 rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 lg:grid-cols-[minmax(180px,1fr),minmax(220px,1fr),minmax(260px,1.2fr)]"
+                  :class="!row.selectedTargetValue ? 'border-l-2 border-l-[#ffa05a]' : ''"
                 >
                   <div>
                     <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Поле Bitrix24</div>
                     <div class="mt-1 font-medium text-[#314256]">{{ row.targetFieldTitle }}</div>
+                    <div class="mt-0.5 text-xs text-[#9aa9b8]">{{ row.targetFieldId }}</div>
                   </div>
 
                   <div>
-                    <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Значение в файле</div>
-                    <div class="mt-1 font-medium text-[#314256]">{{ row.sourceValue }}</div>
+                    <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Значение из файла</div>
+                    <div class="mt-1 font-mono text-sm font-medium text-[#314256]">{{ row.sourceValue }}</div>
+                    <div v-if="!row.selectedTargetValue" class="mt-0.5 text-xs text-[#c07020]">Не сопоставлено — выберите вариант →</div>
+                    <div v-else class="mt-0.5 text-xs text-[#3a8a48]">Сопоставлено</div>
                   </div>
 
                   <div>
-                    <div class="mb-2 text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Значение Bitrix24</div>
+                    <div class="mb-2 text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Вариант в Bitrix24</div>
                     <B24Select
                       :model-value="row.selectedTargetValue || '__none__'"
                       class="w-full"
                       size="md"
-                      placeholder="Не выбрано"
-                      :items="[{ value: '__none__', label: 'Не выбрано' }, ...row.options]"
+                      placeholder="Выберите вариант..."
+                      :items="[{ value: '__none__', label: '— Не выбрано —' }, ...row.options]"
                       @update:model-value="updateValueMappingSelection(row.targetFieldId, row.sourceValue, $event === '__none__' ? '' : String($event || ''))"
                     />
                   </div>
