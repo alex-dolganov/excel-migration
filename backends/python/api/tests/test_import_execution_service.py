@@ -516,6 +516,63 @@ class ImportExecutionServiceTest(SimpleTestCase):
             },
         )
 
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    def test_create_crm_activity_call_requires_communication_value(self, bitrix_api_request):
+        account = SimpleNamespace(client=SimpleNamespace())
+
+        with self.assertRaisesMessage(ValueError, "COMMUNICATIONS_VALUE обязателен для звонка CRM"):
+            create_entity_record(
+                account,
+                "crm_activity",
+                {
+                    "OWNER_TYPE_ID": "2",
+                    "OWNER_ID": "63",
+                    "TYPE_ID": "2",
+                    "SUBJECT": "Звонок по презентации",
+                },
+            )
+
+        bitrix_api_request.assert_not_called()
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    def test_create_crm_activity_call_passes_phone_in_communications(self, bitrix_api_request):
+        bitrix_api_request.return_value = SimpleNamespace(result=913)
+        account = SimpleNamespace(client=SimpleNamespace())
+
+        result = create_entity_record(
+            account,
+            "crm_activity",
+            {
+                "OWNER_TYPE_ID": "2",
+                "OWNER_ID": "63",
+                "TYPE_ID": "2",
+                "SUBJECT": "Звонок по презентации",
+                "COMMUNICATIONS_VALUE": "+79991234567",
+            },
+        )
+
+        self.assertEqual(result, 913)
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="crm.activity.add",
+            params={
+                "fields": {
+                    "OWNER_TYPE_ID": 2,
+                    "OWNER_ID": 63,
+                    "TYPE_ID": 2,
+                    "SUBJECT": "Звонок по презентации",
+                    "COMMUNICATIONS": [
+                        {
+                            "ENTITY_ID": 63,
+                            "ENTITY_TYPE_ID": 2,
+                            "TYPE": "PHONE",
+                            "VALUE": "+79991234567",
+                        }
+                    ],
+                }
+            },
+        )
+
     @patch("importer.services.import_execution.attach_file_to_task", create=True)
     @patch("importer.services.import_execution.download_attachment_source", create=True)
     def test_create_task_attachment_uploads_downloaded_file(self, download_attachment_source, attach_file_to_task):

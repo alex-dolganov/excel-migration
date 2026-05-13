@@ -212,6 +212,30 @@ class ImportMappingApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_session_with_exact_and_unknown_stage_values(self):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.LEAD,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="leads-stage-mixed.xlsx",
+        )
+        session.stored_file.save(
+            "leads-stage-mixed.xlsx",
+            SimpleUploadedFile(
+                "leads-stage-mixed.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        ("Leads", [["Lead title", "Stage"], ["Alice", "New"], ["Bob", "IN_PROGRESS"], ["Eve", "Paused"]]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def create_uploaded_session_with_many_stage_values(self):
         rows = [["Lead title", "Stage"]]
         rows.extend([[f"Lead {index}", f"Stage {index}"] for index in range(1, 12)])
@@ -464,6 +488,44 @@ class ImportMappingApiTest(TestCase):
                 "Stage 11",
             ],
         })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_treats_exact_list_values_as_already_resolved(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_session_with_exact_and_unknown_stage_values()
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "TITLE": {
+                        "source_header": "Lead title",
+                        "column": "A",
+                    },
+                    "STAGE_ID": {
+                        "source_header": "Stage",
+                        "column": "B",
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(mapping_response.status_code, 200)
+        self.assertEqual(mapping_response.json()["item"]["observed_values"], {
+            "STAGE_ID": ["New", "IN_PROGRESS", "Paused"],
+        })
+        self.assertEqual(mapping_response.json()["item"]["unmapped_values"], {
+            "STAGE_ID": ["Paused"],
+        })
+        self.assertEqual(mapping_response.json()["item"]["unmapped_value_count"], 1)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_task_mapping_returns_default_responsible_options_and_persists_selection(self, get_from_jwt_token):

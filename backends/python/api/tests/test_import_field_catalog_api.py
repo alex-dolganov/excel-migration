@@ -306,6 +306,40 @@ class ImportFieldCatalogApiTest(TestCase):
         )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_static_crm_activity_fields_catalog_with_communications_value(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "crm_activity"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["entity_type"], "crm_activity")
+
+        items = response.json()["items"]
+        owner_type_field = next(item for item in items if item["id"] == "OWNER_TYPE_ID")
+        communications_field = next(item for item in items if item["id"] == "COMMUNICATIONS_VALUE")
+
+        self.assertEqual(
+            owner_type_field["items"],
+            [
+                {"id": "1", "title": "Лид"},
+                {"id": "2", "title": "Сделка"},
+                {"id": "3", "title": "Контакт"},
+                {"id": "4", "title": "Компания"},
+            ],
+        )
+        self.assertEqual(communications_field["title"], "Телефон / Email (для звонков и писем)")
+        self.assertFalse(communications_field["required"])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_returns_static_task_comment_fields_catalog(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(
             member_id="member-1",

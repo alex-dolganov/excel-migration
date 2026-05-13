@@ -121,6 +121,31 @@ def normalize_value_mapping(value_mapping, field: dict) -> dict:
     return normalized_value_mapping
 
 
+def build_field_item_value_index(field: dict) -> dict[str, str]:
+    value_index = {}
+
+    for item in field.get("items", []):
+        if not isinstance(item, dict):
+            continue
+
+        item_id = str(item.get("id") or "").strip()
+        item_title = str(item.get("title") or "").strip()
+        if item_id:
+            value_index[normalize_mapping_value(item_id)] = item_id
+        if item_title:
+            value_index[normalize_mapping_value(item_title)] = item_id
+
+    return value_index
+
+
+def resolve_field_item_value(field: dict, source_value) -> str:
+    normalized_source_value = normalize_mapping_value(source_value)
+    if not normalized_source_value:
+        return ""
+
+    return build_field_item_value_index(field).get(normalized_source_value, "")
+
+
 def build_candidate_mapping(headers: list[str], columns: list[str], fields: list[dict]) -> dict:
     candidates = {}
     exact_fields_by_title = {}

@@ -151,3 +151,26 @@ class ImportExampleTemplatesApiTest(TestCase):
             "+79990001122",
         ]:
             self.assertIn(value, sheet_xml)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_operator_can_download_example_template_for_crm_activity_with_communications_value(self, get_from_jwt_token):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        get_from_jwt_token.return_value = self.create_account(is_admin=False)
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=crm_activity",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("crm_activity-import-example.xlsx", response["Content-Disposition"])
+
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        for value in [
+            "Тип сущности CRM",
+            "Тип активности",
+            "Телефон / Email (для звонков и писем)",
+            "Звонок по презентации",
+            "+79991234567",
+        ]:
+            self.assertIn(value, sheet_xml)

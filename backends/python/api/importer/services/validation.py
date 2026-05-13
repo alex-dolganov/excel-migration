@@ -36,6 +36,10 @@ BITRIX_MULTIFIELD_VALIDATORS = {
     "PHONE": "phone",
     "EMAIL": "email",
 }
+CRM_ACTIVITY_COMMUNICATION_TYPES = {
+    "2": "call",
+    "4": "email",
+}
 
 
 def normalize_value(value) -> str:
@@ -367,6 +371,105 @@ def validate_field_value(
     return None
 
 
+def resolve_row_field_value(
+    *,
+    row: list,
+    column_index_by_name: dict[str, int],
+    mapping: dict,
+    field_by_id: dict[str, dict],
+    default_field_values: dict | None,
+    target_field: str,
+) -> tuple[str, str, str]:
+    mapping_item = mapping.get(target_field) if isinstance(mapping, dict) else None
+    column = str((mapping_item or {}).get("column") or "")
+    source_header = str((mapping_item or {}).get("source_header") or "")
+    column_index = column_index_by_name.get(column)
+
+    value = ""
+    if column_index is not None and column_index < len(row):
+        value = normalize_value(row[column_index])
+    if not value:
+        value = resolve_default_field_value(default_field_values, target_field)
+
+    field = field_by_id.get(target_field, {})
+    if value and field.get("items"):
+        mapped_value = resolve_mapped_field_value(field, value, mapping_item)
+        if mapped_value:
+            value = mapped_value
+
+    return value, column, source_header
+
+
+def validate_crm_activity_communications(
+    *,
+    row: list,
+    row_number: int,
+    column_index_by_name: dict[str, int],
+    mapping: dict,
+    field_by_id: dict[str, dict],
+    default_field_values: dict | None,
+):
+    type_id, _type_column, _type_source_header = resolve_row_field_value(
+        row=row,
+        column_index_by_name=column_index_by_name,
+        mapping=mapping,
+        field_by_id=field_by_id,
+        default_field_values=default_field_values,
+        target_field="TYPE_ID",
+    )
+    activity_kind = CRM_ACTIVITY_COMMUNICATION_TYPES.get(type_id)
+    if activity_kind is None:
+        return None
+
+    communication_field = field_by_id.get("COMMUNICATIONS_VALUE")
+    if communication_field is None:
+        return None
+
+    value, column, source_header = resolve_row_field_value(
+        row=row,
+        column_index_by_name=column_index_by_name,
+        mapping=mapping,
+        field_by_id=field_by_id,
+        default_field_values=default_field_values,
+        target_field="COMMUNICATIONS_VALUE",
+    )
+    field_title = str(communication_field.get("title") or "COMMUNICATIONS_VALUE")
+    if not value:
+        return build_issue(
+            row_number,
+            column,
+            source_header,
+            "COMMUNICATIONS_VALUE",
+            "required",
+            f'Field "{field_title}" is required for {activity_kind} activities',
+            value,
+        )
+
+    if activity_kind == "call" and not is_valid_phone(value):
+        return build_issue(
+            row_number,
+            column,
+            source_header,
+            "COMMUNICATIONS_VALUE",
+            "phone",
+            f'Field "{field_title}" must contain a valid phone',
+            value,
+        )
+
+    if activity_kind == "email" and not EMAIL_RE.match(value):
+        return build_issue(
+            row_number,
+            column,
+            source_header,
+            "COMMUNICATIONS_VALUE",
+            "email",
+            f'Field "{field_title}" must contain a valid email',
+            value,
+        )
+
+    return None
+
+
 def build_validation_result(
     *,
     rows: list[list],
@@ -436,6 +539,18 @@ def build_validation_result(
             if issue is not None:
                 issues.append(issue)
                 invalid_row_numbers.add(row_number)
+
+        crm_activity_issue = validate_crm_activity_communications(
+            row=row,
+            row_number=row_number,
+            column_index_by_name=column_index_by_name,
+            mapping=mapping,
+            field_by_id=field_by_id,
+            default_field_values=default_field_values,
+        )
+        if crm_activity_issue is not None:
+            issues.append(crm_activity_issue)
+            invalid_row_numbers.add(row_number)
 
     return {
         "checked_rows": checked_rows,

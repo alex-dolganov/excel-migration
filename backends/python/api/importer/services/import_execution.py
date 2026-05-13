@@ -1,3 +1,4 @@
+import re
 import time
 
 from b24pysdk.bitrix_api.requests import BitrixAPIBatchRequest, BitrixAPIRequest
@@ -26,6 +27,11 @@ TASK_CHILD_API_METHODS = {
 
 TASK_ENTITY_TYPES = {"task", "task_comment", "task_checklist_item", "task_attachment"}
 CRM_FILES_ENTITY_TYPES = {"crm_files_lead", "crm_files_contact", "crm_files_company", "crm_files_deal"}
+CRM_ACTIVITY_ENTITY_TYPES = {"crm_activity", "crm_note"}
+CRM_ACTIVITY_COMMUNICATION_TYPES = {
+    "2": "PHONE",
+    "4": "EMAIL",
+}
 HR_ENTITY_TYPES = {"user", "department"}
 LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
 LINKED_ENTITY_TYPES = {"company", "contact"}
@@ -35,7 +41,8 @@ LINKED_ENTITY_PREFIXES = {
 }
 
 SUPPORTED_DEDUP_STRATEGIES = {"create", "skip", "update", "ask"}
-SUPPORTED_DEDUP_FIELDS = {"EMAIL", "PHONE", "TITLE"}
+SUPPORTED_DEDUP_FIELDS = {"EMAIL", "PHONE", "TITLE"}   # legacy whitelist kept for reference
+_DEDUP_FIELD_RE = re.compile(r'^[A-Z][A-Z0-9_]*$')    # any valid Bitrix24 field name
 BITRIX_MULTIFIELD_IDS = {"PHONE", "EMAIL", "WEB", "IM"}
 TASK_CHILD_ENTITY_TYPES = {"task_comment", "task_checklist_item"}
 
@@ -428,6 +435,29 @@ def normalize_record_id(record_id):
         return record_id
 
 
+def build_crm_activity_communications(fields: dict) -> list[dict]:
+    owner_type_id = normalize_value(fields.get("OWNER_TYPE_ID"))
+    owner_id = normalize_value(fields.get("OWNER_ID"))
+    type_id = normalize_value(fields.get("TYPE_ID"))
+    communication_value = normalize_value(fields.get("COMMUNICATIONS_VALUE"))
+
+    communication = {
+        "ENTITY_ID": int(owner_id),
+        "ENTITY_TYPE_ID": int(owner_type_id),
+    }
+
+    communication_type = CRM_ACTIVITY_COMMUNICATION_TYPES.get(type_id)
+    if communication_type:
+        if not communication_value:
+            if communication_type == "PHONE":
+                raise ValueError("COMMUNICATIONS_VALUE обязателен для звонка CRM")
+            raise ValueError("COMMUNICATIONS_VALUE обязателен для email CRM")
+        communication["TYPE"] = communication_type
+        communication["VALUE"] = communication_value
+
+    return [communication]
+
+
 def normalize_dedup_settings(dedup_settings) -> dict:
     if not isinstance(dedup_settings, dict):
         return {
@@ -443,7 +473,7 @@ def normalize_dedup_settings(dedup_settings) -> dict:
     normalized_fields = []
     for field_name in dedup_settings.get("fields", []):
         normalized_field_name = str(field_name or "").strip().upper()
-        if normalized_field_name in SUPPORTED_DEDUP_FIELDS and normalized_field_name not in normalized_fields:
+        if normalized_field_name and _DEDUP_FIELD_RE.match(normalized_field_name) and normalized_field_name not in normalized_fields:
             normalized_fields.append(normalized_field_name)
 
     condition = str(dedup_settings.get("condition") or "any").strip().lower()
@@ -691,11 +721,19 @@ def find_existing_record(account, entity_type: str, row_payload: dict, dedup_set
     if dedup_settings["strategy"] == "create" or not dedup_settings["fields"]:
         return None
 
-    if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES:
+    if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES or entity_type in CRM_ACTIVITY_ENTITY_TYPES:
         return None
 
     if entity_type in HR_ENTITY_TYPES:
         return _find_hr_existing_record(account, entity_type, row_payload, dedup_settings)
+
+    # Special case: if "ID" is the only dedup field, use it directly as record_id (no API search needed)
+    if dedup_settings["fields"] == ["ID"]:
+        raw_id = extract_dedup_lookup_value(row_payload.get("ID"))
+        record_id = normalize_record_id(raw_id) if raw_id else None
+        if record_id is None:
+            return None
+        return {"record_id": record_id, "duplicate_match_fields": ["ID"], "dedup_missing_fields": []}
 
     scope = get_entity_scope(account.client, entity_type)
     list_method = getattr(scope, "list", None)
@@ -867,7 +905,7 @@ def build_linked_record_result(linked_entity: str, row_payload: dict, record_id,
 
 
 def update_entity_record(account, entity_type: str, record_id, fields: dict):
-    if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES:
+    if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES or entity_type in CRM_ACTIVITY_ENTITY_TYPES:
         raise ValueError("Update is not supported for this entity type")
 
     if entity_type == "user":
@@ -1137,6 +1175,69 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
                 },
             )
             return _extract_task_comment_message_id(unwrap_bitrix_result(response))
+
+    if entity_type == "crm_activity":
+        owner_type_id = normalize_value(fields.get("OWNER_TYPE_ID"))
+        owner_id = normalize_value(fields.get("OWNER_ID"))
+        type_id = normalize_value(fields.get("TYPE_ID"))
+        subject = normalize_value(fields.get("SUBJECT"))
+        if not owner_type_id:
+            raise ValueError("OWNER_TYPE_ID обязателен для активности CRM")
+        if not owner_id:
+            raise ValueError("OWNER_ID обязателен для активности CRM")
+        if not type_id:
+            raise ValueError("TYPE_ID обязателен для активности CRM")
+        if not subject:
+            raise ValueError("SUBJECT обязателен для активности CRM")
+
+        activity_fields = {
+            "OWNER_TYPE_ID": int(owner_type_id),
+            "OWNER_ID": int(owner_id),
+            "TYPE_ID": int(type_id),
+            "SUBJECT": subject,
+            # Bitrix24 requires COMMUNICATIONS for activities; calls/emails also need VALUE.
+            "COMMUNICATIONS": build_crm_activity_communications(fields),
+        }
+        _INTEGER_ACTIVITY_FIELDS = {"RESPONSIBLE_ID", "DIRECTION", "STATUS", "PRIORITY"}
+        for field_key in ("DESCRIPTION", "START_TIME", "END_TIME", "DEADLINE",
+                          "RESPONSIBLE_ID", "DIRECTION", "STATUS", "PRIORITY"):
+            val = normalize_value(fields.get(field_key))
+            if val:
+                activity_fields[field_key] = int(val) if field_key in _INTEGER_ACTIVITY_FIELDS else val
+
+        response = BitrixAPIRequest(
+            bitrix_token=account,
+            api_method="crm.activity.add",
+            params={"fields": activity_fields},
+        )
+        return normalize_record_id(unwrap_bitrix_result(response))
+
+    if entity_type == "crm_note":
+        entity_type_val = normalize_value(fields.get("ENTITY_TYPE"))
+        entity_id = normalize_value(fields.get("ENTITY_ID"))
+        comment = normalize_value(fields.get("COMMENT"))
+        if not entity_type_val:
+            raise ValueError("ENTITY_TYPE обязателен для заметки CRM")
+        if not entity_id:
+            raise ValueError("ENTITY_ID обязателен для заметки CRM")
+        if not comment:
+            raise ValueError("COMMENT обязателен для заметки CRM")
+
+        note_fields = {
+            "ENTITY_TYPE": entity_type_val.upper(),
+            "ENTITY_ID": int(entity_id),
+            "COMMENT": comment,
+        }
+        created_time = normalize_value(fields.get("CREATED_TIME"))
+        if created_time:
+            note_fields["CREATED_TIME"] = created_time
+
+        response = BitrixAPIRequest(
+            bitrix_token=account,
+            api_method="crm.timeline.comment.add",
+            params={"fields": note_fields},
+        )
+        return normalize_record_id(unwrap_bitrix_result(response))
 
     if entity_type == "user":
         return _create_user(account, fields)

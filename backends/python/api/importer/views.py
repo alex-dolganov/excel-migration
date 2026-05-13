@@ -26,7 +26,7 @@ from .services.background_jobs import (
 )
 from .services.example_templates import build_example_template_filename, build_example_template_xlsx
 from .services.import_execution import execute_dry_run, execute_import, normalize_entity_dedup_settings
-from .services.mapping import build_candidate_mapping, normalize_saved_mapping
+from .services.mapping import build_candidate_mapping, normalize_saved_mapping, resolve_field_item_value
 from .services.permissions import (
     can_cancel_session,
     can_edit_session,
@@ -677,10 +677,27 @@ def extract_rows_from_xls(session: ImportSession, sheet_name: str, preview_limit
     return columns, rows, row_numbers
 
 
+_CSV_SNIFF_BYTES = 8192
+_CSV_CANDIDATE_DELIMITERS = ",;\t|"
+
+
+def detect_csv_delimiter(raw_bytes: bytes) -> str:
+    sample = raw_bytes.decode("utf-8-sig", errors="replace")
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=_CSV_CANDIDATE_DELIMITERS)
+        return dialect.delimiter
+    except csv.Error:
+        return ","
+
+
 def extract_rows_from_csv(session: ImportSession, preview_limit: int | None = 20):
     try:
         with session.stored_file.open("rb") as stored_file:
-            reader = csv.reader(TextIOWrapper(stored_file, encoding="utf-8-sig", newline=""))
+            sample_bytes = stored_file.read(_CSV_SNIFF_BYTES)
+            stored_file.seek(0)
+            delimiter = detect_csv_delimiter(sample_bytes)
+            text_file = TextIOWrapper(stored_file, encoding="utf-8-sig", newline="")
+            reader = csv.reader(text_file, delimiter=delimiter)
             rows = []
             row_numbers = []
             max_columns = 0
@@ -694,7 +711,16 @@ def extract_rows_from_csv(session: ImportSession, preview_limit: int | None = 20
         raise ValueError("Unable to read workbook preview") from error
 
     columns = [column_index_to_letter(index) for index in range(1, max_columns + 1)]
-    return columns, rows, row_numbers
+    return columns, rows, row_numbers, delimiter
+
+
+def extract_preview_rows_with_meta(session: ImportSession, selected_sheet_name: str, preview_limit: int | None = 20):
+    """Like extract_preview_rows but returns extra metadata (e.g. detected CSV delimiter)."""
+    if session.source_format == ImportSession.SourceFormat.CSV:
+        columns, rows, row_numbers, delimiter = extract_rows_from_csv(session, preview_limit=preview_limit)
+        return columns, rows, row_numbers, {"csv_delimiter": delimiter}
+    columns, rows, row_numbers = extract_preview_rows(session, selected_sheet_name, preview_limit=preview_limit)
+    return columns, rows, row_numbers, {}
 
 
 def extract_preview_rows(session: ImportSession, selected_sheet_name: str, preview_limit: int | None = 20):
@@ -704,7 +730,8 @@ def extract_preview_rows(session: ImportSession, selected_sheet_name: str, previ
     if session.source_format == ImportSession.SourceFormat.CSV:
         if selected_sheet_name != "CSV":
             raise ValueError("Selected sheet does not exist")
-        return extract_rows_from_csv(session, preview_limit=preview_limit)
+        columns, rows, row_numbers, _delimiter = extract_rows_from_csv(session, preview_limit=preview_limit)
+        return columns, rows, row_numbers
 
     if session.source_format == ImportSession.SourceFormat.XLS:
         return extract_rows_from_xls(session, selected_sheet_name, preview_limit=preview_limit)
@@ -849,14 +876,20 @@ def mapping_has_observed_value_fields(fields: list[dict], mapping: dict) -> bool
     return False
 
 
-def build_unmapped_mapping_values(observed_values: dict[str, list[str]], mapping: dict) -> dict[str, list[str]]:
+def build_unmapped_mapping_values(observed_values: dict[str, list[str]], mapping: dict, fields: list[dict]) -> dict[str, list[str]]:
     if not isinstance(observed_values, dict) or not isinstance(mapping, dict):
         return {}
 
+    field_index = {
+        str(field.get("id")): field
+        for field in fields
+        if isinstance(field, dict) and str(field.get("id") or "").strip()
+    }
     unmapped_values = {}
 
     for target_field_id, field_values in observed_values.items():
         mapping_item = mapping.get(str(target_field_id))
+        field = field_index.get(str(target_field_id), {})
         value_mapping = mapping_item.get("value_mapping") if isinstance(mapping_item, dict) else None
         mapped_source_values = {
             str(source_value).strip()
@@ -866,7 +899,11 @@ def build_unmapped_mapping_values(observed_values: dict[str, list[str]], mapping
         missing_values = [
             str(source_value).strip()
             for source_value in field_values
-            if str(source_value).strip() and str(source_value).strip() not in mapped_source_values
+            if (
+                str(source_value).strip()
+                and str(source_value).strip() not in mapped_source_values
+                and not resolve_field_item_value(field, source_value)
+            )
         ]
         if missing_values:
             unmapped_values[str(target_field_id)] = missing_values
@@ -1365,7 +1402,7 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
             fields=fields,
             mapping=mapping_for_observed_values,
         )
-    unmapped_values = build_unmapped_mapping_values(observed_values, mapping_for_observed_values)
+    unmapped_values = build_unmapped_mapping_values(observed_values, mapping_for_observed_values, fields)
 
     return JsonResponse(
         {
@@ -1433,7 +1470,7 @@ def import_session_validate(request: AuthorizedRequest, session_id):
         fields=fields,
         mapping=saved_mapping,
     )
-    unmapped_values = build_unmapped_mapping_values(observed_values, saved_mapping)
+    unmapped_values = build_unmapped_mapping_values(observed_values, saved_mapping, fields)
     unmapped_value_count = count_mapping_values(unmapped_values)
     if unmapped_value_count > 0:
         return JsonResponse(
@@ -2039,7 +2076,7 @@ def import_session_preview(request: AuthorizedRequest, session_id):
         return JsonResponse({"error": "Selected sheet does not exist"}, status=400)
 
     try:
-        columns, preview_rows, row_numbers = extract_preview_rows(session, selected_sheet_name)
+        columns, preview_rows, row_numbers, preview_meta = extract_preview_rows_with_meta(session, selected_sheet_name)
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
@@ -2067,6 +2104,7 @@ def import_session_preview(request: AuthorizedRequest, session_id):
         "header_row": structure["header_row"],
         "data_start_row": structure["data_start_row"],
         "headers": structure["headers"],
+        **({} if not preview_meta else {"csv_delimiter": preview_meta.get("csv_delimiter")}),
     }
     session.last_error = ""
     session.save(
@@ -2080,20 +2118,20 @@ def import_session_preview(request: AuthorizedRequest, session_id):
         ]
     )
 
-    return JsonResponse(
-        {
-            "item": {
-                "session_id": str(session.id),
-                "sheet_names": sheet_names,
-                "selected_sheet_name": selected_sheet_name,
-                "columns": columns,
-                "preview_rows": preview_rows,
-                "header_row": structure["header_row"],
-                "data_start_row": structure["data_start_row"],
-                "headers": structure["headers"],
-            }
-        }
-    )
+    response_item = {
+        "session_id": str(session.id),
+        "sheet_names": sheet_names,
+        "selected_sheet_name": selected_sheet_name,
+        "columns": columns,
+        "preview_rows": preview_rows,
+        "header_row": structure["header_row"],
+        "data_start_row": structure["data_start_row"],
+        "headers": structure["headers"],
+    }
+    if preview_meta.get("csv_delimiter"):
+        response_item["csv_delimiter"] = preview_meta["csv_delimiter"]
+
+    return JsonResponse({"item": response_item})
 
 
 @xframe_options_exempt

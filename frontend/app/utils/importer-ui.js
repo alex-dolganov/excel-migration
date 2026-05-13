@@ -1,5 +1,6 @@
 export const EMPTY_MAPPING_SELECT_VALUE = '__skip_import__'
-export const SUPPORTED_DEDUP_FIELDS = ['EMAIL', 'PHONE', 'TITLE']
+export const SUPPORTED_DEDUP_FIELDS = ['EMAIL', 'PHONE', 'TITLE']  // legacy list kept for reference
+const _DEDUP_FIELD_RE = /^[A-Z][A-Z0-9_]*$/
 export const SUPPORTED_DEDUP_STRATEGIES = ['create', 'skip', 'update', 'ask']
 export const ASSIGNABLE_IMPORTER_ROLES = ['operator', 'viewer']
 export const IMPORTER_PERMISSION_CODES = [
@@ -17,6 +18,8 @@ export const SUPPORTED_IMPORT_ENTITIES = [
   { value: 'contact', label: 'Контакты' },
   { value: 'company', label: 'Компании' },
   { value: 'deal', label: 'Сделки' },
+  { value: 'crm_activity', label: 'Активности CRM' },
+  { value: 'crm_note', label: 'Заметки CRM' },
   { value: 'linked_company_contact', label: 'Компания + Контакт' },
   { value: 'task', label: 'Задачи' },
   { value: 'task_comment', label: 'Комментарии задач' },
@@ -533,6 +536,37 @@ function normalizeValueMapping(valueMapping) {
   }, {})
 }
 
+function normalizeOptionMatchValue(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0400-\u04ff]+/g, '')
+}
+
+function resolveAutoValueMapping(sourceValue, options) {
+  const normalizedSourceValue = normalizeOptionMatchValue(sourceValue)
+  if (!normalizedSourceValue) {
+    return ''
+  }
+
+  for (const option of Array.isArray(options) ? options : []) {
+    const optionValue = String(option?.value || '').trim()
+    const optionLabel = String(option?.label || '').trim()
+    if (!optionValue) {
+      continue
+    }
+
+    if (
+      normalizeOptionMatchValue(optionValue) === normalizedSourceValue
+      || normalizeOptionMatchValue(optionLabel) === normalizedSourceValue
+    ) {
+      return optionValue
+    }
+  }
+
+  return ''
+}
+
 function collectUniqueValues(values) {
   const observedValues = []
   const seenValues = new Set()
@@ -766,7 +800,7 @@ export function buildValueMappingRows({
       targetFieldId,
       targetFieldTitle: String(field?.title || targetFieldId),
       sourceValue,
-      selectedTargetValue: String(valueMapping[sourceValue] || ''),
+      selectedTargetValue: String(valueMapping[sourceValue] || resolveAutoValueMapping(sourceValue, options) || ''),
       options,
     }))
   })
@@ -818,7 +852,7 @@ export function buildDedupPayload(settings) {
   const fields = Array.from(new Set(
     (Array.isArray(settings?.fields) ? settings.fields : [])
       .map((field) => String(field || '').trim().toUpperCase())
-      .filter((field) => SUPPORTED_DEDUP_FIELDS.includes(field)),
+      .filter((field) => field && _DEDUP_FIELD_RE.test(field)),
   ))
 
   const condition = String(settings?.condition || 'any') === 'all' ? 'all' : 'any'

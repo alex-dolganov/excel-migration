@@ -203,6 +203,37 @@ class ImportValidationApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_session_with_exact_stage_values(self):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.LEAD,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="leads-stage-exact.xlsx",
+        )
+        session.stored_file.save(
+            "leads-stage-exact.xlsx",
+            SimpleUploadedFile(
+                "leads-stage-exact.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        (
+                            "Leads",
+                            [
+                                ["Lead title", "Stage"],
+                                ["Alice", "New"],
+                                ["Bob", "IN_PROGRESS"],
+                            ],
+                        ),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def save_mapping(self, session):
         preview_response = self.client.get(
             reverse("importer:session-preview", kwargs={"session_id": session.id}),
@@ -373,6 +404,26 @@ class ImportValidationApiTest(TestCase):
             "STAGE_ID": ["Queued", "Paused"],
         })
         self.assertEqual(response.json()["unmapped_value_count"], 2)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_validation_accepts_exact_list_values_without_manual_value_mapping(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_session_with_exact_stage_values()
+        self.save_stage_mapping(session)
+
+        response = self.client.post(
+            reverse("importer:session-validate", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["checked_rows"], 2)
+        self.assertEqual(response.json()["item"]["valid_rows"], 2)
+        self.assertEqual(response.json()["item"]["invalid_rows"], 0)
+        self.assertEqual(response.json()["item"]["issue_count"], 0)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_validation_is_limited_to_current_portal_session(self, get_from_jwt_token):

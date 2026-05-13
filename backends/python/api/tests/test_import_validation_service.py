@@ -173,6 +173,105 @@ class ImportValidationServiceTest(SimpleTestCase):
 
         self.assertIsNone(issue)
 
+    def test_build_validation_result_requires_communication_value_for_crm_activity_call(self):
+        validation_result = build_validation_result(
+            rows=[
+                ["Тип активности", "Телефон / Email"],
+                ["Звонок", ""],
+            ],
+            row_numbers=[1, 2],
+            columns=["A", "B"],
+            data_start_row=2,
+            mapping={
+                "TYPE_ID": {
+                    "source_header": "Тип активности",
+                    "column": "A",
+                    "target_field": "TYPE_ID",
+                },
+                "COMMUNICATIONS_VALUE": {
+                    "source_header": "Телефон / Email",
+                    "column": "B",
+                    "target_field": "COMMUNICATIONS_VALUE",
+                },
+            },
+            fields=[
+                {
+                    "id": "TYPE_ID",
+                    "title": "Тип активности",
+                    "type": "string",
+                    "required": True,
+                    "multiple": False,
+                    "items": [
+                        {"id": "1", "title": "Встреча"},
+                        {"id": "2", "title": "Звонок"},
+                        {"id": "4", "title": "Email"},
+                    ],
+                },
+                {
+                    "id": "COMMUNICATIONS_VALUE",
+                    "title": "Телефон / Email (для звонков и писем)",
+                    "type": "string",
+                    "required": False,
+                    "multiple": False,
+                },
+            ],
+        )
+
+        self.assertEqual(validation_result["issue_count"], 1)
+        self.assertEqual(validation_result["issues"][0]["target_field"], "COMMUNICATIONS_VALUE")
+        self.assertEqual(validation_result["issues"][0]["code"], "required")
+        self.assertEqual(
+            validation_result["issues"][0]["message"],
+            'Field "Телефон / Email (для звонков и писем)" is required for call activities',
+        )
+
+    def test_build_validation_result_accepts_phone_for_crm_activity_call(self):
+        validation_result = build_validation_result(
+            rows=[
+                ["Тип активности", "Телефон / Email"],
+                ["Звонок", "+79991234567"],
+            ],
+            row_numbers=[1, 2],
+            columns=["A", "B"],
+            data_start_row=2,
+            mapping={
+                "TYPE_ID": {
+                    "source_header": "Тип активности",
+                    "column": "A",
+                    "target_field": "TYPE_ID",
+                },
+                "COMMUNICATIONS_VALUE": {
+                    "source_header": "Телефон / Email",
+                    "column": "B",
+                    "target_field": "COMMUNICATIONS_VALUE",
+                },
+            },
+            fields=[
+                {
+                    "id": "TYPE_ID",
+                    "title": "Тип активности",
+                    "type": "string",
+                    "required": True,
+                    "multiple": False,
+                    "items": [
+                        {"id": "1", "title": "Встреча"},
+                        {"id": "2", "title": "Звонок"},
+                        {"id": "4", "title": "Email"},
+                    ],
+                },
+                {
+                    "id": "COMMUNICATIONS_VALUE",
+                    "title": "Телефон / Email (для звонков и писем)",
+                    "type": "string",
+                    "required": False,
+                    "multiple": False,
+                },
+            ],
+        )
+
+        self.assertEqual(validation_result["issue_count"], 0)
+        self.assertEqual(validation_result["valid_rows"], 1)
+
     def test_build_validation_result_accepts_task_user_references_by_email_login_and_xml_id(self):
         user_results_by_filter = {
             (("EMAIL", "owner@example.com"),): [{"ID": 59}],
