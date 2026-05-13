@@ -334,7 +334,7 @@ Only after baseline is working should we move to:
 7. `.xls` support;
 8. related entities;
 9. file-field bulk import;
-10. Harbor-ready release packaging.
+10. Release-ready deployment packaging.
 
 ---
 

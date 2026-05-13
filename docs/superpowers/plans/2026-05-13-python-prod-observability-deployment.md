@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Bring the Python backend to a production-ready deployment shape for the target cloud environment: external MySQL, Nginx-facing runtime, RabbitMQ-backed background jobs, OpenTelemetry-based observability, portal-level debug controls, and internal error ticket forwarding through `mptools`.
+**Goal:** Bring the Python backend to a production-ready deployment shape for the target cloud environment: external MySQL, Nginx-facing runtime, RabbitMQ-backed background jobs, OpenTelemetry-based observability, portal-level debug controls, and readiness for future `VibeCode Infra` deployment.
 
-**Architecture:** Keep `gunicorn` as the Python application server behind Nginx for synchronous HTTP traffic, and keep long-running importer work in `Celery + RabbitMQ`. Do not treat `gunicorn` as a queue transport: file uploads still arrive over HTTP, are persisted by Django, and only then trigger background execution through the queue layer. Observability and support hooks must be environment-driven, safe to disable, and compatible with cloud deployment where direct log access is unavailable.
+**Architecture:** Keep `gunicorn` as the Python application server behind Nginx for synchronous HTTP traffic, and keep long-running importer work in `Celery + RabbitMQ`. Do not treat `gunicorn` as a queue transport: file uploads still arrive over HTTP, are persisted by Django, and only then trigger background execution through the queue layer. Observability must stay environment-driven, safe to disable, and vendor-neutral so the app can move to `VibeCode Infra` when that infrastructure is ready.
 
 **Tech Stack:** Django, Gunicorn, Celery, RabbitMQ, MySQL, Nginx, OpenTelemetry, Grafana, Vue/Nuxt, Docker Compose.
 
@@ -35,7 +35,7 @@ Document these invariants:
 - queue broker is external `RabbitMQ`;
 - reverse proxy is `Nginx`;
 - cloud operators do not provide direct application log access;
-- all critical diagnostics must be exported through telemetry or support proxy integrations.
+- all critical diagnostics must be exported through telemetry and not depend on legacy support-proxy routing.
 
 - [ ] **Step 3: Commit**
 
@@ -207,53 +207,39 @@ git commit -m "feat: add opentelemetry runtime and portal debug controls"
 
 ## Chunk 5: Automated Error Tickets Through Internal Proxy
 
-### Task 5: Forward support-grade failures through `mptools` proxy
+### Task 5: Keep observability vendor-neutral for future infra integration
 
 **Files:**
-- Create: `backends/python/api/error_reporting.py`
 - Modify: `backends/python/api/config.py`
 - Modify: `backends/python/api/main/utils/decorators/log_errors.py`
 - Modify: `README.md`
 - Test: `backends/python/api/tests/`
 
-- [ ] **Step 1: Add failing tests for support proxy reporting**
+- [ ] **Step 1: Add failing tests for vendor-neutral support posture**
 
 Cover:
-- fatal handler errors are reported through a single internal endpoint;
-- internal proxy URL comes from env;
-- reporting failures never break the user-facing response path.
+- telemetry config remains optional and safe to disable;
+- request error handling does not depend on a service-specific support proxy;
+- future infra integration can be added without changing the user-facing error path.
 
-- [ ] **Step 2: Implement error reporting proxy integration**
+- [ ] **Step 2: Remove service-specific support-proxy coupling**
 
 Requirements:
-- send structured error payloads to internal `mptools` proxy only;
-- never expose the underlying internal service topology to the client;
-- include portal identifiers, request context, trace/span IDs when available;
-- redact tokens, secrets, raw auth payloads, and sensitive file contents.
+- keep `OpenTelemetry` bootstrap based on OTLP env vars only;
+- do not introduce app-level HTTP calls to internal support services;
+- keep handler error responses stable if telemetry is unavailable.
 
-- [ ] **Step 3: Define support payload contract**
-
-Document minimum payload fields:
-- service name;
-- environment;
-- portal/member/domain;
-- request handler;
-- error class/message;
-- traceback hash/full traceback policy;
-- trace ID / span ID;
-- optional debug profile state.
-
-- [ ] **Step 4: Verify safe degradation**
+- [ ] **Step 3: Verify safe degradation**
 
 Run targeted tests and confirm:
-- if `mptools` is down, API still returns the original JSON error response;
-- telemetry and support reporting can coexist.
+- if telemetry is absent or collector is unavailable, API still returns the original JSON error response;
+- telemetry wiring remains optional and does not block startup.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add backends/python/api/error_reporting.py backends/python/api/config.py backends/python/api/main/utils/decorators/log_errors.py README.md
-git commit -m "feat: add internal support ticket proxy for backend errors"
+git add backends/python/api/config.py backends/python/api/main/utils/decorators/log_errors.py README.md
+git commit -m "refactor: remove legacy support-proxy coupling from python backend"
 ```
 
 ## Chunk 6: Deployment, Security, And Release Gates
@@ -280,10 +266,9 @@ Checklist must explicitly cover:
 - [ ] **Step 2: Add release gates**
 
 Document mandatory gates:
-- Harbor image scan must have no `Critical` or `High` vulnerabilities;
-- image tag must be versioned and provided to cloud admins;
 - no release claim without MySQL-backed smoke verification;
-- support path for post-release incidents must rely on telemetry + `mptools`, not shell log access.
+- runtime notes must stay compatible with `VibeCode Infra`;
+- support path for post-release incidents must rely on telemetry + admin-provided logs, not shell log access.
 
 - [ ] **Step 3: Add upload/runtime operational constraints**
 
@@ -316,4 +301,4 @@ git commit -m "docs: add python production deployment and release gates"
   - `Nginx -> Gunicorn -> Django` for HTTP requests and file uploads.
   - `Django -> Celery -> RabbitMQ -> Celery worker` for background importer execution.
 - Production readiness is not complete until the Python path is verified against external `MySQL`, not just local postgres.
-- Because cloud admins do not provide direct application logs, OTel + Grafana + `mptools` reporting are operational requirements, not optional nice-to-haves.
+- Because cloud admins do not provide direct application logs, OTel + Grafana readiness are operational requirements, not optional nice-to-haves.

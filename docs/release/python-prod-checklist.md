@@ -1,4 +1,4 @@
-# Python Production Release Checklist
+# Python Production Readiness Checklist
 
 ## Runtime
 
@@ -7,6 +7,7 @@
 - [ ] HTTP traffic goes through `Nginx -> Gunicorn -> Django`.
 - [ ] Long-running importer jobs go through `Django -> Celery -> RabbitMQ -> Celery worker`.
 - [ ] `DJANGO_DEBUG=false` in production.
+- [ ] OpenTelemetry export is configured through standard OTLP variables.
 
 ## MySQL Smoke-Check
 
@@ -29,20 +30,18 @@ docker-compose --env-file .env run --rm api-python python manage.py test tests.t
 
 ## Observability And Support
 
-- [ ] OpenTelemetry export is configured for production.
 - [ ] Direct application log access is not required for incident handling.
-- [ ] Support flow relies on telemetry and internal reporting integrations.
+- [ ] Support flow relies on telemetry and admin-provided logs, not app-local shell access.
 - [ ] Team understands that после публикации прямого доступа к логам нет и логи нужно запрашивать у администраторов.
 
-## Harbor Release Gates
+## VibeCode Infra Readiness
 
-- [ ] Harbor image scan completed for the exact release tag.
-- [ ] There are no `Critical` vulnerabilities.
-- [ ] There are no `High` vulnerabilities.
-- [ ] Release tag is documented and handed off to cloud administrators.
+- [ ] Deployment package stays compatible with future `VibeCode Infra`.
+- [ ] Product entrypoint contract remains compatible with infra-managed port `3000`.
+- [ ] Deployment notes do not depend on legacy support-proxy routing.
+- [ ] Release docs can be handed to infra admins together with env examples and runtime dependencies.
 
 ## Deployment Handoff
 
-- [ ] Cloud admins received the image tag.
-- [ ] Cloud admins received required environment variables for MySQL, RabbitMQ, and Nginx-facing app URL.
+- [ ] Infra/cloud admins received required environment variables for MySQL, RabbitMQ, OTLP, and Nginx-facing app URL.
 - [ ] Migration order and rollback expectations are documented.

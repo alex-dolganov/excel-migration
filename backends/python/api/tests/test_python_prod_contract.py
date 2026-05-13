@@ -36,6 +36,26 @@ class PythonProdContractTest(SimpleTestCase):
             self.assertEqual(config_module.config.db_type, "mysql")
             self.assertEqual(config_module.config.db_port, 3306)
             self.assertEqual(config_module.config.db_host, "mysql.example.internal")
+            self.assertEqual(
+                set(config_module.Config.__annotations__),
+                {
+                    "debug",
+                    "db_type",
+                    "db_name",
+                    "db_user",
+                    "db_password",
+                    "db_host",
+                    "db_port",
+                    "cloudpub_token",
+                    "jwt_secret",
+                    "jwt_algorithm",
+                    "client_id",
+                    "client_secret",
+                    "app_base_url",
+                    "otel_endpoint",
+                    "otel_service_name",
+                },
+            )
 
         import config as config_module
         importlib.reload(config_module)
@@ -63,3 +83,9 @@ class PythonProdContractTest(SimpleTestCase):
 
         self.assertIn('CMD ["sh", "./scripts/start-production.sh"]', dockerfile_source)
         self.assertNotIn('createsuperuser --noinput || true \\\n  && gunicorn', dockerfile_source)
+
+    def test_python_runtime_no_longer_depends_on_legacy_support_reporting(self):
+        self.assertFalse((API_ROOT / "error_reporting.py").exists())
+
+        log_errors_source = (API_ROOT / "main/utils/decorators/log_errors.py").read_text(encoding="utf-8")
+        self.assertNotIn("report_error", log_errors_source)

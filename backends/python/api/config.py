@@ -31,6 +31,10 @@ class Config:
     # VIRTUAL_HOST
     app_base_url: str
 
+    # OpenTelemetry (optional)
+    otel_endpoint: str
+    otel_service_name: str
+
 
 def load_config() -> Config:
     build_target = env.str("BUILD_TARGET", "dev")  # dev or production
@@ -50,7 +54,9 @@ def load_config() -> Config:
         jwt_algorithm=env.str("JWT_ALGORITHM", "HS256"),
         client_id=env.str("CLIENT_ID", "client_id"),
         client_secret=env.str("CLIENT_SECRET", "client_secret"),
-        app_base_url=env.str("VIRTUAL_HOST", "app_base_url")
+        app_base_url=env.str("VIRTUAL_HOST", "app_base_url"),
+        otel_endpoint=env.str("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+        otel_service_name=env.str("OTEL_SERVICE_NAME", "excel-migration-api"),
     )
 
 
