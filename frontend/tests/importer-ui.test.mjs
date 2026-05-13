@@ -31,6 +31,7 @@ import {
   buildDedupWeakeningNotice,
   buildImportRunProblemGroups,
   buildImportRunRows,
+  buildImportRunSummaryFromSessionSnapshot,
   buildImportRunStatusFilters,
   buildImportRunRetryState,
   buildLinkedImportRunSummary,
@@ -1507,6 +1508,75 @@ test('builds recent session rows for import history panel', () => {
       updatedAtLabel: '05.05.2026 18:10',
     },
   ])
+})
+
+test('builds import run summary from session snapshot when aggregate counters are missing', () => {
+  assert.deepEqual(buildImportRunSummaryFromSessionSnapshot({
+    id: 'session-contacts-1',
+    status: 'completed',
+    processed_rows: 2,
+    successful_rows: 2,
+    failed_rows: 0,
+    summary: {
+      import_run: {
+        results: [
+          { row_number: 2, status: 'created', record_id: 501 },
+          { row_number: 3, status: 'created', record_id: 502 },
+        ],
+      },
+    },
+  }), {
+    session_id: 'session-contacts-1',
+    status: 'completed',
+    retried_rows: 0,
+    retry_result: null,
+    checked_rows: 2,
+    created_rows: 2,
+    updated_rows: 0,
+    failed_rows: 0,
+    skipped_rows: 0,
+    cancelled: false,
+    cancelled_rows: 0,
+    remaining_rows: 0,
+    created_ids: [501, 502],
+    updated_ids: [],
+    results: [
+      { row_number: 2, status: 'created', record_id: 501 },
+      { row_number: 3, status: 'created', record_id: 502 },
+    ],
+  })
+})
+
+test('builds import run summary from top-level session counters when import_run is absent', () => {
+  assert.deepEqual(buildImportRunSummaryFromSessionSnapshot({
+    id: 'session-contacts-2',
+    status: 'completed',
+    processed_rows: 2,
+    successful_rows: 2,
+    failed_rows: 0,
+    summary: {
+      job: {
+        mode: 'run',
+        state: 'completed',
+      },
+    },
+  }), {
+    session_id: 'session-contacts-2',
+    status: 'completed',
+    retried_rows: 0,
+    retry_result: null,
+    checked_rows: 2,
+    created_rows: 2,
+    updated_rows: 0,
+    failed_rows: 0,
+    skipped_rows: 0,
+    cancelled: false,
+    cancelled_rows: 0,
+    remaining_rows: 0,
+    created_ids: [],
+    updated_ids: [],
+    results: [],
+  })
 })
 
 test('builds collapsed state for recent import history panel', () => {

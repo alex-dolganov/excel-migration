@@ -1,4 +1,5 @@
 import csv
+import os
 import re
 from io import StringIO, TextIOWrapper
 from xml.etree import ElementTree
@@ -41,6 +42,35 @@ from .services.validation import build_validation_result
 XLSX_MAIN_NS = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 XLSX_REL_NS = {"rel": "http://schemas.openxmlformats.org/package/2006/relationships"}
 CELL_REF_RE = re.compile(r"([A-Z]+)")
+
+_ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+_XLSX_MAGIC = b"PK\x03\x04"          # ZIP / OOXML
+_XLS_MAGIC  = b"\xd0\xcf\x11\xe0"    # OLE2 Compound Document
+_MAX_UPLOAD_FILENAME_LENGTH = 200
+
+
+def _validate_and_sanitize_upload(upload) -> str:
+    """Validate file extension + magic bytes; return sanitized filename. Raises ValueError."""
+    raw_name = str(upload.name or "").strip()
+    safe_name = os.path.basename(raw_name.replace("\\", "/"))
+    if not safe_name:
+        raise ValueError("Имя файла не может быть пустым")
+    if len(safe_name) > _MAX_UPLOAD_FILENAME_LENGTH:
+        safe_name = safe_name[-_MAX_UPLOAD_FILENAME_LENGTH:]
+
+    ext = os.path.splitext(safe_name)[1].lower()
+    if ext not in _ALLOWED_UPLOAD_EXTENSIONS:
+        allowed = ", ".join(sorted(_ALLOWED_UPLOAD_EXTENSIONS))
+        raise ValueError(f"Недопустимый формат файла '{ext}'. Разрешены: {allowed}")
+
+    header = upload.read(4)
+    upload.seek(0)
+    if ext == ".xlsx" and not header.startswith(_XLSX_MAGIC):
+        raise ValueError("Файл не является корректным XLSX (неверная сигнатура файла)")
+    if ext == ".xls" and not header.startswith(_XLS_MAGIC):
+        raise ValueError("Файл не является корректным XLS (неверная сигнатура файла)")
+
+    return safe_name
 IMPORT_RUN_FAILED_STATUSES = {"failed", "skipped"}
 IMPORT_RUN_RETRYABLE_STATUSES = {"failed", "skipped", "cancelled"}
 IMPORT_RUN_SKIPPED_STATUSES = {"skipped", "skipped_duplicate"}
@@ -72,6 +102,7 @@ def serialize_session(session: ImportSession) -> dict:
         "processed_rows": session.processed_rows,
         "successful_rows": session.successful_rows,
         "failed_rows": session.failed_rows,
+        "total_rows": session.total_rows,
         "summary": session.summary,
         "created_at": session.created_at.isoformat(),
         "updated_at": session.updated_at.isoformat(),
@@ -364,19 +395,22 @@ def is_session_cancel_requested(session_id) -> bool:
 def build_import_report_csv(import_run: dict) -> str:
     csv_buffer = StringIO()
     csv_writer = csv.writer(csv_buffer)
-    csv_writer.writerow(["row_number", "status", "status_label", "record_id", "error"])
+    csv_writer.writerow(["row_number", "status", "status_label", "record_id", "updated_fields", "error"])
 
     for item in import_run.get("results", []) if isinstance(import_run, dict) else []:
         if not isinstance(item, dict):
             continue
 
         status = str(item.get("status") or "").strip()
+        updated_fields = item.get("updated_fields")
+        updated_fields_str = ", ".join(updated_fields) if isinstance(updated_fields, list) else ""
         csv_writer.writerow(
             [
                 item.get("row_number", ""),
                 status,
                 IMPORT_RUN_STATUS_LABELS.get(status, status),
                 item.get("record_id", ""),
+                updated_fields_str,
                 str(item.get("error") or "").strip(),
             ]
         )
@@ -1533,11 +1567,22 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
 
     session.status = ImportSession.Status.RUNNING
     session.last_error = ""
-    session.save(update_fields=["status", "last_error", "updated_at"])
+    session.processed_rows = 0
+    session.successful_rows = 0
+    session.failed_rows = 0
+    session.save(update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+
+    def _save_progress(*, checked_rows, created_rows, updated_rows, failed_rows):
+        session.processed_rows = checked_rows
+        session.successful_rows = created_rows + updated_rows
+        session.failed_rows = failed_rows
+        session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
 
     try:
         fields = fetch_entity_fields(account, session.entity_type)
         _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+        session.total_rows = sum(1 for rn in row_numbers if rn >= session.data_start_row)
+        session.save(update_fields=["total_rows", "updated_at"])
         import_result = execute_import(
             account=account,
             entity_type=session.entity_type,
@@ -1552,6 +1597,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
             should_cancel=lambda: is_session_cancel_requested(session.id),
             default_field_values=task_default_field_values,
             per_row_decisions=normalized_per_row_decisions,
+            progress_callback=_save_progress,
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
@@ -1740,7 +1786,17 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
 
     session.status = ImportSession.Status.RUNNING
     session.last_error = ""
-    session.save(update_fields=["status", "last_error", "updated_at"])
+    session.total_rows = len(retry_row_numbers)
+    session.processed_rows = 0
+    session.successful_rows = 0
+    session.failed_rows = 0
+    session.save(update_fields=["status", "last_error", "total_rows", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+
+    def _save_progress(*, checked_rows, created_rows, updated_rows, failed_rows):
+        session.processed_rows = checked_rows
+        session.successful_rows = created_rows + updated_rows
+        session.failed_rows = failed_rows
+        session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
 
     try:
         fields = fetch_entity_fields(account, session.entity_type)
@@ -1770,6 +1826,7 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
             should_cancel=lambda: is_session_cancel_requested(session.id),
             default_field_values=task_default_field_values,
             per_row_decisions=normalize_per_row_decisions(import_settings.get("per_row_decisions")),
+            progress_callback=_save_progress,
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
@@ -1899,8 +1956,13 @@ def import_session_upload(request: AuthorizedRequest, session_id):
     if upload is None:
         return JsonResponse({"error": "File is required"}, status=400)
 
-    session.stored_file.save(upload.name, upload, save=False)
-    session.original_filename = upload.name
+    try:
+        safe_filename = _validate_and_sanitize_upload(upload)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    session.stored_file.save(safe_filename, upload, save=False)
+    session.original_filename = safe_filename
     session.file_size_bytes = upload.size
     session.status = ImportSession.Status.UPLOADED
     session.last_error = ""
@@ -2056,3 +2118,155 @@ def import_roles(request: AuthorizedRequest):
     )
 
     return JsonResponse({"item": serialize_user_role(role_item)})
+
+
+@xframe_options_exempt
+@csrf_exempt
+@require_http_methods(["POST"])
+@log_errors("crm_filter_preview")
+@auth_required
+def crm_filter_preview(request: AuthorizedRequest):
+    from .services.bulk_attach import fetch_crm_entities_page, SUPPORTED_ENTITY_TYPES, _extract_entity_title
+
+    account = request.bitrix24_account
+    if not has_permission(account, "sessions.create"):
+        return permission_denied_response()
+
+    import json
+    try:
+        payload = json.loads(request.body)
+    except Exception:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    entity_type = str(payload.get("entity_type") or "").strip()
+    if entity_type not in SUPPORTED_ENTITY_TYPES:
+        return JsonResponse({"error": f"Unsupported entity type: {entity_type}"}, status=400)
+
+    filter_params = payload.get("filter") or {}
+    if not isinstance(filter_params, dict):
+        filter_params = {}
+
+    try:
+        page = fetch_crm_entities_page(account, entity_type, filter_params, start=0)
+    except Exception as error:
+        return JsonResponse({"error": str(error)}, status=500)
+
+    sample = []
+    for item in page["items"][:10]:
+        if isinstance(item, dict):
+            raw_id = item.get("ID") or item.get("id")
+            sample.append({
+                "id": int(raw_id) if raw_id is not None else None,
+                "title": _extract_entity_title(entity_type, item),
+            })
+
+    return JsonResponse({
+        "total": page["total"],
+        "has_more": page["next"] is not None,
+        "sample": sample,
+    })
+
+
+@xframe_options_exempt
+@csrf_exempt
+@require_http_methods(["POST"])
+@log_errors("bulk_attach_session_create")
+@auth_required
+def bulk_attach_session_create(request: AuthorizedRequest):
+    account = request.bitrix24_account
+    if not has_permission(account, "sessions.create"):
+        return permission_denied_response()
+
+    import json
+    try:
+        payload = json.loads(request.body)
+    except Exception:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    from .services.bulk_attach import SUPPORTED_ENTITY_TYPES, CRM_FILES_ENTITY_TYPES
+
+    entity_type = str(payload.get("entity_type") or "").strip()
+    if entity_type not in SUPPORTED_ENTITY_TYPES:
+        return JsonResponse({"error": f"Unsupported entity type: {entity_type}"}, status=400)
+
+    file_url = str(payload.get("file_url") or "").strip()
+    if not file_url:
+        return JsonResponse({"error": "file_url is required"}, status=400)
+
+    field_id = str(payload.get("field_id") or "").strip()
+    if not field_id:
+        return JsonResponse({"error": "field_id is required"}, status=400)
+
+    filter_params = payload.get("filter") or {}
+    if not isinstance(filter_params, dict):
+        filter_params = {}
+
+    file_name = str(payload.get("file_name") or "").strip()
+
+    portal_member_id = int(getattr(account, "portal_member_id", 0) or 0)
+    portal_domain = str(getattr(account, "portal_domain", "") or "")
+
+    session = ImportSession.objects.create(
+        portal_member_id=portal_member_id,
+        portal_domain=portal_domain,
+        entity_type=CRM_FILES_ENTITY_TYPES[entity_type],
+        source_format="bulk_attach",
+        status=ImportSession.Status.DRAFT,
+        summary={
+            "bulk_attach": {
+                "entity_type": entity_type,
+                "filter": filter_params,
+                "file_url": file_url,
+                "field_id": field_id,
+                "file_name": file_name,
+            }
+        },
+    )
+
+    return JsonResponse({"item": serialize_session(session)}, status=201)
+
+
+@xframe_options_exempt
+@csrf_exempt
+@require_http_methods(["POST"])
+@log_errors("bulk_attach_session_run")
+@auth_required
+def bulk_attach_session_run(request: AuthorizedRequest, session_id):
+    account = request.bitrix24_account
+    portal_member_id = getattr(account, "member_id", "")
+    portal_domain = getattr(account, "domain_url", "")
+
+    session = load_portal_session(portal_member_id, portal_domain, session_id)
+    if session is None:
+        return JsonResponse({"error": "Session not found"}, status=404)
+
+    if not has_permission(account, "sessions.run"):
+        return permission_denied_response()
+
+    if session.status not in (ImportSession.Status.DRAFT, ImportSession.Status.FAILED):
+        return JsonResponse({"error": f"Session cannot be run in status: {session.status}"}, status=400)
+
+    if (session.summary or {}).get("bulk_attach") is None:
+        return JsonResponse({"error": "Session is not a bulk attach session"}, status=400)
+
+    from .services.bulk_attach import execute_bulk_attach
+
+    session.status = ImportSession.Status.RUNNING
+    session.last_error = ""
+    session.save(update_fields=["status", "last_error", "updated_at"])
+
+    try:
+        result = execute_bulk_attach(session=session, account=account)
+    except Exception as error:
+        session.refresh_from_db()
+        session.status = ImportSession.Status.FAILED
+        session.last_error = str(error)
+        session.save(update_fields=["status", "last_error", "updated_at"])
+        return JsonResponse({"error": str(error)}, status=500)
+
+    session.refresh_from_db()
+    if session.status != ImportSession.Status.CANCELLED:
+        session.status = ImportSession.Status.COMPLETED
+        session.save(update_fields=["status", "updated_at"])
+
+    return JsonResponse({"item": serialize_session(session), "result": result})

@@ -321,6 +321,39 @@ export const useApiStore = defineStore(
       }
     }
 
+    const crmFilterPreview = async (data: {
+      entity_type: string
+      filter: Record<string, any>
+    }): Promise<{ total: number, has_more: boolean, sample: { id: number, title: string }[] }> => {
+      return await $api('/api/crm-filter-preview', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenJWT.value}` },
+        body: JSON.stringify(data),
+      })
+    }
+
+    const createBulkAttachSession = async (data: {
+      entity_type: string
+      filter: Record<string, any>
+      file_url: string
+      field_id: string
+      file_name?: string
+    }): Promise<{ item: Record<string, any> }> => {
+      return await $api('/api/bulk-attach-sessions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenJWT.value}` },
+        body: JSON.stringify(data),
+      })
+    }
+
+    const runBulkAttachSession = async (sessionId: string): Promise<{ item: Record<string, any>, result: Record<string, any> }> => {
+      return await $api(`/api/bulk-attach-sessions/${sessionId}/run`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenJWT.value}` },
+        body: JSON.stringify({}),
+      })
+    }
+
     const getImportDepartments = async (): Promise<{ items: { id: string, name: string, parent_id: string | null }[] }> => {
       return await $api('/api/import-departments', {
         headers: {
@@ -431,6 +464,9 @@ export const useApiStore = defineStore(
       downloadImportSessionReportCsv,
       downloadImportExampleTemplateXlsx,
       getImportDepartments,
+      crmFilterPreview,
+      createBulkAttachSession,
+      runBulkAttachSession,
     }
   }
 )

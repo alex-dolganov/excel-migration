@@ -1146,6 +1146,134 @@ function buildLinkedSummaryItem(sectionId, record, index) {
   }
 }
 
+function buildDerivedImportRunSummary(results) {
+  const safeResults = Array.isArray(results) ? results : []
+  const createdIds = []
+  const updatedIds = []
+  let checkedRows = 0
+  let createdRows = 0
+  let updatedRows = 0
+  let failedRows = 0
+  let skippedRows = 0
+  let cancelledRows = 0
+
+  safeResults.forEach((item) => {
+    const status = String(item?.status || '').trim()
+    const recordId = item?.record_id
+
+    if (status !== 'cancelled') {
+      checkedRows += 1
+    }
+
+    if (status === 'created') {
+      createdRows += 1
+      if (recordId !== undefined && recordId !== null && recordId !== '') {
+        createdIds.push(recordId)
+      }
+    } else if (status === 'updated') {
+      updatedRows += 1
+      if (recordId !== undefined && recordId !== null && recordId !== '') {
+        updatedIds.push(recordId)
+      }
+    } else if (status === 'cancelled') {
+      cancelledRows += 1
+    }
+
+    if (['failed', 'skipped'].includes(status)) {
+      failedRows += 1
+    }
+
+    if (['skipped', 'skipped_duplicate'].includes(status)) {
+      skippedRows += 1
+    }
+  })
+
+  return {
+    checked_rows: checkedRows,
+    created_rows: createdRows,
+    updated_rows: updatedRows,
+    failed_rows: failedRows,
+    skipped_rows: skippedRows,
+    cancelled: cancelledRows > 0,
+    cancelled_rows: cancelledRows,
+    remaining_rows: cancelledRows,
+    created_ids: createdIds,
+    updated_ids: updatedIds,
+  }
+}
+
+function hasOwnImportRunField(importRun, fieldName) {
+  return Boolean(importRun) && Object.prototype.hasOwnProperty.call(importRun, fieldName)
+}
+
+export function buildImportRunSummaryFromSessionSnapshot(snapshot) {
+  const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
+  const rawImportRun = summary?.import_run
+  const importRun = rawImportRun && typeof rawImportRun === 'object' ? rawImportRun : {}
+  const results = Array.isArray(importRun.results) ? importRun.results : []
+  const derivedSummary = buildDerivedImportRunSummary(results)
+  const retryRuns = Array.isArray(summary?.retry_runs) ? summary.retry_runs : []
+  const latestRetryRun = retryRuns.length > 0 && retryRuns[retryRuns.length - 1] && typeof retryRuns[retryRuns.length - 1] === 'object'
+    ? retryRuns[retryRuns.length - 1]
+    : null
+  const processedRows = Number(snapshot?.processed_rows || 0)
+  const successfulRows = Number(snapshot?.successful_rows || 0)
+  const failedRows = Number(snapshot?.failed_rows || 0)
+  const hasSessionLevelCounters = processedRows > 0 || successfulRows > 0 || failedRows > 0
+
+  if (!rawImportRun && !hasSessionLevelCounters) {
+    return null
+  }
+
+  const updatedRows = hasOwnImportRunField(importRun, 'updated_rows')
+    ? Number(importRun.updated_rows || 0)
+    : results.length > 0
+      ? derivedSummary.updated_rows
+      : 0
+  const createdRowsFallback = Math.max(0, successfulRows - updatedRows)
+
+  return {
+    ...importRun,
+    session_id: String(snapshot?.session_id || snapshot?.id || ''),
+    status: String(snapshot?.status || ''),
+    retried_rows: Array.isArray(latestRetryRun?.results) ? latestRetryRun.results.length : 0,
+    retry_result: latestRetryRun,
+    checked_rows: hasOwnImportRunField(importRun, 'checked_rows')
+      ? Number(importRun.checked_rows || 0)
+      : results.length > 0
+        ? derivedSummary.checked_rows
+        : processedRows,
+    created_rows: hasOwnImportRunField(importRun, 'created_rows')
+      ? Number(importRun.created_rows || 0)
+      : results.length > 0
+        ? derivedSummary.created_rows
+        : createdRowsFallback,
+    updated_rows: updatedRows,
+    failed_rows: hasOwnImportRunField(importRun, 'failed_rows')
+      ? Number(importRun.failed_rows || 0)
+      : results.length > 0
+        ? derivedSummary.failed_rows
+        : failedRows,
+    skipped_rows: hasOwnImportRunField(importRun, 'skipped_rows')
+      ? Number(importRun.skipped_rows || 0)
+      : results.length > 0
+        ? derivedSummary.skipped_rows
+        : 0,
+    cancelled: hasOwnImportRunField(importRun, 'cancelled')
+      ? Boolean(importRun.cancelled)
+      : derivedSummary.cancelled,
+    cancelled_rows: hasOwnImportRunField(importRun, 'cancelled_rows')
+      ? Number(importRun.cancelled_rows || 0)
+      : derivedSummary.cancelled_rows,
+    remaining_rows: hasOwnImportRunField(importRun, 'remaining_rows')
+      ? Number(importRun.remaining_rows || 0)
+      : derivedSummary.remaining_rows,
+    created_ids: Array.isArray(importRun.created_ids) ? importRun.created_ids : derivedSummary.created_ids,
+    updated_ids: Array.isArray(importRun.updated_ids) ? importRun.updated_ids : derivedSummary.updated_ids,
+    results,
+  }
+}
+
 export function buildLinkedImportRunSummary(importRunData, { pageSize = 5, maxPages = 3 } = {}) {
   const cappedPageSize = Math.max(1, Number(pageSize || 0))
   const cappedMaxPages = Math.max(1, Number(maxPages || 0))

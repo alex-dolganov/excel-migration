@@ -13,6 +13,7 @@ import {
   buildFieldTypeLabel,
   buildImportRunProblemGroups,
   buildImportRunRows,
+  buildImportRunSummaryFromSessionSnapshot,
   buildLinkedImportRunSummary,
   buildImportRunStatusFilters,
   buildImportRunRetryState,
@@ -1751,24 +1752,7 @@ function syncSessionSnapshot(snapshot: Record<string, any> | null | undefined) {
 }
 
 function buildImportRunFromSnapshot(snapshot: Record<string, any> | null | undefined) {
-  const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
-  const importRun = summary?.import_run
-  if (!importRun || typeof importRun !== 'object') {
-    return null
-  }
-
-  const retryRuns = Array.isArray(summary?.retry_runs) ? summary.retry_runs : []
-  const latestRetryRun = retryRuns.length > 0 && retryRuns[retryRuns.length - 1] && typeof retryRuns[retryRuns.length - 1] === 'object'
-    ? retryRuns[retryRuns.length - 1]
-    : null
-
-  return {
-    session_id: String(snapshot?.session_id || snapshot?.id || session.value?.id || ''),
-    status: String(snapshot?.status || ''),
-    retried_rows: Array.isArray(latestRetryRun?.results) ? latestRetryRun.results.length : 0,
-    retry_result: latestRetryRun,
-    ...importRun,
-  }
+  return buildImportRunSummaryFromSessionSnapshot(snapshot)
 }
 
 async function waitForImportExecutionResult(sessionId: string) {
@@ -3025,6 +3009,29 @@ onMounted(loadHistory)
                     :disabled="!canCancelActiveImport"
                     @click="cancelActiveImport"
                   />
+                </div>
+              </div>
+
+              <div
+                v-if="['run', 'retry'].includes(String(busyAction || ''))"
+                class="mb-4 rounded-[18px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-4"
+              >
+                <div class="mb-2 flex items-center justify-between text-sm">
+                  <span class="font-semibold text-[#2e6bd9]">Выполнение импорта</span>
+                  <span class="text-[#6f8194]">
+                    {{ session?.processed_rows ?? 0 }} из {{ session?.total_rows ?? '...' }} строк
+                  </span>
+                </div>
+                <div class="mb-3 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
+                  <div
+                    class="h-2 rounded-full bg-[#2e6bd9] transition-all duration-500"
+                    :style="{ width: (session?.total_rows ? Math.min(100, Math.round(((session?.processed_rows ?? 0) / session.total_rows) * 100)) : 0) + '%' }"
+                  />
+                </div>
+                <div class="flex flex-wrap gap-4 text-sm text-[#5f7285]">
+                  <span>Обработано: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
+                  <span>Успешно: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
+                  <span>Ошибки: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
                 </div>
               </div>
 

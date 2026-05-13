@@ -1,6 +1,6 @@
 import time
 
-from b24pysdk.bitrix_api.requests import BitrixAPIRequest
+from b24pysdk.bitrix_api.requests import BitrixAPIBatchRequest, BitrixAPIRequest
 
 from .validation import (
     normalize_value,
@@ -40,8 +40,63 @@ BITRIX_MULTIFIELD_IDS = {"PHONE", "EMAIL", "WEB", "IM"}
 TASK_CHILD_ENTITY_TYPES = {"task_comment", "task_checklist_item"}
 
 BITRIX_ROW_DELAY = 0.5
+BITRIX_BATCH_DELAY = 0.5
+BATCH_SIZE = 50
+PROGRESS_SAVE_INTERVAL = 10
 _RATE_LIMIT_KEYWORDS = frozenset(["query_limit_exceeded", "too many requests", "rate limit", "overloaded", "429"])
 _RATE_LIMIT_RETRY_WAITS = [5, 15, 30]
+
+_CRM_BATCH_CREATE_METHODS = {
+    "lead": "crm.lead.add",
+    "contact": "crm.contact.add",
+    "company": "crm.company.add",
+    "deal": "crm.deal.add",
+}
+
+
+def _is_batch_eligible(entity_type: str, dedup_settings: dict) -> bool:
+    return entity_type in _CRM_BATCH_CREATE_METHODS and dedup_settings.get("strategy") == "create"
+
+
+def _flush_crm_batch(account, entity_type: str, pending_batch: list) -> tuple:
+    method = _CRM_BATCH_CREATE_METHODS[entity_type]
+    batch_requests = {
+        str(i): BitrixAPIRequest(
+            bitrix_token=account,
+            api_method=method,
+            params={"fields": payload},
+        )
+        for i, (_, payload) in enumerate(pending_batch)
+    }
+    batch_response = BitrixAPIBatchRequest(
+        bitrix_token=account,
+        bitrix_api_requests=batch_requests,
+        halt=False,
+    )
+    batch_result = batch_response.result
+    raw_results = batch_result.result if isinstance(batch_result.result, dict) else {}
+    raw_errors = batch_result.result_error if isinstance(batch_result.result_error, dict) else {}
+
+    flush_results = []
+    created_count = 0
+    failed_count = 0
+    created_ids = []
+
+    for i, (row_number, _) in enumerate(pending_batch):
+        key = str(i)
+        if key in raw_errors:
+            failed_count += 1
+            flush_results.append({"row_number": row_number, "status": "failed", "error": str(raw_errors[key])})
+        else:
+            record_id = normalize_record_id(raw_results.get(key))
+            created_count += 1
+            result_item = {"row_number": row_number, "status": "created"}
+            if record_id is not None:
+                created_ids.append(record_id)
+                result_item["record_id"] = record_id
+            flush_results.append(result_item)
+
+    return flush_results, created_count, failed_count, created_ids
 
 
 def _is_rate_limit_error(error) -> bool:
@@ -1209,6 +1264,7 @@ def execute_linked_import(
     dedup_settings: dict,
     should_cancel=None,
     default_field_values: dict | None = None,
+    progress_callback=None,
 ) -> dict:
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
     user_resolver = BitrixUserResolver(account)
@@ -1254,6 +1310,14 @@ def execute_linked_import(
 
         checked_rows += 1
         time.sleep(BITRIX_ROW_DELAY)
+
+        if callable(progress_callback) and checked_rows % PROGRESS_SAVE_INTERVAL == 0:
+            progress_callback(
+                checked_rows=checked_rows,
+                created_rows=created_rows,
+                updated_rows=updated_rows,
+                failed_rows=failed_rows,
+            )
 
         if row_number in invalid_row_numbers:
             skipped_rows += 1
@@ -1573,6 +1637,7 @@ def execute_import(
     should_cancel=None,
     default_field_values: dict | None = None,
     per_row_decisions: dict | None = None,
+    progress_callback=None,
 ) -> dict:
     if is_linked_import_entity_type(entity_type):
         return execute_linked_import(
@@ -1587,6 +1652,7 @@ def execute_import(
             dedup_settings=normalize_linked_dedup_settings(dedup_settings),
             should_cancel=should_cancel,
             default_field_values=default_field_values,
+            progress_callback=progress_callback,
         )
 
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
@@ -1603,6 +1669,29 @@ def execute_import(
     updated_ids = []
     results = []
     was_cancelled = False
+    use_batch = _is_batch_eligible(entity_type, normalized_dedup_settings)
+    pending_batch: list = []
+
+    def _flush_pending_batch():
+        nonlocal created_rows, failed_rows
+        if not pending_batch:
+            return
+        time.sleep(BITRIX_BATCH_DELAY)
+        try:
+            batch_results, batch_created, batch_failed, batch_ids = _bitrix_retry(
+                lambda: _flush_crm_batch(account, entity_type, list(pending_batch))
+            )
+        except Exception as error:
+            for prow_number, _ in pending_batch:
+                failed_rows += 1
+                results.append({"row_number": prow_number, "status": "failed", "error": str(error)})
+            pending_batch.clear()
+            return
+        results.extend(batch_results)
+        created_rows += batch_created
+        failed_rows += batch_failed
+        created_ids.extend(batch_ids)
+        pending_batch.clear()
 
     for row_index, row_number in enumerate(row_numbers):
         if row_number < data_start_row:
@@ -1614,6 +1703,7 @@ def execute_import(
 
         if callable(should_cancel) and should_cancel():
             was_cancelled = True
+            _flush_pending_batch()
             for remaining_index in range(row_index, len(row_numbers)):
                 remaining_row_number = row_numbers[remaining_index]
                 if remaining_row_number < data_start_row:
@@ -1634,7 +1724,16 @@ def execute_import(
             break
 
         checked_rows += 1
-        time.sleep(BITRIX_ROW_DELAY)
+        if not use_batch:
+            time.sleep(BITRIX_ROW_DELAY)
+
+        if callable(progress_callback) and checked_rows % PROGRESS_SAVE_INTERVAL == 0:
+            progress_callback(
+                checked_rows=checked_rows,
+                created_rows=created_rows,
+                updated_rows=updated_rows,
+                failed_rows=failed_rows,
+            )
 
         if row_number in invalid_row_numbers:
             skipped_rows += 1
@@ -1661,6 +1760,19 @@ def execute_import(
         except Exception as error:
             failed_rows += 1
             results.append({"row_number": row_number, "status": "failed", "error": str(error)})
+            continue
+
+        if use_batch:
+            pending_batch.append((row_number, row_payload))
+            if len(pending_batch) >= BATCH_SIZE:
+                _flush_pending_batch()
+                if callable(progress_callback):
+                    progress_callback(
+                        checked_rows=checked_rows,
+                        created_rows=created_rows,
+                        updated_rows=updated_rows,
+                        failed_rows=failed_rows,
+                    )
             continue
 
         try:
@@ -1726,6 +1838,7 @@ def execute_import(
                         "row_number": row_number,
                         "status": "updated",
                         "record_id": existing_record_id,
+                        "updated_fields": list(row_payload.keys()),
                         **dedup_result_meta,
                     }
                 )
@@ -1753,6 +1866,7 @@ def execute_import(
                     "row_number": row_number,
                     "status": "updated",
                     "record_id": existing_record_id,
+                    "updated_fields": list(row_payload.keys()),
                     **dedup_result_meta,
                 }
             )
@@ -1781,6 +1895,8 @@ def execute_import(
             created_ids.append(record_id)
             result_item["record_id"] = record_id
         results.append(result_item)
+
+    _flush_pending_batch()
 
     return {
         "checked_rows": checked_rows,

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import sys
 from urllib.parse import urlparse
@@ -12,8 +13,8 @@ if config.db_type == "mysql":
 BASE_DIR = Path(__file__).resolve().parent
 
 SECRET_KEY = config.jwt_secret
-DEBUG = True
-ALLOWED_HOSTS = ["*"]
+DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
+ALLOWED_HOSTS = ["*"]  # narrowed below after VIRTUAL_HOST is parsed
 
 VIRTUAL_HOST = config.app_base_url
 
@@ -103,5 +104,9 @@ STATIC_URL = "api/static/"
 MEDIA_URL = "api/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# 50 MB file upload limit
+DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800
+FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
 
 CORS_ALLOW_ALL_ORIGINS = True
