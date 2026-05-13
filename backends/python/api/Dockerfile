@@ -30,7 +30,4 @@ COPY api/ .
 ENV DJANGO_ENV=production \
     PYTHONUNBUFFERED=1
 EXPOSE 8000
-CMD ["sh", "-c", "python manage.py makemigrations \
-  && python manage.py migrate --noinput \
-  && python manage.py createsuperuser --noinput || true \
-  && gunicorn wsgi:application --bind 0.0.0.0:8000 --timeout 600 --workers 2"]
+CMD ["sh", "./scripts/start-production.sh"]
