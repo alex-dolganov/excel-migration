@@ -35,3 +35,15 @@ test('deal placement page renders importer workbench instead of demo table', () 
   assert.equal(placementPageSource.includes('placement.crm_deal_detail_tab.action'), false)
   assert.equal(placementPageSource.includes('dataList = ref(['), false)
 })
+
+test('index page uses importer workbench as the single entry point without standalone bulk attach tab', () => {
+  const indexPageSource = readFileSync(
+    new URL('../app/pages/index.client.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(indexPageSource.includes('<ImporterWorkbench'), true)
+  assert.equal(indexPageSource.includes('<BulkAttachWizard'), false)
+  assert.equal(indexPageSource.includes("activeTab = ref('excel')"), false)
+  assert.equal(indexPageSource.includes("label: 'Массовый импорт файлов'"), false)
+})

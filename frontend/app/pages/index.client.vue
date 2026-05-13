@@ -10,8 +10,6 @@ useHead({
   title: t('page.index.seo.title')
 })
 
-const activeTab = ref('excel')
-
 // region Init ////
 const { $logger, initApp, processErrorGlobal } = useAppInit('IndexPage')
 const { $initializeB24Frame } = useNuxtApp()
@@ -95,22 +93,7 @@ onMounted(async () => {
       />
 
       <template v-if="isInit && !pageRenderError">
-        <div class="mb-4 flex gap-2 rounded-[14px] border border-[#e5ebf2] bg-white p-1.5 w-fit">
-          <button
-            v-for="tab in [{ id: 'excel', label: 'Excel-импорт' }, { id: 'bulk', label: 'Массовый импорт файлов' }]"
-            :key="tab.id"
-            type="button"
-            class="rounded-[10px] px-4 py-1.5 text-sm font-medium transition"
-            :class="activeTab === tab.id
-              ? 'bg-[#2e6bd9] text-white'
-              : 'text-[#5f7285] hover:bg-[#f0f4f8]'"
-            @click="activeTab = tab.id"
-          >
-            {{ tab.label }}
-          </button>
-        </div>
-        <ImporterWorkbench v-if="activeTab === 'excel'" />
-        <BulkAttachWizard v-if="activeTab === 'bulk'" />
+        <ImporterWorkbench />
       </template>
     </div>
   </div>
