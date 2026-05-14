@@ -116,6 +116,10 @@ class ImportExecutionApiTest(TestCase):
         shutil.rmtree(self.media_root, ignore_errors=True)
         super().tearDown()
 
+    def _strip_report_meta(self, results):
+        skip = {"report_date_time", "report_entity", "report_record_id", "report_title"}
+        return [{k: v for k, v in r.items() if k not in skip} for r in results]
+
     def create_account(
         self,
         *,
@@ -1035,8 +1039,9 @@ class ImportExecutionApiTest(TestCase):
             )
             self.assertEqual(validation_response.status_code, 200)
 
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_run_creates_only_rows_without_validation_issues(self, get_from_jwt_token):
+    def test_run_creates_only_rows_without_validation_issues(self, get_from_jwt_token, _batch):
         account = self.create_account()
         get_from_jwt_token.return_value = account
 
@@ -1063,7 +1068,7 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.json()["item"]["skipped_rows"], 1)
         self.assertEqual(response.json()["item"]["created_ids"], [501])
         self.assertEqual(
-            response.json()["item"]["results"],
+            self._strip_report_meta(response.json()["item"]["results"]),
             [
                 {
                     "row_number": 2,
@@ -1096,8 +1101,9 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(session.summary["import_run"]["created_rows"], 1)
         self.assertEqual(session.summary["import_run"]["skipped_rows"], 1)
 
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_run_continues_after_bitrix_error_and_records_failed_row(self, get_from_jwt_token):
+    def test_run_continues_after_bitrix_error_and_records_failed_row(self, get_from_jwt_token, _batch):
         account = self.create_account(fail_on_titles={"Bob"})
         get_from_jwt_token.return_value = account
 
@@ -1123,7 +1129,7 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.json()["item"]["skipped_rows"], 0)
         self.assertEqual(response.json()["item"]["created_ids"], [501])
         self.assertEqual(
-            response.json()["item"]["results"],
+            self._strip_report_meta(response.json()["item"]["results"]),
             [
                 {
                     "row_number": 2,
@@ -1440,9 +1446,10 @@ class ImportExecutionApiTest(TestCase):
         session.refresh_from_db()
         self.assertEqual(session.status, ImportSession.Status.CANCELLED)
 
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     @patch("importer.services.import_execution.create_entity_record")
-    def test_run_stops_when_session_was_cancelled_during_execution(self, create_entity_record, get_from_jwt_token):
+    def test_run_stops_when_session_was_cancelled_during_execution(self, create_entity_record, get_from_jwt_token, _batch):
         account = self.create_account()
         get_from_jwt_token.return_value = account
 
@@ -1482,7 +1489,7 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.json()["item"]["cancelled_rows"], 1)
         self.assertEqual(response.json()["item"]["remaining_rows"], 1)
         self.assertEqual(
-            response.json()["item"]["results"],
+            self._strip_report_meta(response.json()["item"]["results"]),
             [
                 {
                     "row_number": 2,
@@ -1506,8 +1513,9 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(session.summary["import_run"]["cancelled_rows"], 1)
         self.assertEqual(session.summary["import_run"]["remaining_rows"], 1)
 
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_retry_failed_rows_retries_only_unsuccessful_rows_and_merges_summary(self, get_from_jwt_token):
+    def test_retry_failed_rows_retries_only_unsuccessful_rows_and_merges_summary(self, get_from_jwt_token, _batch):
         first_account = self.create_account(fail_on_titles={"Bob"})
         get_from_jwt_token.return_value = first_account
 
@@ -1545,7 +1553,7 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(retry_response.json()["item"]["created_rows"], 2)
         self.assertEqual(retry_response.json()["item"]["failed_rows"], 0)
         self.assertEqual(
-            retry_response.json()["item"]["results"],
+            self._strip_report_meta(retry_response.json()["item"]["results"]),
             [
                 {
                     "row_number": 2,
@@ -1578,8 +1586,9 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(session.summary["import_run"]["failed_rows"], 0)
         self.assertEqual(len(session.summary["retry_runs"]), 1)
 
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_retry_failed_rows_returns_error_when_session_has_no_retryable_rows(self, get_from_jwt_token):
+    def test_retry_failed_rows_returns_error_when_session_has_no_retryable_rows(self, get_from_jwt_token, _batch):
         account = self.create_account()
         get_from_jwt_token.return_value = account
 
@@ -1654,8 +1663,9 @@ class ImportExecutionApiTest(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_run_formats_contact_phone_as_bitrix_multifield(self, get_from_jwt_token):
+    def test_run_formats_contact_phone_as_bitrix_multifield(self, get_from_jwt_token, _batch):
         account = self.create_contact_account()
         get_from_jwt_token.return_value = account
 
@@ -1758,7 +1768,7 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.json()["item"]["created_rows"], 0)
         self.assertEqual(response.json()["item"]["updated_rows"], 0)
         self.assertEqual(response.json()["item"]["skipped_rows"], 1)
-        self.assertEqual(response.json()["item"]["results"], [
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
             {
                 "row_number": 2,
                 "status": "skipped_duplicate",
@@ -1813,12 +1823,13 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.json()["item"]["created_rows"], 0)
         self.assertEqual(response.json()["item"]["updated_rows"], 1)
         self.assertEqual(response.json()["item"]["failed_rows"], 0)
-        self.assertEqual(response.json()["item"]["results"], [
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
             {
                 "row_number": 2,
                 "status": "updated",
                 "record_id": 902,
                 "duplicate_match_fields": ["PHONE"],
+                "updated_fields": ["TITLE", "EMAIL", "PHONE"],
             }
         ])
         self.assertEqual(account.created_fields, [])
@@ -1861,6 +1872,7 @@ class ImportExecutionApiTest(TestCase):
             "dedup": {
                 "strategy": "skip",
                 "fields": ["EMAIL", "PHONE"],
+                "condition": "all",
             },
         }
         session.save(update_fields=["import_settings", "updated_at"])
@@ -1876,7 +1888,7 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.json()["item"]["created_rows"], 1)
         self.assertEqual(response.json()["item"]["updated_rows"], 0)
         self.assertEqual(response.json()["item"]["skipped_rows"], 0)
-        self.assertEqual(response.json()["item"]["results"], [
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
             {
                 "row_number": 2,
                 "status": "created",
@@ -1925,7 +1937,7 @@ class ImportExecutionApiTest(TestCase):
         )
 
         self.assertEqual(response.status_code, 200, response.json())
-        self.assertEqual(response.json()["item"]["results"], [
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
             {
                 "row_number": 2,
                 "status": "skipped_duplicate",
@@ -2172,7 +2184,7 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.status_code, 200, response.json())
         self.assertEqual(response.json()["item"]["created_rows"], 1)
         self.assertEqual(response.json()["item"]["created_ids"], [])
-        self.assertEqual(response.json()["item"]["results"], [
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
             {
                 "row_number": 2,
                 "status": "created",
@@ -2250,7 +2262,7 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.status_code, 200, response.json())
         self.assertEqual(response.json()["item"]["created_rows"], 1)
         self.assertEqual(response.json()["item"]["created_ids"], [915])
-        self.assertEqual(response.json()["item"]["results"], [
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
             {
                 "row_number": 2,
                 "status": "created",
@@ -2674,3 +2686,110 @@ class ImportExecutionApiTest(TestCase):
                 "COMPANY_ID": 601,
             }
         ])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_linked_import_reuses_company_for_repeated_external_key(self, get_from_jwt_token):
+        account = self.create_linked_company_contact_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_linked_company_contact_session(
+            [
+                [
+                    "Внешний ключ",
+                    "Название компании",
+                    "Имя контакта",
+                    "Фамилия контакта",
+                ],
+                [
+                    "company_001",
+                    "ООО Альфа",
+                    "Алиса",
+                    "Иванова",
+                ],
+                [
+                    "company_001",
+                    "ООО Альфа",
+                    "Борис",
+                    "Петров",
+                ],
+            ]
+        )
+
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "COMPANY__EXTERNAL_KEY": {
+                        "source_header": "Внешний ключ",
+                        "column": "A",
+                    },
+                    "COMPANY__TITLE": {
+                        "source_header": "Название компании",
+                        "column": "B",
+                    },
+                    "CONTACT__NAME": {
+                        "source_header": "Имя контакта",
+                        "column": "C",
+                    },
+                    "CONTACT__LAST_NAME": {
+                        "source_header": "Фамилия контакта",
+                        "column": "D",
+                    },
+                },
+                "dedup": {
+                    "company": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                    "contact": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        validation_response = self.client.post(
+            reverse("importer:session-validate", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(validation_response.status_code, 200)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 2)
+        self.assertEqual(response.json()["item"]["created_ids"], [701, 702])
+
+        # Company must be created only once despite two rows sharing the same external key
+        self.assertEqual(len(account.company_created_fields), 1)
+        self.assertEqual(account.company_created_fields[0]["TITLE"], "ООО Альфа")
+
+        # Both contacts must be linked to the same company (id=601)
+        self.assertEqual(len(account.contact_created_fields), 2)
+        self.assertEqual(account.contact_created_fields[0]["NAME"], "Алиса")
+        self.assertEqual(account.contact_created_fields[0]["COMPANY_ID"], 601)
+        self.assertEqual(account.contact_created_fields[1]["NAME"], "Борис")
+        self.assertEqual(account.contact_created_fields[1]["COMPANY_ID"], 601)
+
+        results = response.json()["item"]["results"]
+        self.assertEqual(results[0]["linked_records"]["company"]["status"], "created")
+        self.assertEqual(results[0]["linked_records"]["company"]["id"], 601)
+        self.assertEqual(results[1]["linked_records"]["company"]["status"], "existing")
+        self.assertEqual(results[1]["linked_records"]["company"]["id"], 601)

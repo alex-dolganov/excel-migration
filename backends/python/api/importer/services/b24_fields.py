@@ -1048,7 +1048,19 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
                     }
                 )
 
-        return sorted(
+        virtual_fields = [
+            {
+                "id": "COMPANY__EXTERNAL_KEY",
+                "title": "Компания / Внешний ключ (XML_ID)",
+                "type": "string",
+                "required": False,
+                "multiple": False,
+                "is_custom": False,
+                "linked_entity": "company",
+                "linked_source_id": "EXTERNAL_KEY",
+            }
+        ]
+        return virtual_fields + sorted(
             linked_fields,
             key=lambda item: (
                 linked_entity_sort_order.get(str(item.get("linked_entity") or "").strip().lower(), len(linked_entity_sort_order)),

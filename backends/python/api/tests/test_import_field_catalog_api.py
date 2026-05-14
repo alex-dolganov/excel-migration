@@ -178,7 +178,7 @@ class ImportFieldCatalogApiTest(TestCase):
             [
                 {
                     "id": "TITLE",
-                    "title": "Task title",
+                    "title": "Название задачи",
                     "type": "string",
                     "required": True,
                     "multiple": False,
@@ -187,7 +187,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "DESCRIPTION",
-                    "title": "Description",
+                    "title": "Описание",
                     "type": "text",
                     "required": False,
                     "multiple": False,
@@ -196,16 +196,16 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "RESPONSIBLE_ID",
-                    "title": "Responsible user ID",
+                    "title": "Ответственный (ID)",
                     "type": "integer",
-                    "required": False,
+                    "required": True,
                     "multiple": False,
                     "is_custom": False,
                     "items": [],
                 },
                 {
                     "id": "ACCOMPLICES",
-                    "title": "Accomplice user IDs",
+                    "title": "Соисполнители (ID)",
                     "type": "integer",
                     "required": False,
                     "multiple": True,
@@ -214,7 +214,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "AUDITORS",
-                    "title": "Auditor user IDs",
+                    "title": "Наблюдатели (ID)",
                     "type": "integer",
                     "required": False,
                     "multiple": True,
@@ -223,7 +223,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "CREATED_BY",
-                    "title": "Creator user ID",
+                    "title": "Постановщик (ID)",
                     "type": "integer",
                     "required": False,
                     "multiple": False,
@@ -232,7 +232,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "GROUP_ID",
-                    "title": "Project group ID",
+                    "title": "Рабочая группа (ID)",
                     "type": "integer",
                     "required": False,
                     "multiple": False,
@@ -241,7 +241,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "PRIORITY",
-                    "title": "Priority",
+                    "title": "Приоритет",
                     "type": "integer",
                     "required": False,
                     "multiple": False,
@@ -250,7 +250,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "TAGS",
-                    "title": "Tags",
+                    "title": "Теги",
                     "type": "string",
                     "required": False,
                     "multiple": True,
@@ -259,7 +259,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "DEADLINE",
-                    "title": "Deadline",
+                    "title": "Крайний срок",
                     "type": "datetime",
                     "required": False,
                     "multiple": False,
@@ -268,7 +268,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "START_DATE_PLAN",
-                    "title": "Planned start date",
+                    "title": "Плановая дата начала",
                     "type": "datetime",
                     "required": False,
                     "multiple": False,
@@ -277,7 +277,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "END_DATE_PLAN",
-                    "title": "Planned end date",
+                    "title": "Плановая дата завершения",
                     "type": "datetime",
                     "required": False,
                     "multiple": False,
@@ -286,7 +286,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "XML_ID",
-                    "title": "External ID",
+                    "title": "Внешний ID",
                     "type": "string",
                     "required": False,
                     "multiple": False,
@@ -295,7 +295,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "PARENT_ID",
-                    "title": "Parent task ID",
+                    "title": "ID родительской задачи",
                     "type": "integer",
                     "required": False,
                     "multiple": False,
@@ -468,8 +468,8 @@ class ImportFieldCatalogApiTest(TestCase):
             [
                 {
                     "id": "TASK_ID",
-                    "title": "Task ID",
-                    "type": "integer",
+                    "title": "ID задачи",
+                    "type": "string",
                     "required": True,
                     "multiple": False,
                     "is_custom": False,
@@ -477,7 +477,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "TITLE",
-                    "title": "Checklist item title",
+                    "title": "Пункт чек-листа",
                     "type": "string",
                     "required": True,
                     "multiple": False,
@@ -486,7 +486,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "IS_COMPLETE",
-                    "title": "Is complete",
+                    "title": "Выполнено",
                     "type": "boolean",
                     "required": False,
                     "multiple": False,
@@ -518,8 +518,8 @@ class ImportFieldCatalogApiTest(TestCase):
             [
                 {
                     "id": "TASK_ID",
-                    "title": "Task ID",
-                    "type": "integer",
+                    "title": "ID задачи",
+                    "type": "string",
                     "required": True,
                     "multiple": False,
                     "is_custom": False,
@@ -527,7 +527,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "FILE_URL",
-                    "title": "File URL",
+                    "title": "Ссылка на файл",
                     "type": "string",
                     "required": True,
                     "multiple": False,
@@ -536,7 +536,7 @@ class ImportFieldCatalogApiTest(TestCase):
                 },
                 {
                     "id": "FILE_NAME",
-                    "title": "File name",
+                    "title": "Имя файла",
                     "type": "string",
                     "required": False,
                     "multiple": False,
@@ -816,7 +816,9 @@ class ImportFieldCatalogApiTest(TestCase):
                     },
                 }
             ),
-            SimpleNamespace(result=[]),
+            SimpleNamespace(result=[]),  # crm.category.list
+            SimpleNamespace(result=[]),  # crm.status.list DYNAMIC_128_STAGE_0
+            SimpleNamespace(result=[]),  # crm.status.list DYNAMIC_128_STAGE
         ]
 
         response = self.client.get(
@@ -867,6 +869,16 @@ class ImportFieldCatalogApiTest(TestCase):
                     "bitrix_token": get_from_jwt_token.return_value,
                     "api_method": "crm.item.fields",
                     "params": {"entityTypeId": 128},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.category.list",
+                    "params": {"entityTypeId": 128},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.status.list",
+                    "params": {"filter": {"ENTITY_ID": "DYNAMIC_128_STAGE_0"}},
                 },
                 {
                     "bitrix_token": get_from_jwt_token.return_value,

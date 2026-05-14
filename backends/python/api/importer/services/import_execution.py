@@ -1002,6 +1002,7 @@ def build_linked_record_result(linked_entity: str, row_payload: dict, record_id,
         "update": "updated",
         "reuse": "existing",
         "skip_payload": "skipped",
+        "cached": "existing",
     }
 
     return {
@@ -1520,6 +1521,7 @@ def execute_linked_import(
     was_cancelled = False
     child_entity_type = get_linked_company_child_entity_type(entity_type)
     child_link_field = "COMPANY_ID"
+    company_ext_key_cache: dict[str, int] = {}
 
     for row_index, row_number in enumerate(row_numbers):
         if row_number < data_start_row:
@@ -1598,13 +1600,19 @@ def execute_linked_import(
             )
             continue
 
-        company_payload = linked_payload.get("company", {})
+        company_payload = dict(linked_payload.get("company", {}))
+        ext_key = str(company_payload.pop("EXTERNAL_KEY", "") or "").strip()
         child_payload = linked_payload.get(child_entity_type, {})
 
         try:
-            company_action = _bitrix_retry(lambda: resolve_linked_record_action(
-                account, "company", company_payload, dedup_settings.get("company", {}),
-            )) if company_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
+            if ext_key and ext_key in company_ext_key_cache:
+                company_action = {"mode": "cached", "record_id": company_ext_key_cache[ext_key], "meta": {}}
+            elif company_payload:
+                company_action = _bitrix_retry(lambda: resolve_linked_record_action(
+                    account, "company", company_payload, dedup_settings.get("company", {}),
+                ))
+            else:
+                company_action = {"mode": "skip_payload", "record_id": None, "meta": {}}
             child_action = _bitrix_retry(lambda: resolve_linked_record_action(
                 account, child_entity_type, child_payload, dedup_settings.get(child_entity_type, {}),
             )) if child_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
@@ -1622,11 +1630,13 @@ def execute_linked_import(
 
         company_id = company_action.get("record_id")
         try:
-            if company_payload:
+            if company_payload and company_action["mode"] != "cached":
                 if company_action["mode"] == "update":
                     _bitrix_retry(lambda: update_entity_record(account, "company", company_action["record_id"], company_payload))
                 elif company_action["mode"] == "create":
                     company_id = _bitrix_retry(lambda: create_entity_record(account, "company", company_payload))
+            if ext_key and company_id is not None:
+                company_ext_key_cache[ext_key] = company_id
         except Exception as error:
             failed_rows += 1
             results.append(

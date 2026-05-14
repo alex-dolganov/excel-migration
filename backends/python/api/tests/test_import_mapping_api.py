@@ -644,6 +644,7 @@ class ImportMappingApiTest(TestCase):
         self.assertEqual(response.json()["item"]["saved_dedup"], {
             "strategy": "update",
             "fields": ["PHONE"],
+            "condition": "any",
         })
 
         session.refresh_from_db()
@@ -662,6 +663,7 @@ class ImportMappingApiTest(TestCase):
         self.assertEqual(session.import_settings["dedup"], {
             "strategy": "update",
             "fields": ["PHONE"],
+            "condition": "any",
         })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
@@ -719,7 +721,7 @@ class ImportMappingApiTest(TestCase):
             HTTP_AUTHORIZATION="Bearer test-token",
         )
         self.assertEqual(preview_response.status_code, 200)
-        self.assertEqual(len(preview_response.json()["item"]["preview_rows"]), 10)
+        self.assertEqual(len(preview_response.json()["item"]["preview_rows"]), 12)
 
         response = self.client.get(
             reverse("importer:session-mapping", kwargs={"session_id": session.id}),
