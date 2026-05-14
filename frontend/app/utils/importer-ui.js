@@ -157,11 +157,25 @@ const HR_IMPORT_SCENARIOS = {
   },
 }
 
-const LINKED_IMPORT_SCENARIOS = {
+export const LINKED_IMPORT_SCENARIOS = {
   linked_company_contact: {
     value: 'linked_company_contact',
     label: 'Компания + Контакт',
     family: 'linked',
+    linkedEntities: [
+      {
+        id: 'company',
+        label: 'Компания',
+        sourceEntityType: 'company',
+        prefix: 'COMPANY__',
+      },
+      {
+        id: 'contact',
+        label: 'Контакт',
+        sourceEntityType: 'contact',
+        prefix: 'CONTACT__',
+      },
+    ],
     title: 'Связанный импорт компании и контакта',
     description: 'Каждая строка создаёт или обновляет компанию и контакт с автоматической привязкой.',
     minimumFields: ['COMPANY__TITLE', 'CONTACT__NAME или CONTACT__LAST_NAME'],
@@ -228,7 +242,7 @@ function isTaskImportEntity(entityType) {
   return Object.hasOwn(TASK_IMPORT_SCENARIOS, String(entityType || '').trim())
 }
 
-function isLinkedImportEntity(entityType) {
+export function isLinkedImportEntityType(entityType) {
   return Object.hasOwn(LINKED_IMPORT_SCENARIOS, String(entityType || '').trim())
 }
 
@@ -242,7 +256,7 @@ function isFileAttachEntity(entityType) {
 
 export function buildImportScenarioSections() {
   const crmItems = SUPPORTED_IMPORT_ENTITIES
-    .filter((entity) => !isTaskImportEntity(entity?.value) && !isLinkedImportEntity(entity?.value) && !isHrImportEntity(entity?.value))
+    .filter((entity) => !isTaskImportEntity(entity?.value) && !isLinkedImportEntityType(entity?.value) && !isHrImportEntity(entity?.value))
     .map((entity) => ({
       value: String(entity?.value || ''),
       label: String(entity?.label || ''),
@@ -357,6 +371,21 @@ export function buildScenarioSelectionSummary(entityType) {
     minimumFields: [],
     destinationLabel: 'Импортирует записи напрямую в выбранную CRM-сущность.',
   }
+}
+
+export function buildLinkedImportEntityGroups(entityType) {
+  const normalizedEntityType = String(entityType || '').trim()
+  const linkedScenario = LINKED_IMPORT_SCENARIOS[normalizedEntityType]
+  if (!linkedScenario || !Array.isArray(linkedScenario.linkedEntities)) {
+    return []
+  }
+
+  return linkedScenario.linkedEntities.map((item) => ({
+    id: String(item?.id || ''),
+    label: String(item?.label || ''),
+    sourceEntityType: String(item?.sourceEntityType || ''),
+    prefix: String(item?.prefix || ''),
+  })).filter((item) => item.id && item.sourceEntityType && item.prefix)
 }
 
 export function buildExampleTemplateDownloadMeta(entityType) {

@@ -622,16 +622,26 @@ SMART_PROCESS_ENTITY_TYPE = "smart_process"
 
 CONTACT_OPTIONAL_NAME_FIELDS = {"NAME", "LAST_NAME", "SECOND_NAME"}
 LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
-LINKED_ENTITY_PREFIXES = {
-    "company": "COMPANY__",
-    "contact": "CONTACT__",
-}
-LINKED_ENTITY_LABELS = {
-    "company": "Компания",
-    "contact": "Контакт",
-}
-LINKED_EXCLUDED_SOURCE_IDS = {
-    "contact": {"COMPANY_ID"},
+LINKED_IMPORT_SCHEMAS = {
+    LINKED_COMPANY_CONTACT_ENTITY_TYPE: {
+        "label": "Компания + Контакт",
+        "entities": [
+            {
+                "id": "company",
+                "label": "Компания",
+                "source_entity_type": "company",
+                "prefix": "COMPANY__",
+                "excluded_source_ids": (),
+            },
+            {
+                "id": "contact",
+                "label": "Контакт",
+                "source_entity_type": "contact",
+                "prefix": "CONTACT__",
+                "excluded_source_ids": ("COMPANY_ID",),
+            },
+        ],
+    },
 }
 
 
@@ -747,6 +757,59 @@ def normalize_smart_process_entity_config(entity_config: Any) -> dict:
     if title:
         normalized_config["title"] = title
     return normalized_config
+
+
+def get_linked_import_schema(entity_type: str) -> dict | None:
+    schema = LINKED_IMPORT_SCHEMAS.get(str(entity_type or "").strip())
+    if not isinstance(schema, dict):
+        return None
+
+    normalized_entities = []
+    for entity in schema.get("entities") if isinstance(schema.get("entities"), list) else []:
+        if not isinstance(entity, dict):
+            continue
+
+        entity_id = str(entity.get("id") or "").strip().lower()
+        source_entity_type = str(entity.get("source_entity_type") or "").strip()
+        prefix = str(entity.get("prefix") or "").strip()
+        if not entity_id or not source_entity_type or not prefix:
+            continue
+
+        excluded_source_ids = []
+        seen_source_ids = set()
+        for source_id in entity.get("excluded_source_ids") if isinstance(entity.get("excluded_source_ids"), (list, tuple, set)) else []:
+            normalized_source_id = str(source_id or "").strip()
+            if not normalized_source_id or normalized_source_id in seen_source_ids:
+                continue
+            seen_source_ids.add(normalized_source_id)
+            excluded_source_ids.append(normalized_source_id)
+
+        normalized_entities.append(
+            {
+                "id": entity_id,
+                "label": str(entity.get("label") or entity_id),
+                "source_entity_type": source_entity_type,
+                "prefix": prefix,
+                "excluded_source_ids": excluded_source_ids,
+            }
+        )
+
+    if not normalized_entities:
+        return None
+
+    return {
+        "entity_type": str(entity_type or "").strip(),
+        "label": str(schema.get("label") or entity_type or "").strip(),
+        "entities": normalized_entities,
+    }
+
+
+def build_linked_entities_payload(entity_type: str) -> list[dict]:
+    schema = get_linked_import_schema(entity_type)
+    if schema is None:
+        return []
+
+    return [dict(entity) for entity in schema["entities"]]
 
 
 def fetch_smart_process_types(account) -> list[dict]:
@@ -924,21 +987,32 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
         "deal": lambda client: client.crm.deal.fields().result,
     }
 
-    if entity_type == LINKED_COMPANY_CONTACT_ENTITY_TYPE:
-        company_fields_result = entity_fields_loaders["company"](account.client)
-        contact_fields_result = entity_fields_loaders["contact"](account.client)
-        if not isinstance(company_fields_result, dict) or not isinstance(contact_fields_result, dict):
-            raise ValueError("Unable to load entity fields")
+    linked_import_schema = get_linked_import_schema(entity_type)
+    if linked_import_schema is not None:
+        source_fields_results = {}
+        for linked_entity in linked_import_schema["entities"]:
+            source_entity_type = linked_entity["source_entity_type"]
+            loader = entity_fields_loaders.get(source_entity_type)
+            if loader is None:
+                raise ValueError(f"Unsupported linked source entity type: {source_entity_type}")
+
+            source_fields_result = loader(account.client)
+            if not isinstance(source_fields_result, dict):
+                raise ValueError("Unable to load entity fields")
+            source_fields_results[source_entity_type] = source_fields_result
 
         linked_fields = []
-        for linked_entity, source_entity_type, source_fields_result in (
-            ("company", "company", company_fields_result),
-            ("contact", "contact", contact_fields_result),
-        ):
+        linked_entity_sort_order = {
+            linked_entity["id"]: index
+            for index, linked_entity in enumerate(linked_import_schema["entities"])
+        }
+        for linked_entity in linked_import_schema["entities"]:
+            source_entity_type = linked_entity["source_entity_type"]
+            source_fields_result = source_fields_results[source_entity_type]
             source_fields = normalize_fields_result(source_fields_result, entity_type=source_entity_type)
-            prefix = LINKED_ENTITY_PREFIXES[linked_entity]
-            entity_label = LINKED_ENTITY_LABELS[linked_entity]
-            excluded_source_ids = LINKED_EXCLUDED_SOURCE_IDS.get(linked_entity, set())
+            prefix = linked_entity["prefix"]
+            entity_label = linked_entity["label"]
+            excluded_source_ids = set(linked_entity["excluded_source_ids"])
             for source_field in source_fields:
                 source_field_id = str(source_field.get("id") or "")
                 if not source_field_id or source_field_id in excluded_source_ids:
@@ -949,7 +1023,7 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
                         **source_field,
                         "id": f"{prefix}{source_field_id}",
                         "title": f"{entity_label} / {source_field['title']}",
-                        "linked_entity": linked_entity,
+                        "linked_entity": linked_entity["id"],
                         "linked_source_id": source_field_id,
                     }
                 )
@@ -957,7 +1031,7 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
         return sorted(
             linked_fields,
             key=lambda item: (
-                0 if item.get("linked_entity") == "company" else 1,
+                linked_entity_sort_order.get(str(item.get("linked_entity") or "").strip().lower(), len(linked_entity_sort_order)),
                 item.get("is_custom", False),
                 item.get("title", ""),
                 item.get("id", ""),

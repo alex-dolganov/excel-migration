@@ -5,6 +5,7 @@ from django.test import SimpleTestCase
 from unittest.mock import patch
 
 from importer.services.import_execution import (
+    build_linked_result_fields,
     build_linked_row_payload,
     build_row_payload,
     create_entity_record,
@@ -64,6 +65,53 @@ class ImportExecutionServiceTest(SimpleTestCase):
                     "NAME": "Алиса",
                     "LAST_NAME": "Иванова",
                     "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                },
+            },
+        )
+
+    def test_build_linked_result_fields_flattens_payload_using_linked_schema_prefixes(self):
+        self.assertEqual(
+            build_linked_result_fields(
+                {
+                    "company": {
+                        "TITLE": "ООО Альфа",
+                    },
+                    "contact": {
+                        "NAME": "Алиса",
+                        "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                    },
+                    "deal": {
+                        "TITLE": "Ignored",
+                    },
+                }
+            ),
+            {
+                "COMPANY__TITLE": "ООО Альфа",
+                "CONTACT__NAME": "Алиса",
+                "CONTACT__EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+            },
+        )
+
+    def test_normalize_entity_dedup_settings_expands_shared_linked_settings_per_schema_entity(self):
+        self.assertEqual(
+            normalize_entity_dedup_settings(
+                "linked_company_contact",
+                {
+                    "strategy": "update",
+                    "fields": ["TITLE"],
+                    "condition": "all",
+                },
+            ),
+            {
+                "company": {
+                    "strategy": "update",
+                    "fields": ["TITLE"],
+                    "condition": "all",
+                },
+                "contact": {
+                    "strategy": "update",
+                    "fields": ["TITLE"],
+                    "condition": "all",
                 },
             },
         )

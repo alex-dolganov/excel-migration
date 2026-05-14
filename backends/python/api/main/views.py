@@ -13,6 +13,7 @@ from config import load_config
 __all__ = [
     "root",
     "health",
+    "healthz",
     "get_enum",
     "get_list",
     "install",
@@ -48,6 +49,17 @@ def root(request: AuthorizedRequest):
 @log_errors("health")
 @auth_required
 def health(request: AuthorizedRequest):
+    return JsonResponse({
+        "status": "healthy",
+        "backend": "python",
+        "timestamp": timezone.now().timestamp(),
+    })
+
+
+@xframe_options_exempt
+@require_GET
+@log_errors("healthz")
+def healthz(request):
     return JsonResponse({
         "status": "healthy",
         "backend": "python",

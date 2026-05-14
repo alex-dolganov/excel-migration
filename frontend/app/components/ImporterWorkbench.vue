@@ -17,6 +17,7 @@ import {
   buildLinkedImportRunSummary,
   buildImportRunStatusFilters,
   buildImportRunRetryState,
+  isLinkedImportEntityType,
   shouldWaitForImportExecutionSnapshot,
   buildMappingFieldItems,
   buildMappingPayload,
@@ -168,7 +169,7 @@ const cancelRequested = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const recentSessions = ref<Record<string, any>[]>([])
-const currentView = ref<'wizard' | 'history'>('wizard')
+const currentView = ref<'wizard' | 'history' | 'bulkAttach'>('wizard')
 const importerPermissionState = computed(() => buildImporterPermissionState({
   role: userStore.importerRole,
   permissions: userStore.importerPermissions,
@@ -761,7 +762,7 @@ const importRunProblemGroups = computed<ImportRunProblemGroup[]>(() => buildImpo
 const filteredImportRunRows = computed<ImportRunRow[]>(() => (
   filterImportRunRows(importRunRows.value, activeImportRunFilter.value)
 ))
-const isLinkedCompanyContactImport = computed(() => entityType.value === 'linked_company_contact')
+const isLinkedEntityImport = computed(() => isLinkedImportEntityType(entityType.value))
 const stepSixStatusLabel = computed(() => {
   if (dryRunData.value) {
     if (dryRunPendingDecisionRows.value > 0) {
@@ -1998,6 +1999,38 @@ onMounted(loadHistory)
     </div>
 
     <div
+      v-else-if="currentView === 'bulkAttach'"
+      class="overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)]"
+    >
+      <div class="border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbfe_100%)] px-6 py-5 sm:px-8">
+        <div class="flex items-center gap-5">
+          <button
+            type="button"
+            class="flex shrink-0 items-center gap-1.5 rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9] transition hover:bg-[#ddeeff]"
+            @click="currentView = 'wizard'"
+          >
+            ← Назад
+          </button>
+          <div>
+            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
+              Сценарий S17
+            </div>
+            <h1 class="mt-1 text-[26px] font-semibold leading-[1.1] text-[#2f4254]">
+              Массовый импорт файлов
+            </h1>
+            <p class="mt-2 text-sm text-[#6c8093]">
+              Прикрепите один и тот же файл к выбранным CRM-сущностям по фильтру, не выходя из основного интерфейса Excel Migration.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="min-h-[600px] overflow-y-auto px-6 py-6 sm:px-8 sm:py-8">
+        <BulkAttachWizard />
+      </div>
+    </div>
+
+    <div
       v-else
       class="grid min-h-[860px] grid-cols-1 overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)] xl:grid-cols-[280px_minmax(0,1fr)]"
     >
@@ -2121,6 +2154,12 @@ onMounted(loadHistory)
                 color="air-primary"
                 size="lg"
                 @click="currentView = 'history'"
+              />
+              <B24Button
+                label="Массовый импорт файлов"
+                color="air-secondary-accent-2"
+                size="lg"
+                @click="currentView = 'bulkAttach'"
               />
               <div class="flex flex-wrap justify-end gap-2">
                 <div class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
@@ -3403,7 +3442,7 @@ onMounted(loadHistory)
             </section>
 
             <section
-              v-if="isLinkedCompanyContactImport && linkedImportRunSummary.hasSummary"
+              v-if="isLinkedEntityImport && linkedImportRunSummary.hasSummary"
               class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5"
             >
               <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -3499,7 +3538,7 @@ onMounted(loadHistory)
             </section>
 
             <section
-              v-if="!isLinkedCompanyContactImport || !linkedImportRunSummary.hasSummary"
+              v-if="!isLinkedEntityImport || !linkedImportRunSummary.hasSummary"
               class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5"
             >
               <div class="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">

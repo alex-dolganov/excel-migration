@@ -52,6 +52,7 @@ class PythonProdContractTest(SimpleTestCase):
                     "client_id",
                     "client_secret",
                     "app_base_url",
+                    "otel_enabled",
                     "otel_endpoint",
                     "otel_service_name",
                 },
@@ -69,6 +70,16 @@ class PythonProdContractTest(SimpleTestCase):
         self.assertNotIn("makemigrations", script_source)
         self.assertNotIn("createsuperuser", script_source)
 
+    def test_dev_start_script_keeps_migrations_and_optional_superuser_bootstrap(self):
+        script_path = API_ROOT / "scripts/start-dev.sh"
+        self.assertTrue(script_path.exists(), "Expected a dedicated development start script for Python API")
+
+        script_source = script_path.read_text(encoding="utf-8")
+        self.assertIn("python manage.py migrate --noinput", script_source)
+        self.assertIn("python manage.py runserver 0.0.0.0:8000", script_source)
+        self.assertIn("DJANGO_SUPERUSER_CREATE", script_source)
+        self.assertNotIn("createsuperuser --noinput || true", script_source)
+
     def test_worker_start_script_uses_celery(self):
         script_path = API_ROOT / "scripts/start-worker.sh"
         self.assertTrue(script_path.exists(), "Expected a dedicated worker start script for Celery")
@@ -81,8 +92,9 @@ class PythonProdContractTest(SimpleTestCase):
         dockerfile_path = API_ROOT / "Dockerfile"
         dockerfile_source = dockerfile_path.read_text(encoding="utf-8")
 
+        self.assertIn('CMD ["sh", "./scripts/start-dev.sh"]', dockerfile_source)
         self.assertIn('CMD ["sh", "./scripts/start-production.sh"]', dockerfile_source)
-        self.assertNotIn('createsuperuser --noinput || true \\\n  && gunicorn', dockerfile_source)
+        self.assertNotIn('createsuperuser --noinput || true', dockerfile_source)
 
     def test_python_runtime_no_longer_depends_on_legacy_support_reporting(self):
         self.assertFalse((API_ROOT / "error_reporting.py").exists())

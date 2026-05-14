@@ -32,17 +32,20 @@ class Config:
     app_base_url: str
 
     # OpenTelemetry (optional)
+    otel_enabled: bool
     otel_endpoint: str
     otel_service_name: str
 
 
 def load_config() -> Config:
     build_target = env.str("BUILD_TARGET", "dev")  # dev or production
+    debug = build_target.lower() == "dev"
     db_type = env.str("DB_TYPE", "postgresql").lower()
     default_db_port = 3306 if db_type == "mysql" else 5432
+    otel_endpoint = env.str("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
     return Config(
-        debug=build_target.lower() == "dev",
+        debug=debug,
         db_type=db_type,
         db_name=env.str("DB_NAME", "appdb"),
         db_user=env.str("DB_USER", "appuser"),
@@ -55,7 +58,8 @@ def load_config() -> Config:
         client_id=env.str("CLIENT_ID", "client_id"),
         client_secret=env.str("CLIENT_SECRET", "client_secret"),
         app_base_url=env.str("VIRTUAL_HOST", "app_base_url"),
-        otel_endpoint=env.str("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+        otel_enabled=env.bool("OTEL_EXPORTER_OTLP_ENABLED", (not debug) and bool(otel_endpoint)),
+        otel_endpoint=otel_endpoint,
         otel_service_name=env.str("OTEL_SERVICE_NAME", "excel-migration-api"),
     )
 

@@ -20,6 +20,7 @@ from main.utils.decorators import auth_required, log_errors
 from .models import ImportSession, ImportTemplate, ImporterUserRole
 from .services.b24_fields import (
     SMART_PROCESS_ENTITY_TYPE,
+    build_linked_entities_payload,
     fetch_entity_fields,
     fetch_smart_process_types,
     normalize_smart_process_entity_config,
@@ -1387,6 +1388,7 @@ def import_fields(request: AuthorizedRequest):
     try:
         entity_type_str = str(entity_type)
         entity_config = normalize_session_entity_config(entity_type_str, request_payload)
+        linked_entities = build_linked_entities_payload(entity_type_str)
         items = fetch_entity_fields(
             request.bitrix24_account,
             entity_type_str,
@@ -1399,6 +1401,7 @@ def import_fields(request: AuthorizedRequest):
         {
             "entity_type": entity_type_str,
             **({"entity_config": entity_config} if entity_config else {}),
+            **({"linked_entities": linked_entities} if linked_entities else {}),
             "items": items,
         }
     )
@@ -1514,6 +1517,7 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
             mapping=mapping_for_observed_values,
         )
     unmapped_values = build_unmapped_mapping_values(observed_values, mapping_for_observed_values, fields)
+    linked_entities = build_linked_entities_payload(session.entity_type)
 
     return JsonResponse(
         {
@@ -1528,6 +1532,7 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
                 "saved_dedup": saved_dedup,
                 "task_defaults": task_defaults,
                 "task_user_options": task_user_options,
+                **({"linked_entities": linked_entities} if linked_entities else {}),
                 "observed_values": observed_values,
                 "unmapped_values": unmapped_values,
                 "unmapped_value_count": count_mapping_values(unmapped_values),

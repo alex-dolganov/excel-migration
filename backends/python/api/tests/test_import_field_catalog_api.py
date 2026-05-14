@@ -619,6 +619,25 @@ class ImportFieldCatalogApiTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["entity_type"], "linked_company_contact")
+        self.assertEqual(
+            response.json()["linked_entities"],
+            [
+                {
+                    "id": "company",
+                    "label": "Компания",
+                    "source_entity_type": "company",
+                    "prefix": "COMPANY__",
+                    "excluded_source_ids": [],
+                },
+                {
+                    "id": "contact",
+                    "label": "Контакт",
+                    "source_entity_type": "contact",
+                    "prefix": "CONTACT__",
+                    "excluded_source_ids": ["COMPANY_ID"],
+                },
+            ],
+        )
         items_by_id = {
             item["id"]: item
             for item in response.json()["items"]

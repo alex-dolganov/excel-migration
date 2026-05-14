@@ -7,12 +7,15 @@ def setup_otel() -> None:
     global _INITIALIZED
     if _INITIALIZED:
         return
-    _INITIALIZED = True
 
     from config import config
+    if not getattr(config, "otel_enabled", False):
+        return
+
     endpoint = (config.otel_endpoint or "").strip()
     if not endpoint:
         return
+    _INITIALIZED = True
 
     service_name = config.otel_service_name or "excel-migration-api"
 

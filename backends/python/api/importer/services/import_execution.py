@@ -18,7 +18,7 @@ from .validation import (
 from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, download_attachment_source
 from .task_resolution import BitrixTaskResolver, is_task_reference_field
 from .user_resolution import BitrixUserResolver, is_task_user_reference_field
-from .b24_fields import SMART_PROCESS_ENTITY_TYPE, normalize_smart_process_entity_config
+from .b24_fields import SMART_PROCESS_ENTITY_TYPE, get_linked_import_schema, normalize_smart_process_entity_config
 
 
 TASK_CHILD_API_METHODS = {
@@ -35,11 +35,6 @@ CRM_ACTIVITY_COMMUNICATION_TYPES = {
 }
 HR_ENTITY_TYPES = {"user", "department"}
 LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
-LINKED_ENTITY_TYPES = {"company", "contact"}
-LINKED_ENTITY_PREFIXES = {
-    "company": "COMPANY__",
-    "contact": "CONTACT__",
-}
 
 SUPPORTED_DEDUP_STRATEGIES = {"create", "skip", "update", "ask"}
 SUPPORTED_DEDUP_FIELDS = {"EMAIL", "PHONE", "TITLE"}   # legacy whitelist kept for reference
@@ -130,12 +125,38 @@ def build_field_index(fields: list[dict]) -> dict[str, dict]:
     }
 
 
+def get_linked_entities(entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> list[dict]:
+    schema = get_linked_import_schema(entity_type)
+    if schema is None:
+        return []
+
+    return [dict(entity) for entity in schema["entities"]]
+
+
+def get_linked_entity_ids(entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> list[str]:
+    return [
+        str(entity.get("id") or "").strip().lower()
+        for entity in get_linked_entities(entity_type)
+        if str(entity.get("id") or "").strip()
+    ]
+
+
+def get_linked_entity_prefix_map(entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> dict[str, str]:
+    return {
+        str(entity.get("id") or "").strip().lower(): str(entity.get("prefix") or "").strip()
+        for entity in get_linked_entities(entity_type)
+        if str(entity.get("id") or "").strip() and str(entity.get("prefix") or "").strip()
+    }
+
+
 def is_linked_import_entity_type(entity_type: str) -> bool:
-    return str(entity_type or "").strip() == LINKED_COMPANY_CONTACT_ENTITY_TYPE
+    return get_linked_import_schema(str(entity_type or "").strip()) is not None
 
 
-def build_linked_field_groups(fields: list[dict]) -> dict[str, list[dict]]:
-    grouped_fields = {entity_name: [] for entity_name in LINKED_ENTITY_TYPES}
+def build_linked_field_groups(fields: list[dict], entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> dict[str, list[dict]]:
+    linked_entity_ids = get_linked_entity_ids(entity_type)
+    allowed_linked_entities = set(linked_entity_ids)
+    grouped_fields = {entity_name: [] for entity_name in linked_entity_ids}
 
     for field in fields:
         if not isinstance(field, dict):
@@ -143,7 +164,7 @@ def build_linked_field_groups(fields: list[dict]) -> dict[str, list[dict]]:
 
         linked_entity = str(field.get("linked_entity") or "").strip().lower()
         linked_source_id = str(field.get("linked_source_id") or "").strip()
-        if linked_entity not in LINKED_ENTITY_TYPES or not linked_source_id:
+        if linked_entity not in allowed_linked_entities or not linked_source_id:
             continue
 
         grouped_fields[linked_entity].append(
@@ -156,9 +177,11 @@ def build_linked_field_groups(fields: list[dict]) -> dict[str, list[dict]]:
     return grouped_fields
 
 
-def build_linked_mapping_groups(mapping: dict, fields: list[dict]) -> dict[str, dict]:
+def build_linked_mapping_groups(mapping: dict, fields: list[dict], entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> dict[str, dict]:
     field_by_id = build_field_index(fields)
-    grouped_mapping = {entity_name: {} for entity_name in LINKED_ENTITY_TYPES}
+    linked_entity_ids = get_linked_entity_ids(entity_type)
+    allowed_linked_entities = set(linked_entity_ids)
+    grouped_mapping = {entity_name: {} for entity_name in linked_entity_ids}
 
     for target_field, mapping_item in (mapping or {}).items():
         if not isinstance(mapping_item, dict):
@@ -170,7 +193,7 @@ def build_linked_mapping_groups(mapping: dict, fields: list[dict]) -> dict[str, 
 
         linked_entity = str(field.get("linked_entity") or "").strip().lower()
         linked_source_id = str(field.get("linked_source_id") or "").strip()
-        if linked_entity not in LINKED_ENTITY_TYPES or not linked_source_id:
+        if linked_entity not in allowed_linked_entities or not linked_source_id:
             continue
 
         grouped_mapping[linked_entity][linked_source_id] = {
@@ -387,12 +410,14 @@ def build_linked_row_payload(
     columns: list[str],
     mapping: dict,
     fields: list[dict],
+    entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE,
     account=None,
     user_resolver: BitrixUserResolver | None = None,
     default_field_values: dict | None = None,
 ) -> dict:
-    grouped_fields = build_linked_field_groups(fields)
-    grouped_mapping = build_linked_mapping_groups(mapping, fields)
+    grouped_fields = build_linked_field_groups(fields, entity_type=entity_type)
+    grouped_mapping = build_linked_mapping_groups(mapping, fields, entity_type=entity_type)
+    linked_entity_ids = get_linked_entity_ids(entity_type)
 
     return {
         linked_entity: build_row_payload(
@@ -404,7 +429,7 @@ def build_linked_row_payload(
             user_resolver=user_resolver,
             default_field_values=default_field_values,
         )
-        for linked_entity in ("company", "contact")
+        for linked_entity in linked_entity_ids
     }
 
 
@@ -488,26 +513,24 @@ def normalize_dedup_settings(dedup_settings) -> dict:
     }
 
 
-def normalize_linked_dedup_settings(dedup_settings) -> dict:
-    if isinstance(dedup_settings, dict) and (
-        isinstance(dedup_settings.get("company"), dict)
-        or isinstance(dedup_settings.get("contact"), dict)
-    ):
+def normalize_linked_dedup_settings(dedup_settings, entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> dict:
+    linked_entity_ids = get_linked_entity_ids(entity_type)
+    if isinstance(dedup_settings, dict) and any(isinstance(dedup_settings.get(linked_entity), dict) for linked_entity in linked_entity_ids):
         return {
-            "company": normalize_dedup_settings(dedup_settings.get("company", {})),
-            "contact": normalize_dedup_settings(dedup_settings.get("contact", {})),
+            linked_entity: normalize_dedup_settings(dedup_settings.get(linked_entity, {}))
+            for linked_entity in linked_entity_ids
         }
 
     shared_settings = normalize_dedup_settings(dedup_settings)
     return {
-        "company": dict(shared_settings),
-        "contact": dict(shared_settings),
+        linked_entity: dict(shared_settings)
+        for linked_entity in linked_entity_ids
     }
 
 
 def normalize_entity_dedup_settings(entity_type: str, dedup_settings):
     if is_linked_import_entity_type(entity_type):
-        return normalize_linked_dedup_settings(dedup_settings)
+        return normalize_linked_dedup_settings(dedup_settings, entity_type=entity_type)
     if str(entity_type or "").strip() == SMART_PROCESS_ENTITY_TYPE:
         return normalize_dedup_settings({})
     return normalize_dedup_settings(dedup_settings)
@@ -836,10 +859,11 @@ def resolve_linked_record_action(account, entity_type: str, row_payload: dict, d
     }
 
 
-def build_linked_result_fields(linked_payload: dict) -> dict:
+def build_linked_result_fields(linked_payload: dict, entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> dict:
     flattened_fields = {}
+    linked_entity_prefixes = get_linked_entity_prefix_map(entity_type)
 
-    for linked_entity, prefix in LINKED_ENTITY_PREFIXES.items():
+    for linked_entity, prefix in linked_entity_prefixes.items():
         entity_payload = linked_payload.get(linked_entity, {})
         if not isinstance(entity_payload, dict):
             continue
@@ -1274,6 +1298,7 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
 def execute_linked_dry_run(
     *,
     account,
+    entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE,
     rows: list[list],
     row_numbers: list[int],
     columns: list[str],
@@ -1319,6 +1344,7 @@ def execute_linked_dry_run(
             columns,
             mapping,
             fields,
+            entity_type=entity_type,
             account=account,
             user_resolver=user_resolver,
             default_field_values=default_field_values,
@@ -1339,12 +1365,14 @@ def execute_linked_dry_run(
         ) if linked_payload.get("contact") else {"mode": "skip_payload", "record_id": None, "meta": {}}
 
         result_meta = {}
-        company_meta = company_action.get("meta", {})
-        contact_meta = contact_action.get("meta", {})
-        if company_meta:
-            result_meta["company"] = company_meta
-        if contact_meta:
-            result_meta["contact"] = contact_meta
+        linked_actions = {
+            "company": company_action,
+            "contact": contact_action,
+        }
+        for linked_entity in get_linked_entity_ids(entity_type):
+            linked_meta = linked_actions.get(linked_entity, {}).get("meta", {})
+            if linked_meta:
+                result_meta[linked_entity] = linked_meta
 
         has_updates = company_action.get("mode") == "update" or contact_action.get("mode") == "update"
 
@@ -1354,14 +1382,14 @@ def execute_linked_dry_run(
             result_item = {
                 "row_number": row_number,
                 "status": "ready_update",
-                "fields": build_linked_result_fields(linked_payload),
+                "fields": build_linked_result_fields(linked_payload, entity_type=entity_type),
             }
         else:
             ready_create_rows += 1
             result_item = {
                 "row_number": row_number,
                 "status": "ready",
-                "fields": build_linked_result_fields(linked_payload),
+                "fields": build_linked_result_fields(linked_payload, entity_type=entity_type),
             }
 
         if contact_action.get("record_id") is not None:
@@ -1384,6 +1412,7 @@ def execute_linked_dry_run(
 def execute_linked_import(
     *,
     account,
+    entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE,
     rows: list[list],
     row_numbers: list[int],
     columns: list[str],
@@ -1467,6 +1496,7 @@ def execute_linked_import(
                 columns,
                 mapping,
                 fields,
+                entity_type=entity_type,
                 account=account,
                 user_resolver=user_resolver,
                 default_field_values=default_field_values,
@@ -1542,12 +1572,14 @@ def execute_linked_import(
             continue
 
         result_meta = {}
-        company_meta = company_action.get("meta", {})
-        contact_meta = contact_action.get("meta", {})
-        if company_meta:
-            result_meta["company"] = company_meta
-        if contact_meta:
-            result_meta["contact"] = contact_meta
+        linked_actions = {
+            "company": company_action,
+            "contact": contact_action,
+        }
+        for linked_entity in get_linked_entity_ids(entity_type):
+            linked_meta = linked_actions.get(linked_entity, {}).get("meta", {})
+            if linked_meta:
+                result_meta[linked_entity] = linked_meta
 
         has_contact_link_update = (
             contact_action.get("mode") == "reuse"
@@ -1562,22 +1594,23 @@ def execute_linked_import(
         if result_meta:
             result_item["linked"] = result_meta
         linked_records = {}
-        company_record = build_linked_record_result(
-            "company",
-            company_payload,
-            company_id,
-            company_action.get("mode", ""),
-        )
-        contact_record = build_linked_record_result(
-            "contact",
-            contact_payload,
-            contact_record_id,
-            contact_action.get("mode", ""),
-        )
-        if company_record is not None:
-            linked_records["company"] = company_record
-        if contact_record is not None:
-            linked_records["contact"] = contact_record
+        linked_entity_payloads = {
+            "company": company_payload,
+            "contact": contact_payload,
+        }
+        linked_entity_record_ids = {
+            "company": company_id,
+            "contact": contact_record_id,
+        }
+        for linked_entity in get_linked_entity_ids(entity_type):
+            linked_record = build_linked_record_result(
+                linked_entity,
+                linked_entity_payloads.get(linked_entity, {}),
+                linked_entity_record_ids.get(linked_entity),
+                linked_actions.get(linked_entity, {}).get("mode", ""),
+            )
+            if linked_record is not None:
+                linked_records[linked_entity] = linked_record
         if linked_records:
             result_item["linked_records"] = linked_records
         if contact_record_id is not None:
@@ -1626,6 +1659,7 @@ def execute_dry_run(
     if is_linked_import_entity_type(entity_type):
         return execute_linked_dry_run(
             account=account,
+            entity_type=entity_type,
             rows=rows,
             row_numbers=row_numbers,
             columns=columns,
@@ -1633,7 +1667,7 @@ def execute_dry_run(
             mapping=mapping,
             validation_summary=validation_summary,
             fields=fields,
-            dedup_settings=normalize_linked_dedup_settings(dedup_settings),
+            dedup_settings=normalize_linked_dedup_settings(dedup_settings, entity_type=entity_type),
             default_field_values=default_field_values,
         )
 
@@ -1773,6 +1807,7 @@ def execute_import(
     if is_linked_import_entity_type(entity_type):
         return execute_linked_import(
             account=account,
+            entity_type=entity_type,
             rows=rows,
             row_numbers=row_numbers,
             columns=columns,
@@ -1780,7 +1815,7 @@ def execute_import(
             mapping=mapping,
             validation_summary=validation_summary,
             fields=fields,
-            dedup_settings=normalize_linked_dedup_settings(dedup_settings),
+            dedup_settings=normalize_linked_dedup_settings(dedup_settings, entity_type=entity_type),
             should_cancel=should_cancel,
             default_field_values=default_field_values,
             progress_callback=progress_callback,

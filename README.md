@@ -15,6 +15,12 @@
 - Align Nginx upload/body-size and proxy timeout settings with Django/Gunicorn importer limits
 - Keep OpenTelemetry export vendor-neutral via standard OTLP env vars
 
+## Local Python runtime
+
+- Dev Docker startup now uses `backends/python/api/scripts/start-dev.sh`: it always runs `migrate`, but creates a Django superuser only when `DJANGO_SUPERUSER_CREATE=true`.
+- Local unauthenticated health probe is `GET /healthz`; protected application health remains `GET /api/health`.
+- OTLP export is disabled by default in local dev even if `OTEL_EXPORTER_OTLP_ENDPOINT` is filled; enable it explicitly with `OTEL_EXPORTER_OTLP_ENABLED=true`.
+
 ## Deployment target
 
 - Future publish target: `VibeCode Infra`

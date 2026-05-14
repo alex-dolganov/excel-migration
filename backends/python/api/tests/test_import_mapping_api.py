@@ -140,6 +140,53 @@ class ImportMappingApiTest(TestCase):
             ),
         )
 
+    def create_linked_company_contact_account(self, member_id="member-1", domain_url="test.bitrix24.ru"):
+        return SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон компании",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                            }
+                        )
+                    ),
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
     def create_uploaded_session(self):
         session = ImportSession.objects.create(
             portal_member_id="member-1",
@@ -157,6 +204,36 @@ class ImportMappingApiTest(TestCase):
                 build_xlsx_with_sheets(
                     [
                         ("Leads", [["Lead title", "Phone", "City"], ["Alice", "+123", "Moscow"]]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_company_contact_session(self):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_company_contact",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="linked-company-contact.xlsx",
+        )
+        session.stored_file.save(
+            "linked-company-contact.xlsx",
+            SimpleUploadedFile(
+                "linked-company-contact.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        (
+                            "Linked",
+                            [
+                                ["Название компании", "Телефон компании", "Имя контакта", "Email контакта"],
+                                ["ООО Альфа", "+78005550101", "Алиса", "alice@example.ru"],
+                            ],
+                        ),
                     ]
                 ),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -318,6 +395,43 @@ class ImportMappingApiTest(TestCase):
             },
         })
         self.assertEqual(response.json()["item"]["saved_mapping"], {})
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_entity_metadata_for_linked_import_sessions(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_company_contact_account()
+
+        session = self.create_uploaded_linked_company_contact_session()
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["item"]["linked_entities"],
+            [
+                {
+                    "id": "company",
+                    "label": "Компания",
+                    "source_entity_type": "company",
+                    "prefix": "COMPANY__",
+                    "excluded_source_ids": [],
+                },
+                {
+                    "id": "contact",
+                    "label": "Контакт",
+                    "source_entity_type": "contact",
+                    "prefix": "CONTACT__",
+                    "excluded_source_ids": ["COMPANY_ID"],
+                },
+            ],
+        )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_returns_fuzzy_candidate_mapping_for_close_headers(self, get_from_jwt_token):

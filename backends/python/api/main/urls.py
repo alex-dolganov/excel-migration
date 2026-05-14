@@ -2,6 +2,7 @@ from django.urls import path
 from .views import *
 
 urlpatterns = [
+    path('healthz', healthz, name='healthz'),
     path('api', root, name='root'),
     path('api/health', health, name='health'),
     path('api/enum', get_enum, name='enum'),
