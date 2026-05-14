@@ -37,6 +37,7 @@ from .services.example_templates import (
     build_smart_process_example_template_filename,
     build_smart_process_example_template_xlsx,
 )
+from .services.error_messages import format_import_error
 from .services.import_execution import execute_dry_run, execute_import, normalize_entity_dedup_settings
 from .services.mapping import build_candidate_mapping, normalize_saved_mapping, resolve_field_item_value
 from .services.permissions import (
@@ -427,8 +428,19 @@ def is_session_cancel_requested(session_id) -> bool:
 
 def build_import_report_csv(import_run: dict) -> str:
     csv_buffer = StringIO()
-    csv_writer = csv.writer(csv_buffer)
-    csv_writer.writerow(["row_number", "status", "status_label", "record_id", "updated_fields", "error"])
+    csv_writer = csv.writer(csv_buffer, delimiter=";")
+    csv_writer.writerow(
+        [
+            "Строка",
+            "Статус",
+            "Дата и время",
+            "Сущность",
+            "Название",
+            "ID в Bitrix24",
+            "Обновлённые поля",
+            "Ошибка",
+        ]
+    )
 
     for item in import_run.get("results", []) if isinstance(import_run, dict) else []:
         if not isinstance(item, dict):
@@ -437,12 +449,17 @@ def build_import_report_csv(import_run: dict) -> str:
         status = str(item.get("status") or "").strip()
         updated_fields = item.get("updated_fields")
         updated_fields_str = ", ".join(updated_fields) if isinstance(updated_fields, list) else ""
+        report_record_id = str(item.get("report_record_id") or "").strip()
+        raw_record_id = item.get("record_id")
+        record_id = report_record_id or ("" if raw_record_id in (None, "") else str(raw_record_id))
         csv_writer.writerow(
             [
                 item.get("row_number", ""),
-                status,
                 IMPORT_RUN_STATUS_LABELS.get(status, status),
-                item.get("record_id", ""),
+                str(item.get("report_date_time") or "").strip(),
+                str(item.get("report_entity") or "").strip(),
+                str(item.get("report_title") or "").strip(),
+                record_id,
                 updated_fields_str,
                 str(item.get("error") or "").strip(),
             ]
@@ -1793,7 +1810,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
-        session.last_error = str(error)
+        session.last_error = format_import_error(error)
         session.save(update_fields=["status", "last_error", "updated_at"])
         raise
 
@@ -1898,7 +1915,7 @@ def import_session_run(request: AuthorizedRequest, session_id):
             per_row_decisions=per_row_decisions,
         )
     except Exception as error:
-        return JsonResponse({"error": str(error)}, status=400)
+        return JsonResponse({"error": format_import_error(error)}, status=400)
 
     return JsonResponse({"item": import_item})
 
@@ -2028,7 +2045,7 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
-        session.last_error = str(error)
+        session.last_error = format_import_error(error)
         session.save(update_fields=["status", "last_error", "updated_at"])
         raise
 
@@ -2134,7 +2151,7 @@ def import_session_retry_failed(request: AuthorizedRequest, session_id):
     try:
         retry_item = execute_import_session_retry_now(session=session, account=account)
     except Exception as error:
-        return JsonResponse({"error": str(error)}, status=400)
+        return JsonResponse({"error": format_import_error(error)}, status=400)
 
     return JsonResponse({"item": retry_item})
 
@@ -2469,9 +2486,9 @@ def bulk_attach_session_run(request: AuthorizedRequest, session_id):
     except Exception as error:
         session.refresh_from_db()
         session.status = ImportSession.Status.FAILED
-        session.last_error = str(error)
+        session.last_error = format_import_error(error)
         session.save(update_fields=["status", "last_error", "updated_at"])
-        return JsonResponse({"error": str(error)}, status=500)
+        return JsonResponse({"error": format_import_error(error)}, status=500)
 
     session.refresh_from_db()
     if session.status != ImportSession.Status.CANCELLED:

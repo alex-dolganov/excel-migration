@@ -85,6 +85,9 @@ type ImportRunRow = {
   rowNumber: number
   status: string
   statusLabel: string
+  createdAt: string
+  entityLabel: string
+  title: string
   recordId: string
   details: string
 }
@@ -836,6 +839,33 @@ const importRunTableColumns = computed(() => [
     meta: {
       class: {
         th: 'w-[140px]',
+      },
+    },
+  },
+  {
+    accessorKey: 'createdAt',
+    header: 'Дата и время',
+    meta: {
+      class: {
+        th: 'w-[170px]',
+      },
+    },
+  },
+  {
+    accessorKey: 'entityLabel',
+    header: 'Сущность',
+    meta: {
+      class: {
+        th: 'w-[150px]',
+      },
+    },
+  },
+  {
+    accessorKey: 'title',
+    header: 'Название',
+    meta: {
+      class: {
+        th: 'min-w-[220px]',
       },
     },
   },

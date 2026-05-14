@@ -7,6 +7,8 @@ from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZipFile
 from xml.sax.saxutils import escape
 
+import requests
+from b24pysdk.error import BitrixRequestTimeout
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.test.utils import override_settings
@@ -929,6 +931,47 @@ class ImportExecutionApiTest(TestCase):
             ],
         )
 
+    @patch("importer.services.import_execution.BitrixAPIBatchRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_hides_portal_domain_in_batch_timeout_errors(self, get_from_jwt_token, bitrix_api_batch_request):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+        bitrix_api_batch_request.side_effect = BitrixRequestTimeout(
+            requests.exceptions.ReadTimeout(
+                "HTTPSConnectionPool(host='mp24.bitrix24.ru', port=443): Read timed out. (read timeout=10)"
+            ),
+            timeout=10,
+        )
+
+        session = self.create_uploaded_session(
+            [["Lead title", "Email", "Phone"]]
+            + [[f"Lead {index}", f"lead{index}@example.com", f"+7900000{index:03d}"] for index in range(1, 51)]
+        )
+        self.prepare_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 0)
+        self.assertEqual(response.json()["item"]["failed_rows"], 50)
+
+        first_error = response.json()["item"]["results"][0]["error"]
+        self.assertNotIn("mp24.bitrix24.ru", first_error)
+        self.assertNotIn("HTTPSConnectionPool", first_error)
+        self.assertEqual(first_error, "Bitrix24 не ответил за 10 сек. Повторите импорт.")
+
+        session.refresh_from_db()
+        self.assertEqual(session.last_error, "")
+        self.assertEqual(
+            session.summary["import_run"]["results"][0]["error"],
+            "Bitrix24 не ответил за 10 сек. Повторите импорт.",
+        )
+
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     @patch("importer.views.enqueue_import_session_run")
     @patch.dict("os.environ", {"ENABLE_RABBITMQ": "1"}, clear=False)
@@ -1121,10 +1164,17 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(session.status, ImportSession.Status.RUNNING)
         self.assertEqual(session.summary["job"]["state"], "running")
 
+    @patch("importer.services.import_execution.BitrixAPIBatchRequest")
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_report_csv_downloads_import_results_after_run(self, get_from_jwt_token):
-        account = self.create_account(fail_on_titles={"Bob"})
+    def test_report_csv_downloads_import_results_after_run(self, get_from_jwt_token, bitrix_api_batch_request):
+        account = self.create_account()
         get_from_jwt_token.return_value = account
+        bitrix_api_batch_request.return_value = SimpleNamespace(
+            result=SimpleNamespace(
+                result={"0": 501},
+                result_error={"1": 'Bitrix create failed for "Bob"'},
+            )
+        )
 
         session = self.create_uploaded_session(
             [
@@ -1152,9 +1202,9 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(report_response["Content-Type"], "text/csv; charset=utf-8")
         self.assertIn("attachment;", report_response["Content-Disposition"])
         report_text = report_response.content.decode("utf-8-sig")
-        self.assertIn("row_number,status,status_label,record_id,error", report_text)
-        self.assertIn("2,created,", report_text)
-        self.assertIn("3,failed,", report_text)
+        self.assertIn("Строка;Статус;Дата и время;Сущность;Название;ID в Bitrix24;Обновлённые поля;Ошибка", report_text)
+        self.assertIn("2;Создано;", report_text)
+        self.assertIn("3;Ошибка;", report_text)
         self.assertIn('Bitrix create failed for ""Bob""', report_text)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")

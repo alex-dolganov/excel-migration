@@ -3,6 +3,7 @@ import os
 from main.models import Bitrix24Account
 
 from importer.models import ImportSession
+from importer.services.error_messages import format_import_error
 
 
 def is_import_queue_enabled() -> bool:
@@ -80,10 +81,11 @@ def execute_import_session_run_background(*, session_id: str, account_id: str):
     try:
         result = execute_import_session_run_now(session=session, account=account)
     except Exception as error:
+        error_message = format_import_error(error)
         session.refresh_from_db()
         session.status = ImportSession.Status.FAILED
-        session.last_error = str(error)
-        _update_session_job_state(session, mode="run", state="failed", error=str(error))
+        session.last_error = error_message
+        _update_session_job_state(session, mode="run", state="failed", error=error_message)
         session.save(update_fields=["status", "last_error", "summary", "updated_at"])
         raise
     session.refresh_from_db()
@@ -110,10 +112,11 @@ def execute_import_session_retry_background(*, session_id: str, account_id: str)
     try:
         result = execute_import_session_retry_now(session=session, account=account)
     except Exception as error:
+        error_message = format_import_error(error)
         session.refresh_from_db()
         session.status = ImportSession.Status.FAILED
-        session.last_error = str(error)
-        _update_session_job_state(session, mode="retry", state="failed", error=str(error))
+        session.last_error = error_message
+        _update_session_job_state(session, mode="retry", state="failed", error=error_message)
         session.save(update_fields=["status", "last_error", "summary", "updated_at"])
         raise
     session.refresh_from_db()

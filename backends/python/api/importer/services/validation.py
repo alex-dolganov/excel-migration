@@ -40,6 +40,21 @@ CRM_ACTIVITY_COMMUNICATION_TYPES = {
     "2": "call",
     "4": "email",
 }
+CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
+CURRENCY_ID_ALIASES = {
+    "rub": "RUB",
+    "rur": "RUB",
+    "руб": "RUB",
+    "рубль": "RUB",
+    "рубли": "RUB",
+    "российский рубль": "RUB",
+    "usd": "USD",
+    "доллар": "USD",
+    "доллары": "USD",
+    "доллар сша": "USD",
+    "eur": "EUR",
+    "евро": "EUR",
+}
 
 
 def normalize_value(value) -> str:
@@ -48,6 +63,22 @@ def normalize_value(value) -> str:
 
 def normalize_compare_value(value) -> str:
     return normalize_value(value).lower()
+
+
+def normalize_currency_id_value(value: str) -> str:
+    normalized_value = normalize_value(value)
+    if not normalized_value:
+        return ""
+
+    alias_value = CURRENCY_ID_ALIASES.get(normalize_compare_value(normalized_value))
+    if alias_value:
+        return alias_value
+
+    uppercase_value = normalized_value.upper()
+    if CURRENCY_CODE_RE.match(uppercase_value):
+        return uppercase_value
+
+    return normalized_value
 
 
 def resolve_default_field_value(default_field_values: dict | None, target_field: str) -> str:
@@ -252,8 +283,22 @@ def validate_field_value(
         return None
 
     for item_value in split_field_values(field, value):
+        normalized_item_value = item_value
+        if str(target_field or "").upper() == "CURRENCY_ID":
+            normalized_item_value = normalize_currency_id_value(item_value)
+            if not CURRENCY_CODE_RE.match(normalized_item_value):
+                return build_issue(
+                    row_number,
+                    column,
+                    source_header,
+                    target_field,
+                    "currency",
+                    f'Field "{field_title}" must contain a currency code such as RUB, USD or EUR',
+                    item_value,
+                )
+
         if field.get("items"):
-            mapped_value = resolve_mapped_field_value(field, item_value, mapping_item)
+            mapped_value = resolve_mapped_field_value(field, normalized_item_value, mapping_item)
             if not mapped_value:
                 return build_issue(
                     row_number,
@@ -262,11 +307,11 @@ def validate_field_value(
                     target_field,
                     "enum",
                     f'Field "{field_title}" must contain a mapped list value',
-                    item_value,
+                    normalized_item_value,
                 )
 
         if is_task_user_reference_field(field, target_field) and task_user_resolver is not None:
-            if task_user_resolver.resolve(item_value) is None:
+            if task_user_resolver.resolve(normalized_item_value) is None:
                 return build_issue(
                     row_number,
                     column,
@@ -274,12 +319,12 @@ def validate_field_value(
                     target_field,
                     "user",
                     f'Field "{field_title}" must contain a valid Bitrix user reference',
-                    item_value,
+                    normalized_item_value,
                 )
             continue
 
         if is_task_reference_field(field, target_field) and bitrix_task_resolver is not None:
-            if bitrix_task_resolver.resolve(item_value) is None:
+            if bitrix_task_resolver.resolve(normalized_item_value) is None:
                 return build_issue(
                     row_number,
                     column,
@@ -287,11 +332,11 @@ def validate_field_value(
                     target_field,
                     "task",
                     f'Field "{field_title}" must contain a valid Bitrix task reference',
-                    item_value,
+                    normalized_item_value,
                 )
             continue
 
-        if field_type == "email" and not EMAIL_RE.match(item_value):
+        if field_type == "email" and not EMAIL_RE.match(normalized_item_value):
             return build_issue(
                 row_number,
                 column,
@@ -299,10 +344,10 @@ def validate_field_value(
                 target_field,
                 "email",
                 f'Field "{field_title}" must contain a valid email',
-                item_value,
+                normalized_item_value,
             )
 
-        if field_type == "phone" and not is_valid_phone(item_value):
+        if field_type == "phone" and not is_valid_phone(normalized_item_value):
             return build_issue(
                 row_number,
                 column,
@@ -310,10 +355,10 @@ def validate_field_value(
                 target_field,
                 "phone",
                 f'Field "{field_title}" must contain a valid phone',
-                item_value,
+                normalized_item_value,
             )
 
-        if field_type == "date" and not is_valid_date(item_value):
+        if field_type == "date" and not is_valid_date(normalized_item_value):
             return build_issue(
                 row_number,
                 column,
@@ -321,10 +366,10 @@ def validate_field_value(
                 target_field,
                 "date",
                 f'Field "{field_title}" must contain a valid date',
-                item_value,
+                normalized_item_value,
             )
 
-        if field_type == "datetime" and not is_valid_datetime(item_value):
+        if field_type == "datetime" and not is_valid_datetime(normalized_item_value):
             return build_issue(
                 row_number,
                 column,
@@ -332,10 +377,10 @@ def validate_field_value(
                 target_field,
                 "datetime",
                 f'Field "{field_title}" must contain a valid date/time',
-                item_value,
+                normalized_item_value,
             )
 
-        if field_type in {"integer", "int"} and not is_valid_integer(item_value):
+        if field_type in {"integer", "int"} and not is_valid_integer(normalized_item_value):
             return build_issue(
                 row_number,
                 column,
@@ -343,10 +388,10 @@ def validate_field_value(
                 target_field,
                 "integer",
                 f'Field "{field_title}" must contain a whole number',
-                item_value,
+                normalized_item_value,
             )
 
-        if field_type in {"double", "float", "money", "number"} and not is_valid_number(item_value):
+        if field_type in {"double", "float", "money", "number"} and not is_valid_number(normalized_item_value):
             return build_issue(
                 row_number,
                 column,
@@ -354,10 +399,10 @@ def validate_field_value(
                 target_field,
                 "number",
                 f'Field "{field_title}" must contain a valid number',
-                item_value,
+                normalized_item_value,
             )
 
-        if field_type in {"boolean", "bool"} and item_value.lower() not in BOOLEAN_VALUES:
+        if field_type in {"boolean", "bool"} and normalized_item_value.lower() not in BOOLEAN_VALUES:
             return build_issue(
                 row_number,
                 column,
@@ -365,7 +410,7 @@ def validate_field_value(
                 target_field,
                 "boolean",
                 f'Field "{field_title}" must contain a valid boolean value',
-                item_value,
+                normalized_item_value,
             )
 
     return None
@@ -396,6 +441,8 @@ def resolve_row_field_value(
         mapped_value = resolve_mapped_field_value(field, value, mapping_item)
         if mapped_value:
             value = mapped_value
+    elif value and str(target_field or "").upper() == "CURRENCY_ID":
+        value = normalize_currency_id_value(value)
 
     return value, column, source_header
 

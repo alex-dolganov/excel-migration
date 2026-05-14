@@ -173,6 +173,31 @@ class ImportValidationServiceTest(SimpleTestCase):
 
         self.assertIsNone(issue)
 
+    def test_validate_field_value_accepts_currency_alias_and_rejects_free_text(self):
+        accepted_issue = validate_field_value(
+            field={"id": "CURRENCY_ID", "title": "Валюта", "type": "string", "required": False},
+            value="Рубли",
+            row_number=2,
+            column="B",
+            source_header="Валюта",
+            target_field="CURRENCY_ID",
+        )
+        rejected_issue = validate_field_value(
+            field={"id": "CURRENCY_ID", "title": "Валюта", "type": "string", "required": False},
+            value="рублёвые",
+            row_number=2,
+            column="B",
+            source_header="Валюта",
+            target_field="CURRENCY_ID",
+        )
+
+        self.assertIsNone(accepted_issue)
+        self.assertEqual(rejected_issue["code"], "currency")
+        self.assertEqual(
+            rejected_issue["message"],
+            'Field "Валюта" must contain a currency code such as RUB, USD or EUR',
+        )
+
     def test_build_validation_result_requires_communication_value_for_crm_activity_call(self):
         validation_result = build_validation_result(
             rows=[

@@ -201,6 +201,34 @@ class ImportExecutionServiceTest(SimpleTestCase):
             },
         )
 
+    def test_build_row_payload_normalizes_currency_alias_to_iso_code(self):
+        payload = build_row_payload(
+            row=["150000", "Рубли"],
+            columns=["A", "B"],
+            mapping={
+                "OPPORTUNITY": {
+                    "column": "A",
+                    "source_header": "Сумма",
+                },
+                "CURRENCY_ID": {
+                    "column": "B",
+                    "source_header": "Валюта",
+                },
+            },
+            fields=[
+                {"id": "OPPORTUNITY", "type": "money", "multiple": False},
+                {"id": "CURRENCY_ID", "type": "string", "multiple": False},
+            ],
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "OPPORTUNITY": 150000.0,
+                "CURRENCY_ID": "RUB",
+            },
+        )
+
     def test_build_row_payload_formats_multiple_custom_list_field_as_array(self):
         payload = build_row_payload(
             row=["Alpha; Beta"],

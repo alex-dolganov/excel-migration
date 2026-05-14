@@ -1048,9 +1048,12 @@ export function buildImportRunRows(importRunData) {
       rowNumber: Number(item?.row_number || 0),
       status,
       statusLabel: statusLabels[status] || status || '—',
+      createdAt: buildImportRunCreatedAt(item),
+      entityLabel: buildImportRunEntityLabel(item, linkedRecords),
+      title: buildImportRunTitle(item, linkedRecords),
       recordId,
       details: [
-        linkedDetails || (recordId !== '—' ? `ID ${recordId}` : errorDetails),
+        errorDetails || linkedDetails,
         duplicateMatchDetails,
         dedupMissingDetails,
       ].filter(Boolean).join(' · ') || '—',
@@ -1073,6 +1076,31 @@ const DEDUP_RISK_DETAILS_PREFIX = 'Неполный поиск дублей:'
 
 function normalizeImportRunStatus(value) {
   return String(value || '').trim()
+}
+
+function buildImportRunCreatedAt(item) {
+  return String(item?.report_date_time || '').trim() || '—'
+}
+
+function buildImportRunEntityLabel(item, linkedRecords) {
+  const reportEntity = String(item?.report_entity || '').trim()
+  if (reportEntity) {
+    return reportEntity
+  }
+
+  return linkedRecords ? 'Компания + Контакт' : '—'
+}
+
+function buildImportRunTitle(item, linkedRecords) {
+  const reportTitle = String(item?.report_title || '').trim()
+  if (reportTitle) {
+    return reportTitle
+  }
+
+  const companyRecord = normalizeLinkedRecord(linkedRecords?.company)
+  const contactRecord = normalizeLinkedRecord(linkedRecords?.contact)
+  const linkedTitles = [companyRecord?.title, contactRecord?.title].filter(Boolean)
+  return linkedTitles.join(' / ') || '—'
 }
 
 function normalizeImportRunReason(item) {
@@ -1271,6 +1299,11 @@ function normalizeLinkedRecord(item) {
 }
 
 function buildImportRunRecordId(item, linkedRecords) {
+  const reportRecordId = String(item?.report_record_id || '').trim()
+  if (reportRecordId) {
+    return reportRecordId
+  }
+
   const companyRecord = normalizeLinkedRecord(linkedRecords?.company)
   const contactRecord = normalizeLinkedRecord(linkedRecords?.contact)
 

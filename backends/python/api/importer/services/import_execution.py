@@ -10,12 +10,15 @@ from .validation import (
     parse_datetime_value,
     parse_integer_value,
     parse_number_value,
+    normalize_currency_id_value,
     resolve_default_field_value,
     resolve_field_validation_type,
     row_has_values,
     split_field_values,
 )
 from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, download_attachment_source
+from .error_messages import MISSING_BITRIX_RECORD_ID_ERROR, format_import_error
+from .report_metadata import build_import_result_report_meta
 from .task_resolution import BitrixTaskResolver, is_task_reference_field
 from .user_resolution import BitrixUserResolver, is_task_user_reference_field
 from .b24_fields import SMART_PROCESS_ENTITY_TYPE, get_linked_import_schema, normalize_smart_process_entity_config
@@ -69,7 +72,7 @@ def _flush_crm_batch(account, entity_type: str, pending_batch: list) -> tuple:
             api_method=method,
             params={"fields": payload},
         )
-        for i, (_, payload) in enumerate(pending_batch)
+        for i, (_row_number, payload) in enumerate(pending_batch)
     }
     batch_response = BitrixAPIBatchRequest(
         bitrix_token=account,
@@ -77,23 +80,45 @@ def _flush_crm_batch(account, entity_type: str, pending_batch: list) -> tuple:
         halt=False,
     )
     batch_result = batch_response.result
-    raw_results = batch_result.result if isinstance(batch_result.result, dict) else {}
-    raw_errors = batch_result.result_error if isinstance(batch_result.result_error, dict) else {}
+    raw_results = _normalize_batch_collection(batch_result.result)
+    raw_errors = _normalize_batch_collection(batch_result.result_error)
 
     flush_results = []
     created_count = 0
     failed_count = 0
     created_ids = []
 
-    for i, (row_number, _) in enumerate(pending_batch):
+    for i, (row_number, row_payload) in enumerate(pending_batch):
         key = str(i)
         if key in raw_errors:
             failed_count += 1
-            flush_results.append({"row_number": row_number, "status": "failed", "error": str(raw_errors[key])})
+            flush_results.append(
+                {
+                    "row_number": row_number,
+                    "status": "failed",
+                    "error": format_import_error(raw_errors[key]),
+                    **build_import_result_report_meta(entity_type, row_payload=row_payload),
+                }
+            )
         else:
-            record_id = normalize_record_id(raw_results.get(key))
+            record_id = _extract_record_id_from_batch_result(raw_results.get(key))
+            if record_id is None:
+                failed_count += 1
+                flush_results.append(
+                    {
+                        "row_number": row_number,
+                        "status": "failed",
+                        "error": MISSING_BITRIX_RECORD_ID_ERROR,
+                        **build_import_result_report_meta(entity_type, row_payload=row_payload),
+                    }
+                )
+                continue
             created_count += 1
-            result_item = {"row_number": row_number, "status": "created"}
+            result_item = {
+                "row_number": row_number,
+                "status": "created",
+                **build_import_result_report_meta(entity_type, row_payload=row_payload, record_id=record_id),
+            }
             if record_id is not None:
                 created_ids.append(record_id)
                 result_item["record_id"] = record_id
@@ -284,6 +309,9 @@ def normalize_typed_field_value(field: dict, target_field: str, value, column_ty
     if not normalized_value:
         return ""
 
+    if str(target_field or "").upper() == "CURRENCY_ID":
+        return normalize_currency_id_value(normalized_value)
+
     if is_task_reference_field(field, target_field):
         try:
             return parse_integer_value(normalized_value)
@@ -459,6 +487,43 @@ def normalize_record_id(record_id):
         return int(record_id)
     except (TypeError, ValueError):
         return record_id
+
+
+def _normalize_batch_collection(collection) -> dict:
+    if isinstance(collection, dict):
+        return collection
+    if isinstance(collection, list):
+        normalized = {}
+        for index, value in enumerate(collection):
+            if value in (None, "", [], {}):
+                continue
+            normalized[str(index)] = value
+        return normalized
+    return {}
+
+
+def _extract_record_id_from_batch_result(result):
+    normalized_result = unwrap_bitrix_result(result)
+
+    if isinstance(normalized_result, dict):
+        nested_item = normalized_result.get("item")
+        if isinstance(nested_item, dict):
+            return normalize_record_id(nested_item.get("ID") or nested_item.get("id"))
+
+        nested_result = normalized_result.get("result")
+        if isinstance(nested_result, dict):
+            nested_result_item = nested_result.get("item")
+            if isinstance(nested_result_item, dict):
+                return normalize_record_id(nested_result_item.get("ID") or nested_result_item.get("id"))
+            return normalize_record_id(
+                nested_result.get("ID") or nested_result.get("id") or nested_result.get("result")
+            )
+
+        return normalize_record_id(
+            normalized_result.get("ID") or normalized_result.get("id") or normalized_result.get("result")
+        )
+
+    return normalize_record_id(normalized_result)
 
 
 def build_crm_activity_communications(fields: dict) -> list[dict]:
@@ -1463,6 +1528,7 @@ def execute_linked_import(
                         "row_number": remaining_row_number,
                         "status": "cancelled",
                         "error": "Import was cancelled before row execution",
+                        **build_import_result_report_meta(entity_type),
                     }
                 )
             break
@@ -1486,6 +1552,7 @@ def execute_linked_import(
                     "row_number": row_number,
                     "status": "skipped",
                     "error": "Row has validation issues",
+                    **build_import_result_report_meta(entity_type),
                 }
             )
             continue
@@ -1507,7 +1574,8 @@ def execute_linked_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": str(error),
+                    "error": format_import_error(error),
+                    **build_import_result_report_meta(entity_type),
                 }
             )
             continue
@@ -1524,7 +1592,14 @@ def execute_linked_import(
             )) if contact_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
         except Exception as error:
             failed_rows += 1
-            results.append({"row_number": row_number, "status": "failed", "error": str(error)})
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "failed",
+                    "error": format_import_error(error),
+                    **build_import_result_report_meta(entity_type, linked_payload=linked_payload),
+                }
+            )
             continue
 
         company_id = company_action.get("record_id")
@@ -1540,7 +1615,8 @@ def execute_linked_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": str(error),
+                    "error": format_import_error(error),
+                    **build_import_result_report_meta(entity_type, linked_payload=linked_payload),
                 }
             )
             continue
@@ -1566,7 +1642,8 @@ def execute_linked_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": str(error),
+                    "error": format_import_error(error),
+                    **build_import_result_report_meta(entity_type, linked_payload=linked_payload),
                 }
             )
             continue
@@ -1587,12 +1664,6 @@ def execute_linked_import(
             and contact_action.get("record_id") is not None
         )
         has_updates = company_action.get("mode") == "update" or contact_action.get("mode") == "update" or has_contact_link_update
-        result_item = {
-            "row_number": row_number,
-            "status": "updated" if has_updates else "created",
-        }
-        if result_meta:
-            result_item["linked"] = result_meta
         linked_records = {}
         linked_entity_payloads = {
             "company": company_payload,
@@ -1611,6 +1682,18 @@ def execute_linked_import(
             )
             if linked_record is not None:
                 linked_records[linked_entity] = linked_record
+        result_item = {
+            "row_number": row_number,
+            "status": "updated" if has_updates else "created",
+            **build_import_result_report_meta(
+                entity_type,
+                record_id=contact_record_id,
+                linked_records=linked_records,
+                linked_payload=linked_payload,
+            ),
+        }
+        if result_meta:
+            result_item["linked"] = result_meta
         if linked_records:
             result_item["linked_records"] = linked_records
         if contact_record_id is not None:
@@ -1843,6 +1926,7 @@ def execute_import(
     was_cancelled = False
     use_batch = _is_batch_eligible(entity_type, normalized_dedup_settings)
     pending_batch: list = []
+    report_entity_config = (import_context or {}).get("entity_config") if isinstance(import_context, dict) else None
 
     def _flush_pending_batch():
         nonlocal created_rows, failed_rows
@@ -1854,9 +1938,20 @@ def execute_import(
                 lambda: _flush_crm_batch(account, entity_type, list(pending_batch))
             )
         except Exception as error:
-            for prow_number, _ in pending_batch:
+            for prow_number, pending_row_payload in pending_batch:
                 failed_rows += 1
-                results.append({"row_number": prow_number, "status": "failed", "error": str(error)})
+                results.append(
+                    {
+                        "row_number": prow_number,
+                        "status": "failed",
+                        "error": format_import_error(error),
+                        **build_import_result_report_meta(
+                            entity_type,
+                            row_payload=pending_row_payload,
+                            entity_config=report_entity_config,
+                        ),
+                    }
+                )
             pending_batch.clear()
             return
         results.extend(batch_results)
@@ -1891,6 +1986,7 @@ def execute_import(
                         "row_number": remaining_row_number,
                         "status": "cancelled",
                         "error": "Import was cancelled before row execution",
+                        **build_import_result_report_meta(entity_type, entity_config=report_entity_config),
                     }
                 )
             break
@@ -1915,6 +2011,7 @@ def execute_import(
                     "row_number": row_number,
                     "status": "skipped",
                     "error": "Row has validation issues",
+                    **build_import_result_report_meta(entity_type, entity_config=report_entity_config),
                 }
             )
             continue
@@ -1931,7 +2028,14 @@ def execute_import(
             )
         except Exception as error:
             failed_rows += 1
-            results.append({"row_number": row_number, "status": "failed", "error": str(error)})
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "failed",
+                    "error": format_import_error(error),
+                    **build_import_result_report_meta(entity_type, entity_config=report_entity_config),
+                }
+            )
             continue
 
         if use_batch:
@@ -1953,7 +2057,18 @@ def execute_import(
             )
         except Exception as error:
             failed_rows += 1
-            results.append({"row_number": row_number, "status": "failed", "error": str(error)})
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "failed",
+                    "error": format_import_error(error),
+                    **build_import_result_report_meta(
+                        entity_type,
+                        row_payload=row_payload,
+                        entity_config=report_entity_config,
+                    ),
+                }
+            )
             continue
 
         existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
@@ -1974,6 +2089,12 @@ def execute_import(
                     "record_id": existing_record_id,
                     **dedup_result_meta,
                     "error": "Duplicate matched existing record",
+                    **build_import_result_report_meta(
+                        entity_type,
+                        row_payload=row_payload,
+                        record_id=existing_record_id,
+                        entity_config=report_entity_config,
+                    ),
                 }
             )
             continue
@@ -1993,6 +2114,12 @@ def execute_import(
                         "record_id": existing_record_id,
                         **dedup_result_meta,
                         "error": "Duplicate skipped by user decision",
+                        **build_import_result_report_meta(
+                            entity_type,
+                            row_payload=row_payload,
+                            record_id=existing_record_id,
+                            entity_config=report_entity_config,
+                        ),
                     }
                 )
                 continue
@@ -2001,7 +2128,19 @@ def execute_import(
                     _bitrix_retry(lambda: update_entity_record(account, entity_type, existing_record_id, row_payload))
                 except Exception as error:
                     failed_rows += 1
-                    results.append({"row_number": row_number, "status": "failed", "error": str(error)})
+                    results.append(
+                        {
+                            "row_number": row_number,
+                            "status": "failed",
+                            "error": format_import_error(error),
+                            **build_import_result_report_meta(
+                                entity_type,
+                                row_payload=row_payload,
+                                record_id=existing_record_id,
+                                entity_config=report_entity_config,
+                            ),
+                        }
+                    )
                     continue
                 updated_rows += 1
                 updated_ids.append(existing_record_id)
@@ -2012,6 +2151,12 @@ def execute_import(
                         "record_id": existing_record_id,
                         "updated_fields": list(row_payload.keys()),
                         **dedup_result_meta,
+                        **build_import_result_report_meta(
+                            entity_type,
+                            row_payload=row_payload,
+                            record_id=existing_record_id,
+                            entity_config=report_entity_config,
+                        ),
                     }
                 )
                 continue
@@ -2026,7 +2171,13 @@ def execute_import(
                     {
                         "row_number": row_number,
                         "status": "failed",
-                        "error": str(error),
+                        "error": format_import_error(error),
+                        **build_import_result_report_meta(
+                            entity_type,
+                            row_payload=row_payload,
+                            record_id=existing_record_id,
+                            entity_config=report_entity_config,
+                        ),
                     }
                 )
                 continue
@@ -2040,6 +2191,12 @@ def execute_import(
                     "record_id": existing_record_id,
                     "updated_fields": list(row_payload.keys()),
                     **dedup_result_meta,
+                    **build_import_result_report_meta(
+                        entity_type,
+                        row_payload=row_payload,
+                        record_id=existing_record_id,
+                        entity_config=report_entity_config,
+                    ),
                 }
             )
             continue
@@ -2052,7 +2209,12 @@ def execute_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": str(error),
+                    "error": format_import_error(error),
+                    **build_import_result_report_meta(
+                        entity_type,
+                        row_payload=row_payload,
+                        entity_config=report_entity_config,
+                    ),
                 }
             )
             continue
@@ -2062,6 +2224,12 @@ def execute_import(
             "row_number": row_number,
             "status": "created",
             **dedup_result_meta,
+            **build_import_result_report_meta(
+                entity_type,
+                row_payload=row_payload,
+                record_id=record_id,
+                entity_config=report_entity_config,
+            ),
         }
         if record_id is not None:
             created_ids.append(record_id)
