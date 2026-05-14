@@ -22,6 +22,7 @@ REPORT_ENTITY_LABELS = {
     "user": "Пользователь",
     "department": "Подразделение",
     "linked_company_contact": "Компания + Контакт",
+    "linked_company_deal": "Компания + Сделка",
 }
 
 
@@ -79,8 +80,12 @@ def _build_linked_title(linked_records=None, linked_payload=None) -> str:
         (linked_payload_map.get("contact") or {}).get("EMAIL"),
         (linked_payload_map.get("contact") or {}).get("PHONE"),
     )
+    deal_title = _first_non_empty(
+        linked_records_map.get("deal", {}),
+        (linked_payload_map.get("deal") or {}).get("TITLE"),
+    )
 
-    return " / ".join(part for part in [company_title, contact_title] if part)
+    return " / ".join(part for part in [company_title, contact_title, deal_title] if part)
 
 
 def build_report_entity_label(entity_type: str, *, entity_config: dict | None = None) -> str:
@@ -102,7 +107,7 @@ def build_report_title(
 ) -> str:
     fields = row_payload if isinstance(row_payload, dict) else {}
 
-    if entity_type == "linked_company_contact":
+    if entity_type in {"linked_company_contact", "linked_company_deal"}:
         return _build_linked_title(linked_records=linked_records, linked_payload=linked_payload)
 
     if entity_type in {"lead", "company", "deal", "task", "task_checklist_item", SMART_PROCESS_ENTITY_TYPE}:
@@ -149,10 +154,13 @@ def build_report_record_id(record_id=None, *, linked_records: dict | None = None
         labels = []
         company_id = normalize_value((linked_records_map.get("company") or {}).get("id"))
         contact_id = normalize_value((linked_records_map.get("contact") or {}).get("id"))
+        deal_id = normalize_value((linked_records_map.get("deal") or {}).get("id"))
         if company_id:
             labels.append(f"Компания {company_id}")
         if contact_id:
             labels.append(f"Контакт {contact_id}")
+        if deal_id:
+            labels.append(f"Сделка {deal_id}")
         if labels:
             return " · ".join(labels)
 

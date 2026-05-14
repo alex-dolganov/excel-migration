@@ -622,6 +622,7 @@ SMART_PROCESS_ENTITY_TYPE = "smart_process"
 
 CONTACT_OPTIONAL_NAME_FIELDS = {"NAME", "LAST_NAME", "SECOND_NAME"}
 LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
+LINKED_COMPANY_DEAL_ENTITY_TYPE = "linked_company_deal"
 LINKED_IMPORT_SCHEMAS = {
     LINKED_COMPANY_CONTACT_ENTITY_TYPE: {
         "label": "Компания + Контакт",
@@ -638,6 +639,25 @@ LINKED_IMPORT_SCHEMAS = {
                 "label": "Контакт",
                 "source_entity_type": "contact",
                 "prefix": "CONTACT__",
+                "excluded_source_ids": ("COMPANY_ID",),
+            },
+        ],
+    },
+    LINKED_COMPANY_DEAL_ENTITY_TYPE: {
+        "label": "Компания + Сделка",
+        "entities": [
+            {
+                "id": "company",
+                "label": "Компания",
+                "source_entity_type": "company",
+                "prefix": "COMPANY__",
+                "excluded_source_ids": (),
+            },
+            {
+                "id": "deal",
+                "label": "Сделка",
+                "source_entity_type": "deal",
+                "prefix": "DEAL__",
                 "excluded_source_ids": ("COMPANY_ID",),
             },
         ],

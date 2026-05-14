@@ -38,6 +38,11 @@ CRM_ACTIVITY_COMMUNICATION_TYPES = {
 }
 HR_ENTITY_TYPES = {"user", "department"}
 LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
+LINKED_COMPANY_DEAL_ENTITY_TYPE = "linked_company_deal"
+LINKED_COMPANY_CHILD_ENTITY_TYPES = {
+    LINKED_COMPANY_CONTACT_ENTITY_TYPE: "contact",
+    LINKED_COMPANY_DEAL_ENTITY_TYPE: "deal",
+}
 
 SUPPORTED_DEDUP_STRATEGIES = {"create", "skip", "update", "ask"}
 SUPPORTED_DEDUP_FIELDS = {"EMAIL", "PHONE", "TITLE"}   # legacy whitelist kept for reference
@@ -176,6 +181,13 @@ def get_linked_entity_prefix_map(entity_type: str = LINKED_COMPANY_CONTACT_ENTIT
 
 def is_linked_import_entity_type(entity_type: str) -> bool:
     return get_linked_import_schema(str(entity_type or "").strip()) is not None
+
+
+def get_linked_company_child_entity_type(entity_type: str) -> str:
+    child_entity_type = LINKED_COMPANY_CHILD_ENTITY_TYPES.get(str(entity_type or "").strip())
+    if not child_entity_type:
+        raise ValueError(f"Unsupported linked import entity type: {entity_type}")
+    return child_entity_type
 
 
 def build_linked_field_groups(fields: list[dict], entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> dict[str, list[dict]]:
@@ -959,6 +971,9 @@ def build_linked_record_title(linked_entity: str, row_payload: dict) -> str:
     if linked_entity == "company":
         return normalize_value(row_payload.get("TITLE"))
 
+    if linked_entity == "deal":
+        return normalize_value(row_payload.get("TITLE"))
+
     if linked_entity == "contact":
         parts = [
             normalize_value(row_payload.get("NAME")),
@@ -1382,6 +1397,7 @@ def execute_linked_dry_run(
     ready_update_rows = 0
     skipped_rows = 0
     results = []
+    child_entity_type = get_linked_company_child_entity_type(entity_type)
 
     for row_index, row_number in enumerate(row_numbers):
         if row_number < data_start_row:
@@ -1422,24 +1438,24 @@ def execute_linked_dry_run(
             dedup_settings.get("company", {}),
         ) if linked_payload.get("company") else {"mode": "skip_payload", "record_id": None, "meta": {}}
 
-        contact_action = resolve_linked_record_action(
+        child_action = resolve_linked_record_action(
             account,
-            "contact",
-            linked_payload.get("contact", {}),
-            dedup_settings.get("contact", {}),
-        ) if linked_payload.get("contact") else {"mode": "skip_payload", "record_id": None, "meta": {}}
+            child_entity_type,
+            linked_payload.get(child_entity_type, {}),
+            dedup_settings.get(child_entity_type, {}),
+        ) if linked_payload.get(child_entity_type) else {"mode": "skip_payload", "record_id": None, "meta": {}}
 
         result_meta = {}
         linked_actions = {
             "company": company_action,
-            "contact": contact_action,
+            child_entity_type: child_action,
         }
         for linked_entity in get_linked_entity_ids(entity_type):
             linked_meta = linked_actions.get(linked_entity, {}).get("meta", {})
             if linked_meta:
                 result_meta[linked_entity] = linked_meta
 
-        has_updates = company_action.get("mode") == "update" or contact_action.get("mode") == "update"
+        has_updates = company_action.get("mode") == "update" or child_action.get("mode") == "update"
 
         ready_rows += 1
         if has_updates:
@@ -1457,8 +1473,8 @@ def execute_linked_dry_run(
                 "fields": build_linked_result_fields(linked_payload, entity_type=entity_type),
             }
 
-        if contact_action.get("record_id") is not None:
-            result_item["record_id"] = contact_action["record_id"]
+        if child_action.get("record_id") is not None:
+            result_item["record_id"] = child_action["record_id"]
 
         if result_meta:
             result_item["linked"] = result_meta
@@ -1502,6 +1518,8 @@ def execute_linked_import(
     updated_ids = []
     results = []
     was_cancelled = False
+    child_entity_type = get_linked_company_child_entity_type(entity_type)
+    child_link_field = "COMPANY_ID"
 
     for row_index, row_number in enumerate(row_numbers):
         if row_number < data_start_row:
@@ -1581,15 +1599,15 @@ def execute_linked_import(
             continue
 
         company_payload = linked_payload.get("company", {})
-        contact_payload = linked_payload.get("contact", {})
+        child_payload = linked_payload.get(child_entity_type, {})
 
         try:
             company_action = _bitrix_retry(lambda: resolve_linked_record_action(
                 account, "company", company_payload, dedup_settings.get("company", {}),
             )) if company_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
-            contact_action = _bitrix_retry(lambda: resolve_linked_record_action(
-                account, "contact", contact_payload, dedup_settings.get("contact", {}),
-            )) if contact_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
+            child_action = _bitrix_retry(lambda: resolve_linked_record_action(
+                account, child_entity_type, child_payload, dedup_settings.get(child_entity_type, {}),
+            )) if child_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
         except Exception as error:
             failed_rows += 1
             results.append(
@@ -1621,21 +1639,21 @@ def execute_linked_import(
             )
             continue
 
-        if company_id is not None and contact_payload:
-            contact_payload = {
-                **contact_payload,
-                "COMPANY_ID": normalize_record_id(company_id) or company_id,
+        if company_id is not None and child_payload:
+            child_payload = {
+                **child_payload,
+                child_link_field: normalize_record_id(company_id) or company_id,
             }
 
-        contact_record_id = contact_action.get("record_id")
+        child_record_id = child_action.get("record_id")
         try:
-            if contact_payload:
-                if contact_action["mode"] == "update":
-                    _bitrix_retry(lambda: update_entity_record(account, "contact", contact_action["record_id"], contact_payload))
-                elif contact_action["mode"] == "reuse" and company_id is not None and contact_action["record_id"] is not None:
-                    _bitrix_retry(lambda: update_entity_record(account, "contact", contact_action["record_id"], {"COMPANY_ID": company_id}))
-                elif contact_action["mode"] == "create":
-                    contact_record_id = _bitrix_retry(lambda: create_entity_record(account, "contact", contact_payload))
+            if child_payload:
+                if child_action["mode"] == "update":
+                    _bitrix_retry(lambda: update_entity_record(account, child_entity_type, child_action["record_id"], child_payload))
+                elif child_action["mode"] == "reuse" and company_id is not None and child_action["record_id"] is not None:
+                    _bitrix_retry(lambda: update_entity_record(account, child_entity_type, child_action["record_id"], {child_link_field: company_id}))
+                elif child_action["mode"] == "create":
+                    child_record_id = _bitrix_retry(lambda: create_entity_record(account, child_entity_type, child_payload))
         except Exception as error:
             failed_rows += 1
             results.append(
@@ -1651,27 +1669,27 @@ def execute_linked_import(
         result_meta = {}
         linked_actions = {
             "company": company_action,
-            "contact": contact_action,
+            child_entity_type: child_action,
         }
         for linked_entity in get_linked_entity_ids(entity_type):
             linked_meta = linked_actions.get(linked_entity, {}).get("meta", {})
             if linked_meta:
                 result_meta[linked_entity] = linked_meta
 
-        has_contact_link_update = (
-            contact_action.get("mode") == "reuse"
+        has_child_link_update = (
+            child_action.get("mode") == "reuse"
             and company_id is not None
-            and contact_action.get("record_id") is not None
+            and child_action.get("record_id") is not None
         )
-        has_updates = company_action.get("mode") == "update" or contact_action.get("mode") == "update" or has_contact_link_update
+        has_updates = company_action.get("mode") == "update" or child_action.get("mode") == "update" or has_child_link_update
         linked_records = {}
         linked_entity_payloads = {
             "company": company_payload,
-            "contact": contact_payload,
+            child_entity_type: child_payload,
         }
         linked_entity_record_ids = {
             "company": company_id,
-            "contact": contact_record_id,
+            child_entity_type: child_record_id,
         }
         for linked_entity in get_linked_entity_ids(entity_type):
             linked_record = build_linked_record_result(
@@ -1687,7 +1705,7 @@ def execute_linked_import(
             "status": "updated" if has_updates else "created",
             **build_import_result_report_meta(
                 entity_type,
-                record_id=contact_record_id,
+                record_id=child_record_id,
                 linked_records=linked_records,
                 linked_payload=linked_payload,
             ),
@@ -1696,17 +1714,17 @@ def execute_linked_import(
             result_item["linked"] = result_meta
         if linked_records:
             result_item["linked_records"] = linked_records
-        if contact_record_id is not None:
-            result_item["record_id"] = contact_record_id
+        if child_record_id is not None:
+            result_item["record_id"] = child_record_id
 
         if has_updates:
             updated_rows += 1
-            if contact_record_id is not None:
-                updated_ids.append(contact_record_id)
+            if child_record_id is not None:
+                updated_ids.append(child_record_id)
         else:
             created_rows += 1
-            if contact_record_id is not None:
-                created_ids.append(contact_record_id)
+            if child_record_id is not None:
+                created_ids.append(child_record_id)
 
         results.append(result_item)
 

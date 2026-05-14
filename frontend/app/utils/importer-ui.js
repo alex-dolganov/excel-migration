@@ -22,6 +22,7 @@ export const SUPPORTED_IMPORT_ENTITIES = [
   { value: 'crm_activity', label: 'Активности CRM' },
   { value: 'crm_note', label: 'Заметки CRM' },
   { value: 'linked_company_contact', label: 'Компания + Контакт' },
+  { value: 'linked_company_deal', label: 'Компания + Сделка' },
   { value: 'task', label: 'Задачи' },
   { value: 'task_comment', label: 'Комментарии задач' },
   { value: 'task_checklist_item', label: 'Чек-листы задач' },
@@ -203,7 +204,59 @@ export const LINKED_IMPORT_SCENARIOS = {
       exampleColumns: ['COMPANY__TITLE', 'COMPANY__PHONE', 'CONTACT__NAME', 'CONTACT__LAST_NAME', 'CONTACT__EMAIL'],
     },
   },
+  linked_company_deal: {
+    value: 'linked_company_deal',
+    label: 'Компания + Сделка',
+    family: 'linked',
+    linkedEntities: [
+      {
+        id: 'company',
+        label: 'Компания',
+        sourceEntityType: 'company',
+        prefix: 'COMPANY__',
+      },
+      {
+        id: 'deal',
+        label: 'Сделка',
+        sourceEntityType: 'deal',
+        prefix: 'DEAL__',
+      },
+    ],
+    title: 'Связанный импорт компании и сделки',
+    description: 'Каждая строка создаёт или обновляет компанию и связанную с ней сделку.',
+    minimumFields: ['COMPANY__TITLE', 'DEAL__TITLE'],
+    destinationLabel: 'Сначала обрабатывает компанию, затем создаёт или обновляет сделку и связывает её с компанией.',
+    guide: {
+      title: 'Связанный импорт компании и сделки',
+      description: 'Одна строка Excel создаёт или обновляет компанию и связанную с ней сделку.',
+      highlights: [
+        'Компания и сделка загружаются из одной строки и связываются автоматически.',
+        'Для компании используйте колонки с префиксом COMPANY__, для сделки с префиксом DEAL__.',
+        'Если для сделки нужны суммы и этапы, используйте DEAL__OPPORTUNITY, DEAL__CURRENCY_ID и DEAL__STAGE_ID.',
+      ],
+      exampleColumns: ['COMPANY__TITLE', 'COMPANY__PHONE', 'DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__CURRENCY_ID', 'DEAL__STAGE_ID'],
+    },
+  },
 }
+
+const LINKED_ENTITY_DISPLAY_META = {
+  company: {
+    singular: 'Компания',
+    plural: 'Компании',
+    emptyTitle: 'Без названия',
+  },
+  contact: {
+    singular: 'Контакт',
+    plural: 'Контакты',
+    emptyTitle: 'Без имени',
+  },
+  deal: {
+    singular: 'Сделка',
+    plural: 'Сделки',
+    emptyTitle: 'Без названия',
+  },
+}
+const LINKED_ENTITY_DISPLAY_ORDER = ['company', 'contact', 'deal']
 
 export const FILE_ATTACH_IMPORT_SCENARIOS = {
   crm_files_lead: {
@@ -1082,13 +1135,44 @@ function buildImportRunCreatedAt(item) {
   return String(item?.report_date_time || '').trim() || '—'
 }
 
+function getLinkedRecordSectionIds(linkedRecords) {
+  if (!linkedRecords || typeof linkedRecords !== 'object') {
+    return []
+  }
+
+  const knownIds = LINKED_ENTITY_DISPLAY_ORDER.filter((sectionId) => normalizeLinkedRecord(linkedRecords?.[sectionId]))
+  const extraIds = Object.keys(linkedRecords)
+    .filter((sectionId) => !LINKED_ENTITY_DISPLAY_ORDER.includes(sectionId))
+    .filter((sectionId) => normalizeLinkedRecord(linkedRecords?.[sectionId]))
+
+  return [...knownIds, ...extraIds]
+}
+
+function getLinkedEntityDisplayMeta(sectionId) {
+  const normalizedSectionId = String(sectionId || '').trim()
+  return LINKED_ENTITY_DISPLAY_META[normalizedSectionId] || {
+    singular: normalizedSectionId || 'Связанная запись',
+    plural: normalizedSectionId || 'Связанные записи',
+    emptyTitle: 'Без названия',
+  }
+}
+
+function buildLinkedEntitySummaryLabel(linkedRecords) {
+  const sectionIds = getLinkedRecordSectionIds(linkedRecords)
+  if (!sectionIds.length) {
+    return '—'
+  }
+
+  return sectionIds.map((sectionId) => getLinkedEntityDisplayMeta(sectionId).singular).join(' + ')
+}
+
 function buildImportRunEntityLabel(item, linkedRecords) {
   const reportEntity = String(item?.report_entity || '').trim()
   if (reportEntity) {
     return reportEntity
   }
 
-  return linkedRecords ? 'Компания + Контакт' : '—'
+  return buildLinkedEntitySummaryLabel(linkedRecords)
 }
 
 function buildImportRunTitle(item, linkedRecords) {
@@ -1097,9 +1181,9 @@ function buildImportRunTitle(item, linkedRecords) {
     return reportTitle
   }
 
-  const companyRecord = normalizeLinkedRecord(linkedRecords?.company)
-  const contactRecord = normalizeLinkedRecord(linkedRecords?.contact)
-  const linkedTitles = [companyRecord?.title, contactRecord?.title].filter(Boolean)
+  const linkedTitles = getLinkedRecordSectionIds(linkedRecords)
+    .map((sectionId) => normalizeLinkedRecord(linkedRecords?.[sectionId])?.title)
+    .filter(Boolean)
   return linkedTitles.join(' / ') || '—'
 }
 
@@ -1304,20 +1388,19 @@ function buildImportRunRecordId(item, linkedRecords) {
     return reportRecordId
   }
 
-  const companyRecord = normalizeLinkedRecord(linkedRecords?.company)
-  const contactRecord = normalizeLinkedRecord(linkedRecords?.contact)
+  const labels = getLinkedRecordSectionIds(linkedRecords)
+    .map((sectionId) => {
+      const linkedRecord = normalizeLinkedRecord(linkedRecords?.[sectionId])
+      if (!linkedRecord?.id) {
+        return ''
+      }
 
-  if (companyRecord || contactRecord) {
-    const labels = []
-    if (companyRecord?.id) {
-      labels.push(`Компания ${companyRecord.id}`)
-    }
-    if (contactRecord?.id) {
-      labels.push(`Контакт ${contactRecord.id}`)
-    }
-    if (labels.length > 0) {
-      return labels.join(' · ')
-    }
+      return `${getLinkedEntityDisplayMeta(sectionId).singular} ${linkedRecord.id}`
+    })
+    .filter(Boolean)
+
+  if (labels.length > 0) {
+    return labels.join(' · ')
   }
 
   return item?.record_id === undefined || item?.record_id === null || item?.record_id === ''
@@ -1326,29 +1409,21 @@ function buildImportRunRecordId(item, linkedRecords) {
 }
 
 function buildLinkedImportRunDetails(linkedRecords) {
-  const companyRecord = normalizeLinkedRecord(linkedRecords?.company)
-  const contactRecord = normalizeLinkedRecord(linkedRecords?.contact)
-  const details = []
+  return getLinkedRecordSectionIds(linkedRecords)
+    .map((sectionId) => {
+      const linkedRecord = normalizeLinkedRecord(linkedRecords?.[sectionId])
+      if (!linkedRecord) {
+        return ''
+      }
 
-  if (companyRecord) {
-    details.push(
-      [
-        'Компания:',
-        companyRecord.title || 'Без названия',
-      ].filter(Boolean).join(' ') + (companyRecord.id ? ` · ID ${companyRecord.id}` : ''),
-    )
-  }
-
-  if (contactRecord) {
-    details.push(
-      [
-        'Контакт:',
-        contactRecord.title || 'Без имени',
-      ].filter(Boolean).join(' ') + (contactRecord.id ? ` · ID ${contactRecord.id}` : ''),
-    )
-  }
-
-  return details.join(' · ')
+      const displayMeta = getLinkedEntityDisplayMeta(sectionId)
+      return [
+        `${displayMeta.singular}:`,
+        linkedRecord.title || displayMeta.emptyTitle,
+      ].filter(Boolean).join(' ') + (linkedRecord.id ? ` · ID ${linkedRecord.id}` : '')
+    })
+    .filter(Boolean)
+    .join(' · ')
 }
 
 function buildLinkedSummaryItem(sectionId, record, index) {
@@ -1511,10 +1586,11 @@ export function buildLinkedImportRunSummary(importRunData, { pageSize = 5, maxPa
   const maxItemsPerSection = cappedPageSize * cappedMaxPages
   const results = Array.isArray(importRunData?.results) ? importRunData.results : []
 
-  const sectionDefinitions = [
-    { id: 'company', title: 'Компании' },
-    { id: 'contact', title: 'Контакты' },
-  ]
+  const sectionIds = Array.from(new Set(results.flatMap((item) => getLinkedRecordSectionIds(item?.linked_records))))
+  const sectionDefinitions = sectionIds.map((sectionId) => ({
+    id: sectionId,
+    title: getLinkedEntityDisplayMeta(sectionId).plural,
+  }))
 
   const sections = sectionDefinitions
     .map((section) => {

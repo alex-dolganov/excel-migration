@@ -378,6 +378,26 @@ class ImportExecutionApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_linked_company_deal_session(self, rows):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_company_deal",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="linked-company-deal.xlsx",
+        )
+        session.stored_file.save(
+            "linked-company-deal.xlsx",
+            SimpleUploadedFile(
+                "linked-company-deal.xlsx",
+                build_xlsx_with_sheets([("Linked", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def create_task_comment_account(self, *, member_id="member-1", domain_url="test.bitrix24.ru", user_results_by_filter=None):
         chat_message_calls = []
         record_id_sequence = itertools.count(start=4001)
@@ -595,6 +615,132 @@ class ImportExecutionApiTest(TestCase):
         account.contact_list_calls = contact_list_calls
         return account
 
+    def create_linked_company_deal_account(
+        self,
+        *,
+        member_id="member-1",
+        domain_url="test.bitrix24.ru",
+        company_duplicates_by_filter=None,
+        deal_duplicates_by_filter=None,
+    ):
+        company_created_fields = []
+        deal_created_fields = []
+        company_updated_records = []
+        deal_updated_records = []
+        company_list_calls = []
+        deal_list_calls = []
+        company_record_id_sequence = itertools.count(start=601)
+        deal_record_id_sequence = itertools.count(start=801)
+        company_duplicates_by_filter = company_duplicates_by_filter or {}
+        deal_duplicates_by_filter = deal_duplicates_by_filter or {}
+
+        def company_add(fields, *, params=None, timeout=None):
+            company_created_fields.append(dict(fields))
+            return FakeAddRequest(next(company_record_id_sequence))
+
+        def deal_add(fields, *, params=None, timeout=None):
+            deal_created_fields.append(dict(fields))
+            return FakeAddRequest(next(deal_record_id_sequence))
+
+        def company_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            company_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(company_duplicates_by_filter.get(normalized_filter, []))
+
+        def deal_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            deal_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(deal_duplicates_by_filter.get(normalized_filter, []))
+
+        def company_update(record_id, fields, *, params=None, timeout=None):
+            company_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        def deal_update(record_id, fields, *, params=None, timeout=None):
+            deal_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        account = SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон компании",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                            }
+                        ),
+                        add=company_add,
+                        list=company_list,
+                        update=company_update,
+                    ),
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Сумма",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "CURRENCY_ID": {
+                                    "title": "Валюта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "STAGE_ID": {
+                                    "title": "Стадия",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": {
+                                        "NEW": "Новая",
+                                        "IN_PROGRESS": "В работе",
+                                    },
+                                },
+                                "COMPANY_ID": {
+                                    "title": "Компания",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        ),
+                        add=deal_add,
+                        list=deal_list,
+                        update=deal_update,
+                    ),
+                )
+            ),
+        )
+        account.company_created_fields = company_created_fields
+        account.deal_created_fields = deal_created_fields
+        account.company_updated_records = company_updated_records
+        account.deal_updated_records = deal_updated_records
+        account.company_list_calls = company_list_calls
+        account.deal_list_calls = deal_list_calls
+        return account
+
     def create_uploaded_task_comment_session(self, rows):
         session = ImportSession.objects.create(
             portal_member_id="member-1",
@@ -779,6 +925,67 @@ class ImportExecutionApiTest(TestCase):
                         "fields": [],
                     },
                     "contact": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        if validate:
+            validation_response = self.client.post(
+                reverse("importer:session-validate", kwargs={"session_id": session.id}),
+                data={},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+            self.assertEqual(validation_response.status_code, 200)
+
+    def prepare_linked_company_deal_session(self, session, *, validate=True, dedup=None):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "COMPANY__TITLE": {
+                        "source_header": "Название компании",
+                        "column": "A",
+                    },
+                    "COMPANY__PHONE": {
+                        "source_header": "Телефон компании",
+                        "column": "B",
+                    },
+                    "DEAL__TITLE": {
+                        "source_header": "Название сделки",
+                        "column": "C",
+                    },
+                    "DEAL__OPPORTUNITY": {
+                        "source_header": "Сумма",
+                        "column": "D",
+                    },
+                    "DEAL__CURRENCY_ID": {
+                        "source_header": "Валюта",
+                        "column": "E",
+                    },
+                    "DEAL__STAGE_ID": {
+                        "source_header": "Стадия",
+                        "column": "F",
+                    },
+                },
+                "dedup": dedup or {
+                    "company": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                    "deal": {
                         "strategy": "create",
                         "fields": [],
                     },
@@ -2358,25 +2565,27 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.status_code, 200, response.json())
         self.assertEqual(response.json()["item"]["created_rows"], 1)
         self.assertEqual(response.json()["item"]["created_ids"], [701])
-        self.assertEqual(response.json()["item"]["results"], [
-            {
-                "row_number": 2,
+        self.assertEqual(len(response.json()["item"]["results"]), 1)
+        result_item = response.json()["item"]["results"][0]
+        self.assertEqual(result_item["row_number"], 2)
+        self.assertEqual(result_item["status"], "created")
+        self.assertEqual(result_item["record_id"], 701)
+        self.assertEqual(result_item["report_entity"], "Компания + Контакт")
+        self.assertEqual(result_item["report_title"], "ООО Альфа / Алиса Иванова")
+        self.assertEqual(result_item["report_record_id"], "Компания 601 · Контакт 701")
+        self.assertTrue(result_item["report_date_time"])
+        self.assertEqual(result_item["linked_records"], {
+            "company": {
+                "id": 601,
+                "title": "ООО Альфа",
                 "status": "created",
-                "record_id": 701,
-                "linked_records": {
-                    "company": {
-                        "id": 601,
-                        "title": "ООО Альфа",
-                        "status": "created",
-                    },
-                    "contact": {
-                        "id": 701,
-                        "title": "Алиса Иванова",
-                        "status": "created",
-                    },
-                },
-            }
-        ])
+            },
+            "contact": {
+                "id": 701,
+                "title": "Алиса Иванова",
+                "status": "created",
+            },
+        })
         self.assertEqual(account.company_created_fields, [
             {
                 "TITLE": "ООО Альфа",
@@ -2388,6 +2597,80 @@ class ImportExecutionApiTest(TestCase):
                 "NAME": "Алиса",
                 "LAST_NAME": "Иванова",
                 "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                "COMPANY_ID": 601,
+            }
+        ])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_creates_company_then_deal_and_links_them_in_linked_import(self, get_from_jwt_token):
+        account = self.create_linked_company_deal_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_linked_company_deal_session(
+            [
+                [
+                    "Название компании",
+                    "Телефон компании",
+                    "Название сделки",
+                    "Сумма",
+                    "Валюта",
+                    "Стадия",
+                ],
+                [
+                    "ООО Альфа",
+                    "+78005550101",
+                    "Редизайн сайта",
+                    "150000",
+                    "RUB",
+                    "Новая",
+                ],
+            ]
+        )
+        self.prepare_linked_company_deal_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 1)
+        self.assertEqual(response.json()["item"]["created_ids"], [801])
+        self.assertEqual(len(response.json()["item"]["results"]), 1)
+        result_item = response.json()["item"]["results"][0]
+        self.assertEqual(result_item["row_number"], 2)
+        self.assertEqual(result_item["status"], "created")
+        self.assertEqual(result_item["record_id"], 801)
+        self.assertEqual(result_item["report_entity"], "Компания + Сделка")
+        self.assertEqual(result_item["report_title"], "ООО Альфа / Редизайн сайта")
+        self.assertEqual(result_item["report_record_id"], "Компания 601 · Сделка 801")
+        self.assertTrue(result_item["report_date_time"])
+        self.assertEqual(result_item["linked_records"], {
+            "company": {
+                "id": 601,
+                "title": "ООО Альфа",
+                "status": "created",
+            },
+            "deal": {
+                "id": 801,
+                "title": "Редизайн сайта",
+                "status": "created",
+            },
+        })
+        self.assertEqual(account.company_created_fields, [
+            {
+                "TITLE": "ООО Альфа",
+                "PHONE": [{"VALUE": "+78005550101", "VALUE_TYPE": "WORK"}],
+            }
+        ])
+        self.assertEqual(account.deal_created_fields, [
+            {
+                "TITLE": "Редизайн сайта",
+                "OPPORTUNITY": 150000.0,
+                "CURRENCY_ID": "RUB",
+                "STAGE_ID": "NEW",
                 "COMPANY_ID": 601,
             }
         ])

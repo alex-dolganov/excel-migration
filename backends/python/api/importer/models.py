@@ -10,6 +10,7 @@ class EntityType(models.TextChoices):
     DEAL = "deal", "Deal"
     SMART_PROCESS = "smart_process", "Smart process"
     LINKED_COMPANY_CONTACT = "linked_company_contact", "Linked company + contact"
+    LINKED_COMPANY_DEAL = "linked_company_deal", "Linked company + deal"
     TASK = "task", "Task"
     TASK_COMMENT = "task_comment", "Task comment"
     TASK_CHECKLIST_ITEM = "task_checklist_item", "Task checklist item"

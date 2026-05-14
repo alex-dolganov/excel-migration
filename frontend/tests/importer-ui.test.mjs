@@ -89,6 +89,7 @@ test('builds linked-aware scenario-first sections for crm and task imports', () 
       description: 'Одна строка Excel создаёт и связывает несколько сущностей.',
       items: [
         { value: 'linked_company_contact', label: 'Компания + Контакт', family: 'linked' },
+        { value: 'linked_company_deal', label: 'Компания + Сделка', family: 'linked' },
       ],
     },
   ])
@@ -103,6 +104,31 @@ test('builds scenario selection summary for linked company contact import', () =
     description: 'Каждая строка создаёт или обновляет компанию и контакт с автоматической привязкой.',
     minimumFields: ['COMPANY__TITLE', 'CONTACT__NAME или CONTACT__LAST_NAME'],
     destinationLabel: 'Сначала обрабатывает компанию, затем контакт и связывает их автоматически.',
+  })
+})
+
+test('builds scenario selection summary for linked company deal import', () => {
+  assert.deepEqual(buildScenarioSelectionSummary('linked_company_deal'), {
+    family: 'linked',
+    familyLabel: 'Связанный импорт',
+    selectedLabel: 'Компания + Сделка',
+    title: 'Связанный импорт компании и сделки',
+    description: 'Каждая строка создаёт или обновляет компанию и связанную с ней сделку.',
+    minimumFields: ['COMPANY__TITLE', 'DEAL__TITLE'],
+    destinationLabel: 'Сначала обрабатывает компанию, затем создаёт или обновляет сделку и связывает её с компанией.',
+  })
+})
+
+test('builds scenario guide for linked company deal import', () => {
+  assert.deepEqual(buildEntityScenarioGuide('linked_company_deal'), {
+    title: 'Связанный импорт компании и сделки',
+    description: 'Одна строка Excel создаёт или обновляет компанию и связанную с ней сделку.',
+    highlights: [
+      'Компания и сделка загружаются из одной строки и связываются автоматически.',
+      'Для компании используйте колонки с префиксом COMPANY__, для сделки с префиксом DEAL__.',
+      'Если для сделки нужны суммы и этапы, используйте DEAL__OPPORTUNITY, DEAL__CURRENCY_ID и DEAL__STAGE_ID.',
+    ],
+    exampleColumns: ['COMPANY__TITLE', 'COMPANY__PHONE', 'DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__CURRENCY_ID', 'DEAL__STAGE_ID'],
   })
 })
 
@@ -160,6 +186,12 @@ test('builds example template download meta for deal and task attachment', () =>
     title: 'Шаблон для «Компания + Контакт»',
     description: 'Скачайте пример Excel с заголовками и одной тестовой строкой под выбранный импорт.',
     filename: 'linked_company_contact-import-example.xlsx',
+  })
+
+  assert.deepEqual(buildExampleTemplateDownloadMeta('linked_company_deal'), {
+    title: 'Шаблон для «Компания + Сделка»',
+    description: 'Скачайте пример Excel с заголовками и одной тестовой строкой под выбранный импорт.',
+    filename: 'linked_company_deal-import-example.xlsx',
   })
 })
 
@@ -1160,6 +1192,44 @@ test('builds clearer linked import result rows with company and contact details'
   ])
 })
 
+test('builds clearer linked import result rows with company and deal details', () => {
+  const rows = buildImportRunRows({
+    results: [
+      {
+        row_number: 2,
+        status: 'created',
+        record_id: 91,
+        linked_records: {
+          company: {
+            id: 77,
+            title: 'ООО Бета',
+            status: 'created',
+          },
+          deal: {
+            id: 91,
+            title: 'Внедрение CRM',
+            status: 'created',
+          },
+        },
+      },
+    ],
+  })
+
+  assert.deepEqual(rows, [
+    {
+      key: '2:created',
+      rowNumber: 2,
+      status: 'created',
+      statusLabel: 'Создано',
+      createdAt: '—',
+      entityLabel: 'Компания + Сделка',
+      title: 'ООО Бета / Внедрение CRM',
+      recordId: 'Компания 77 · Сделка 91',
+      details: 'Компания: ООО Бета · ID 77 · Сделка: Внедрение CRM · ID 91',
+    },
+  ])
+})
+
 test('builds compact linked import summary with 5 items per page and report overflow note', () => {
   const summary = buildLinkedImportRunSummary({
     results: [
@@ -1238,6 +1308,77 @@ test('builds compact linked import summary with 5 items per page and report over
     ],
     hasOverflow: true,
     overflowMessage: 'Показаны первые 15 элементов. Остальные детали доступны в CSV-отчете.',
+  })
+})
+
+test('builds compact linked import summary for company and deal sections', () => {
+  const summary = buildLinkedImportRunSummary({
+    results: [
+      {
+        row_number: 2,
+        status: 'created',
+        linked_records: {
+          company: {
+            id: 301,
+            title: 'Компания 1',
+            status: 'created',
+          },
+          deal: {
+            id: 401,
+            title: 'Сделка 1',
+            status: 'created',
+          },
+        },
+      },
+      {
+        row_number: 3,
+        status: 'updated',
+        linked_records: {
+          company: {
+            id: 302,
+            title: 'Компания 2',
+            status: 'updated',
+          },
+          deal: {
+            id: 402,
+            title: 'Сделка 2',
+            status: 'updated',
+          },
+        },
+      },
+    ],
+  })
+
+  assert.deepEqual(summary, {
+    hasSummary: true,
+    sections: [
+      {
+        id: 'company',
+        title: 'Компании',
+        total: 2,
+        pageSize: 5,
+        pageCount: 1,
+        hasOverflow: false,
+        items: [
+          { key: 'company:301:0', title: 'Компания 1', recordId: '301', statusLabel: 'Создано' },
+          { key: 'company:302:1', title: 'Компания 2', recordId: '302', statusLabel: 'Обновлено' },
+        ],
+      },
+      {
+        id: 'deal',
+        title: 'Сделки',
+        total: 2,
+        pageSize: 5,
+        pageCount: 1,
+        hasOverflow: false,
+        items: [
+          { key: 'deal:401:0', title: 'Сделка 1', recordId: '401', statusLabel: 'Создано' },
+          { key: 'deal:402:1', title: 'Сделка 2', recordId: '402', statusLabel: 'Обновлено' },
+        ],
+      },
+    ],
+    hasOverflow: false,
+    overflowMessage: '',
   })
 })
 

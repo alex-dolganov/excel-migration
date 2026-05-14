@@ -685,6 +685,96 @@ class ImportFieldCatalogApiTest(TestCase):
             },
         )
 
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_combined_field_catalog_for_linked_company_deal_import(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон компании",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                            }
+                        )
+                    ),
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Сумма",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "COMPANY_ID": {
+                                    "title": "Компания",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "linked_company_deal"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["entity_type"], "linked_company_deal")
+        self.assertEqual(
+            response.json()["linked_entities"],
+            [
+                {
+                    "id": "company",
+                    "label": "Компания",
+                    "source_entity_type": "company",
+                    "prefix": "COMPANY__",
+                    "excluded_source_ids": [],
+                },
+                {
+                    "id": "deal",
+                    "label": "Сделка",
+                    "source_entity_type": "deal",
+                    "prefix": "DEAL__",
+                    "excluded_source_ids": ["COMPANY_ID"],
+                },
+            ],
+        )
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+        self.assertEqual(items_by_id["COMPANY__TITLE"]["title"], "Компания / Название компании")
+        self.assertEqual(items_by_id["DEAL__TITLE"]["title"], "Сделка / Название сделки")
+        self.assertEqual(items_by_id["DEAL__OPPORTUNITY"]["title"], "Сделка / Сумма")
+        self.assertNotIn("DEAL__COMPANY_ID", items_by_id)
+
     @patch("importer.services.b24_fields.BitrixAPIRequest")
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_returns_smart_process_fields_catalog_for_selected_entity_type_id(self, get_from_jwt_token, bitrix_api_request):

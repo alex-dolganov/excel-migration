@@ -67,6 +67,28 @@ class ImportReportMetadataTest(SimpleTestCase):
             },
         )
 
+    @override_settings(TIME_ZONE="UTC", USE_TZ=True)
+    def test_build_import_result_report_meta_formats_linked_company_deal_summary(self):
+        meta = build_import_result_report_meta(
+            "linked_company_deal",
+            record_id=81,
+            linked_records={
+                "company": {"id": 71, "title": "ООО Альфа"},
+                "deal": {"id": 81, "title": "Редизайн сайта"},
+            },
+            timestamp=datetime(2026, 5, 14, 10, 6, 0, tzinfo=dt_timezone.utc),
+        )
+
+        self.assertEqual(
+            meta,
+            {
+                "report_date_time": "14.05.2026 10:06:00",
+                "report_entity": "Компания + Сделка",
+                "report_title": "ООО Альфа / Редизайн сайта",
+                "report_record_id": "Компания 71 · Сделка 81",
+            },
+        )
+
     def test_build_import_report_csv_returns_human_readable_russian_csv(self):
         csv_text = build_import_report_csv(
             {
