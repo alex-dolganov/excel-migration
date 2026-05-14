@@ -44,7 +44,7 @@ class ImportFileUploadApiTest(TestCase):
 
         upload = SimpleUploadedFile(
             "leads.xlsx",
-            b"fake-xlsx-content",
+            b"PK\x03\x04fake-xlsx-content",
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
@@ -59,7 +59,7 @@ class ImportFileUploadApiTest(TestCase):
         session.refresh_from_db()
         self.assertEqual(session.status, ImportSession.Status.UPLOADED)
         self.assertEqual(session.original_filename, "leads.xlsx")
-        self.assertEqual(session.file_size_bytes, len(b"fake-xlsx-content"))
+        self.assertEqual(session.file_size_bytes, len(b"PK\x03\x04fake-xlsx-content"))
         self.assertTrue(session.stored_file.name.endswith(".xlsx"))
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
@@ -88,6 +88,53 @@ class ImportFileUploadApiTest(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "File is required")
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch("importer.views.get_max_import_file_size_megabytes", return_value=1)
+    @patch("importer.views.get_max_import_file_size_bytes", return_value=4)
+    def test_upload_rejects_files_larger_than_50_mb(
+        self,
+        get_max_import_file_size_bytes,
+        get_max_import_file_size_megabytes,
+        get_from_jwt_token,
+    ):
+        del get_max_import_file_size_bytes
+        del get_max_import_file_size_megabytes
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+        )
+
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.LEAD,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.DRAFT,
+            original_filename="draft.xlsx",
+        )
+
+        upload = SimpleUploadedFile(
+            "huge.xlsx",
+            b"PK\x03\x04x",
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        response = self.client.post(
+            reverse("importer:session-upload", kwargs={"session_id": session.id}),
+            data={"file": upload},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Файл слишком большой. Максимум для импорта — 1 МБ.")
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ImportSession.Status.DRAFT)
+        self.assertEqual(session.file_size_bytes, None)
+        self.assertFalse(session.stored_file)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_upload_is_limited_to_current_portal_session(self, get_from_jwt_token):

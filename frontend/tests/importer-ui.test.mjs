@@ -594,6 +594,15 @@ test('builds task reference guidance hints for checklist and parent task fields'
     'Используйте поле для импорта подзадач с привязкой к родительской задаче.',
     'Поддерживаются Bitrix ID задачи и внешний ключ XML_ID.',
   ])
+
+  assert.deepEqual(buildFieldGuidanceHints({
+    id: 'COMPANY_ID',
+    type: 'integer',
+    multiple: false,
+  }), [
+    'Укажите Bitrix24 ID компании, чтобы привязать запись к существующей компании.',
+    'Если у вас есть только название компании, используйте сценарий «Компания + Контакт».',
+  ])
 })
 
 test('builds scenario guide for task checklist import', () => {
@@ -606,6 +615,19 @@ test('builds scenario guide for task checklist import', () => {
       'IS_COMPLETE позволяет сразу отметить пункт выполненным.',
     ],
     exampleColumns: ['TASK_ID', 'TITLE', 'IS_COMPLETE'],
+  })
+})
+
+test('builds scenario guide for contact import with explicit company linking rules', () => {
+  assert.deepEqual(buildEntityScenarioGuide('contact'), {
+    title: 'Импорт контактов',
+    description: 'Каждая строка создаёт или обновляет отдельный контакт в CRM.',
+    highlights: [
+      'Название компании в обычном импорте контактов не создаёт связь автоматически.',
+      'Для привязки к существующей компании используйте поле COMPANY_ID и передавайте Bitrix24 ID компании.',
+      'Если в исходном файле есть только название компании, используйте сценарий «Компания + Контакт».',
+    ],
+    exampleColumns: ['NAME', 'LAST_NAME', 'PHONE', 'EMAIL', 'COMPANY_ID'],
   })
 })
 

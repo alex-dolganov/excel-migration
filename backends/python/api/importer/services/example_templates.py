@@ -18,9 +18,9 @@ EXAMPLE_TEMPLATE_DEFINITIONS = {
         "sheet_name": "Контакты",
         "filename": "contact-import-example.xlsx",
         "rows": [
-            ["Имя", "Фамилия", "Телефон", "Email", "Компания"],
-            ["Анна", "Смирнова", "+79991112233", "anna@example.ru", "ООО Альфа"],
-            ["Дмитрий", "Кузнецов", "+79994445566", "dmitry@example.ru", "ООО Вектор"],
+            ["Имя", "Фамилия", "Телефон", "Email"],
+            ["Анна", "Смирнова", "+79991112233", "anna@example.ru"],
+            ["Дмитрий", "Кузнецов", "+79994445566", "dmitry@example.ru"],
         ],
     },
     "company": {

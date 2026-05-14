@@ -114,6 +114,18 @@ const TASK_IMPORT_SCENARIOS = {
     },
   },
 }
+const CRM_IMPORT_SCENARIO_GUIDES = {
+  contact: {
+    title: 'Импорт контактов',
+    description: 'Каждая строка создаёт или обновляет отдельный контакт в CRM.',
+    highlights: [
+      'Название компании в обычном импорте контактов не создаёт связь автоматически.',
+      'Для привязки к существующей компании используйте поле COMPANY_ID и передавайте Bitrix24 ID компании.',
+      'Если в исходном файле есть только название компании, используйте сценарий «Компания + Контакт».',
+    ],
+    exampleColumns: ['NAME', 'LAST_NAME', 'PHONE', 'EMAIL', 'COMPANY_ID'],
+  },
+}
 const HR_IMPORT_SCENARIOS = {
   user: {
     value: 'user',
@@ -483,6 +495,12 @@ export function buildFieldGuidanceHints(field) {
     return hints
   }
 
+  if (fieldId === 'COMPANY_ID') {
+    hints.push('Укажите Bitrix24 ID компании, чтобы привязать запись к существующей компании.')
+    hints.push('Если у вас есть только название компании, используйте сценарий «Компания + Контакт».')
+    return hints
+  }
+
   if (
     ['enumeration', 'list', 'crm_status', 'crm_category'].includes(normalizedType)
     || (Array.isArray(field?.items) && field.items.length > 0)
@@ -525,6 +543,11 @@ export function buildEntityScenarioGuide(entityType) {
   const taskScenario = TASK_IMPORT_SCENARIOS[normalizedEntityType]
   if (taskScenario) {
     return taskScenario.guide
+  }
+
+  const crmGuide = CRM_IMPORT_SCENARIO_GUIDES[normalizedEntityType]
+  if (crmGuide) {
+    return crmGuide
   }
 
   const linkedScenario = LINKED_IMPORT_SCENARIOS[normalizedEntityType]
@@ -901,6 +924,101 @@ export function buildDedupPayload(settings) {
   }
 }
 
+const IMPORTER_FIELD_LABELS = {
+  ID: 'Bitrix24 ID',
+  TITLE: 'Название / заголовок',
+  NAME: 'Имя',
+  LAST_NAME: 'Фамилия',
+  SECOND_NAME: 'Отчество',
+  EMAIL: 'Email',
+  PHONE: 'Телефон',
+  WEB: 'Сайт',
+  IM: 'Мессенджер',
+  OPPORTUNITY: 'Сумма',
+  CURRENCY_ID: 'Валюта',
+  STAGE_ID: 'Стадия',
+  STATUS_ID: 'Статус',
+  SOURCE_ID: 'Источник',
+  TYPE_ID: 'Тип',
+  CATEGORY_ID: 'Направление',
+  ASSIGNED_BY_ID: 'Ответственный',
+  RESPONSIBLE_ID: 'Ответственный',
+  CREATED_BY: 'Постановщик',
+  DATE_CREATE: 'Дата создания',
+  DATE_MODIFY: 'Дата изменения',
+  CREATED_TIME: 'Дата создания',
+  UPDATED_TIME: 'Дата изменения',
+  GROUP_ID: 'Рабочая группа',
+  COMPANY_ID: 'Компания',
+  CONTACT_ID: 'Контакт',
+  COMMENTS: 'Комментарий',
+}
+
+const IMPORTER_FIELD_TITLE_LABELS = {
+  DATECREATE: 'Дата создания',
+  CREATEDTIME: 'Дата создания',
+  DATEMODIFY: 'Дата изменения',
+  UPDATEDTIME: 'Дата изменения',
+}
+
+function containsCyrillic(value) {
+  return /[А-Яа-яЁё]/.test(String(value || ''))
+}
+
+function normalizeImporterFieldTitleKey(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '')
+}
+
+export function formatImporterFieldLabel(fieldId, fieldTitle = '') {
+  const normalizedFieldId = String(fieldId || '').trim().toUpperCase()
+  if (!normalizedFieldId) {
+    return ''
+  }
+
+  if (Object.hasOwn(IMPORTER_FIELD_LABELS, normalizedFieldId)) {
+    return IMPORTER_FIELD_LABELS[normalizedFieldId]
+  }
+
+  const normalizedFieldTitle = String(fieldTitle || '').trim()
+  if (normalizedFieldTitle && containsCyrillic(normalizedFieldTitle)) {
+    return normalizedFieldTitle
+  }
+
+  const normalizedFieldTitleKey = normalizeImporterFieldTitleKey(normalizedFieldTitle)
+  if (normalizedFieldTitleKey && Object.hasOwn(IMPORTER_FIELD_TITLE_LABELS, normalizedFieldTitleKey)) {
+    return IMPORTER_FIELD_TITLE_LABELS[normalizedFieldTitleKey]
+  }
+
+  return normalizedFieldTitle || normalizedFieldId
+}
+
+export function buildDedupFieldOptions(mappingRows, fields) {
+  const fieldPattern = /^[A-Z][A-Z0-9_]*$/
+  const fieldIndex = new Map(
+    (Array.isArray(fields) ? fields : [])
+      .filter((field) => field && typeof field === 'object')
+      .map((field) => [String(field.id || '').trim().toUpperCase(), field]),
+  )
+  const selectedFields = new Set(
+    (Array.isArray(mappingRows) ? mappingRows : [])
+      .map((row) => normalizeMappingSelectValue(row?.targetFieldId))
+      .map((fieldId) => String(fieldId || '').trim().toUpperCase())
+      .filter((fieldId) => fieldId && fieldPattern.test(fieldId)),
+  )
+
+  return Array.from(selectedFields).map((fieldId) => {
+    const field = fieldIndex.get(fieldId)
+    return {
+      id: fieldId,
+      label: formatImporterFieldLabel(fieldId, field?.title),
+      hint: fieldId === 'ID' ? 'Прямой поиск по ID записи Bitrix24' : undefined,
+    }
+  })
+}
+
 export function buildValidationIssueRows(validationData) {
   return (Array.isArray(validationData?.issues) ? validationData.issues : []).map((issue) => ({
     key: `${Number(issue?.row_number || 0)}:${String(issue?.column || '')}:${String(issue?.target_field || '')}`,
@@ -1127,7 +1245,7 @@ function buildDuplicateMatchDetails(item) {
     return ''
   }
 
-  return `Совпадение: ${fields.join(', ')}`
+  return `Совпадение: ${fields.map((field) => formatImporterFieldLabel(field)).join(', ')}`
 }
 
 function normalizeLinkedRecord(item) {
@@ -1400,14 +1518,7 @@ export function buildLinkedImportRunSummary(importRunData, { pageSize = 5, maxPa
 }
 
 function formatDedupFieldLabel(fieldId) {
-  const labels = {
-    EMAIL: 'Email',
-    PHONE: 'Телефон',
-    TITLE: 'Название',
-  }
-
-  const normalizedFieldId = String(fieldId || '').trim()
-  return labels[normalizedFieldId] || normalizedFieldId
+  return formatImporterFieldLabel(fieldId)
 }
 
 function formatRowCountLabel(count) {
@@ -1499,7 +1610,7 @@ function buildDedupMissingDetails(item) {
     return ''
   }
 
-  return `Неполный поиск дублей: ${fields.join(', ')}`
+  return `Неполный поиск дублей: ${fields.map((field) => formatImporterFieldLabel(field)).join(', ')}`
 }
 
 export function buildDryRunRows(dryRunData) {

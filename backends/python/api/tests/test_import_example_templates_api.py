@@ -153,6 +153,40 @@ class ImportExampleTemplatesApiTest(TestCase):
             self.assertIn(value, sheet_xml)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_operator_can_download_contact_example_template_without_company_name_column(self, get_from_jwt_token):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        get_from_jwt_token.return_value = self.create_account(is_admin=False)
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=contact",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("contact-import-example.xlsx", response["Content-Disposition"])
+
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        for value in [
+            "Имя",
+            "Фамилия",
+            "Телефон",
+            "Email",
+            "Анна",
+            "Смирнова",
+            "+79991112233",
+            "anna@example.ru",
+        ]:
+            self.assertIn(value, sheet_xml)
+
+        for value in [
+            "Компания",
+            "Название компании",
+            "ООО Альфа",
+            "ООО Вектор",
+        ]:
+            self.assertNotIn(value, sheet_xml)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_operator_can_download_example_template_for_crm_activity_with_communications_value(self, get_from_jwt_token):
         self.create_role(user_id=7, role=ROLE_OPERATOR)
         get_from_jwt_token.return_value = self.create_account(is_admin=False)

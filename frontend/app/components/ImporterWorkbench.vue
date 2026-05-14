@@ -6,6 +6,7 @@ import {
   buildScenarioSelectionSummary,
   buildMigrationStatusBadge,
   buildDedupPayload,
+  buildDedupFieldOptions,
   buildDedupWeakeningNotice,
   EMPTY_MAPPING_SELECT_VALUE,
   buildDryRunRows,
@@ -31,6 +32,7 @@ import {
   buildValidationIssueRows,
   canAdvanceWizard,
   detectSourceFormat,
+  formatImporterFieldLabel,
   getWizardAdvanceMode,
   getWizardNextLabel,
   normalizeMappingSelectValue,
@@ -136,6 +138,8 @@ type StepState = 'done' | 'current' | 'upcoming'
 
 const apiStore = useApiStore()
 const userStore = useUserStore()
+const MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
+const MAX_IMPORT_FILE_SIZE_LABEL = '50 МБ'
 
 const entityType = ref('')
 const selectedFile = ref<File | null>(null)
@@ -169,7 +173,7 @@ const cancelRequested = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const recentSessions = ref<Record<string, any>[]>([])
-const currentView = ref<'wizard' | 'history' | 'bulkAttach'>('wizard')
+const currentView = ref<'wizard' | 'history'>('wizard')
 const importerPermissionState = computed(() => buildImporterPermissionState({
   role: userStore.importerRole,
   permissions: userStore.importerPermissions,
@@ -644,29 +648,10 @@ const dedupStrategyItems = [
   { value: 'skip', label: 'Пропускать дубль' },
   { value: 'ask', label: 'Спросить по каждому дублю' },
 ]
-const dedupFieldOptions = computed(() => {
-  const wellKnownLabels: Record<string, string> = {
-    ID: 'Bitrix24 ID',
-    EMAIL: 'Email',
-    PHONE: 'Телефон',
-    TITLE: 'Название / заголовок',
-    NAME: 'Имя',
-    LAST_NAME: 'Фамилия',
-    COMPANY_TITLE: 'Название компании',
-  }
-  const fieldPattern = /^[A-Z][A-Z0-9_]*$/
-  const selectedFields = new Set(
-    mappingRows.value
-      .map((row) => normalizeMappingSelectValue(row.targetFieldId))
-      .filter((fieldId) => fieldId && fieldPattern.test(fieldId)),
-  )
-
-  return Array.from(selectedFields).map((fieldId) => ({
-    id: fieldId,
-    label: wellKnownLabels[fieldId] || fieldId,
-    hint: fieldId === 'ID' ? 'Прямой поиск по ID записи Bitrix24' : undefined,
-  }))
-})
+const dedupFieldOptions = computed(() => buildDedupFieldOptions(
+  mappingRows.value,
+  mappingData.value?.fields,
+))
 const previewTableRows = computed(() => {
   const headerRowIndex = (headerRowInput.value || 1) - 1
   return previewRows.value
@@ -988,6 +973,11 @@ function setSuccess(message: string) {
   errorMessage.value = ''
 }
 
+function buildImportFileSizeErrorMessage(file: File) {
+  const sizeInMegabytes = (Number(file?.size || 0) / (1024 * 1024)).toFixed(1)
+  return `Файл слишком большой: ${sizeInMegabytes} МБ. Максимум для импорта — ${MAX_IMPORT_FILE_SIZE_LABEL}.`
+}
+
 function resetFlowState() {
   session.value = null
   preview.value = null
@@ -1146,6 +1136,13 @@ function buildVisibleLinkedSummaryItems(section: LinkedImportSummarySection): Li
   return section.items.slice(startIndex, startIndex + section.pageSize)
 }
 
+function formatDedupFieldList(fields: unknown): string {
+  const normalizedFields = Array.isArray(fields)
+    ? fields.map((field) => formatImporterFieldLabel(String(field || '').trim())).filter(Boolean)
+    : []
+  return normalizedFields.length ? normalizedFields.join(', ') : '—'
+}
+
 function selectFamily(family: string) {
   selectedFamily.value = family
   selectedCrmEntityType.value = ''
@@ -1296,10 +1293,19 @@ function openFilePicker() {
 
 function handleFileChange(event: Event) {
   const target = event.target as HTMLInputElement
-  selectedFile.value = target.files?.[0] || null
   resetMessages()
   dryRunData.value = null
   importRunData.value = null
+
+  const nextFile = target.files?.[0] || null
+  if (nextFile && nextFile.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+    selectedFile.value = null
+    target.value = ''
+    setError(buildImportFileSizeErrorMessage(nextFile))
+    return
+  }
+
+  selectedFile.value = nextFile
 }
 
 async function startImporterSetup() {
@@ -1322,6 +1328,11 @@ async function startImporterSetup() {
 
   if (!sourceFormat.value) {
     setError('Можно загрузить только файлы .xlsx, .xls или .csv.')
+    return
+  }
+
+  if (selectedFile.value.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+    setError(buildImportFileSizeErrorMessage(selectedFile.value))
     return
   }
 
@@ -1999,38 +2010,6 @@ onMounted(loadHistory)
     </div>
 
     <div
-      v-else-if="currentView === 'bulkAttach'"
-      class="overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)]"
-    >
-      <div class="border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbfe_100%)] px-6 py-5 sm:px-8">
-        <div class="flex items-center gap-5">
-          <button
-            type="button"
-            class="flex shrink-0 items-center gap-1.5 rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9] transition hover:bg-[#ddeeff]"
-            @click="currentView = 'wizard'"
-          >
-            ← Назад
-          </button>
-          <div>
-            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
-              Сценарий S17
-            </div>
-            <h1 class="mt-1 text-[26px] font-semibold leading-[1.1] text-[#2f4254]">
-              Массовый импорт файлов
-            </h1>
-            <p class="mt-2 text-sm text-[#6c8093]">
-              Прикрепите один и тот же файл к выбранным CRM-сущностям по фильтру, не выходя из основного интерфейса Excel Migration.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div class="min-h-[600px] overflow-y-auto px-6 py-6 sm:px-8 sm:py-8">
-        <BulkAttachWizard />
-      </div>
-    </div>
-
-    <div
       v-else
       class="grid min-h-[860px] grid-cols-1 overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)] xl:grid-cols-[280px_minmax(0,1fr)]"
     >
@@ -2154,12 +2133,6 @@ onMounted(loadHistory)
                 color="air-primary"
                 size="lg"
                 @click="currentView = 'history'"
-              />
-              <B24Button
-                label="Массовый импорт файлов"
-                color="air-secondary-accent-2"
-                size="lg"
-                @click="currentView = 'bulkAttach'"
               />
               <div class="flex flex-wrap justify-end gap-2">
                 <div class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
@@ -2332,7 +2305,7 @@ onMounted(loadHistory)
                         <div class="rounded-[16px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-4">
                           <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
                           <div class="truncate text-sm font-medium text-[#314256]">{{ fileName || 'Файл еще не выбран' }}</div>
-                          <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV</div>
+                          <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV, размер файла до 50 МБ</div>
                         </div>
                         <B24Button label="Выбрать файл" color="air-primary" size="lg" class="w-full" :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)" @click="openFilePicker" />
                         <div class="rounded-[16px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-4">
@@ -2372,7 +2345,7 @@ onMounted(loadHistory)
                         <div class="rounded-[16px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-4">
                           <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
                           <div class="truncate text-sm font-medium text-[#314256]">{{ fileName || 'Файл еще не выбран' }}</div>
-                          <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV</div>
+                          <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV, размер файла до 50 МБ</div>
                         </div>
                         <B24Button label="Выбрать файл" color="air-primary" size="lg" class="w-full" :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)" @click="openFilePicker" />
                         <div class="rounded-[16px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-4">
@@ -2456,7 +2429,7 @@ onMounted(loadHistory)
                         <div class="rounded-[16px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-4">
                           <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
                           <div class="truncate text-sm font-medium text-[#314256]">{{ fileName || 'Файл еще не выбран' }}</div>
-                          <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV</div>
+                          <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV, размер файла до 50 МБ</div>
                         </div>
                         <B24Button label="Выбрать файл" color="air-primary" size="lg" class="w-full" :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)" @click="openFilePicker" />
                         <div class="rounded-[16px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-4">
@@ -3113,7 +3086,7 @@ onMounted(loadHistory)
                   <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
                     <div class="font-medium text-[#314256]">Ключи поиска дубля</div>
                     <div class="mt-1 text-xs text-[#7f92a7]">
-                      Используются сопоставленные поля EMAIL, PHONE и TITLE. Если выбрано несколько ключей, дубль ищется по их совместному совпадению.
+                      Используются сопоставленные поля текущего импорта. Если выбрано несколько ключей, дубль ищется по их совместному совпадению.
                     </div>
 
                     <div v-if="dedupFieldOptions.length" class="mt-3 flex flex-wrap gap-3">
@@ -3346,7 +3319,7 @@ onMounted(loadHistory)
                         <td class="px-4 py-2.5 font-medium text-[#314256]">{{ row.row_number }}</td>
                         <td class="px-4 py-2.5 text-[#5f7285]">{{ row.record_id || '—' }}</td>
                         <td class="px-4 py-2.5 text-[#5f7285]">
-                          {{ Array.isArray(row.duplicate_match_fields) ? row.duplicate_match_fields.join(', ') : '—' }}
+                          {{ formatDedupFieldList(row.duplicate_match_fields) }}
                         </td>
                         <td class="px-4 py-2.5">
                           <div class="flex gap-1.5">

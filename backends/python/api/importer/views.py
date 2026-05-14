@@ -8,6 +8,7 @@ from zipfile import BadZipFile, ZipFile
 
 import xlrd
 
+from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.clickjacking import xframe_options_exempt
@@ -62,6 +63,14 @@ _ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 _XLSX_MAGIC = b"PK\x03\x04"          # ZIP / OOXML
 _XLS_MAGIC  = b"\xd0\xcf\x11\xe0"    # OLE2 Compound Document
 _MAX_UPLOAD_FILENAME_LENGTH = 200
+
+
+def get_max_import_file_size_bytes() -> int:
+    return int(getattr(settings, "DATA_UPLOAD_MAX_MEMORY_SIZE", 50 * 1024 * 1024) or 50 * 1024 * 1024)
+
+
+def get_max_import_file_size_megabytes() -> int:
+    return max(1, get_max_import_file_size_bytes() // (1024 * 1024))
 
 
 def _validate_and_sanitize_upload(upload) -> str:
@@ -2149,6 +2158,11 @@ def import_session_upload(request: AuthorizedRequest, session_id):
     upload = request.FILES.get("file")
     if upload is None:
         return JsonResponse({"error": "File is required"}, status=400)
+    if int(getattr(upload, "size", 0) or 0) > get_max_import_file_size_bytes():
+        return JsonResponse(
+            {"error": f"Файл слишком большой. Максимум для импорта — {get_max_import_file_size_megabytes()} МБ."},
+            status=400,
+        )
 
     try:
         safe_filename = _validate_and_sanitize_upload(upload)
