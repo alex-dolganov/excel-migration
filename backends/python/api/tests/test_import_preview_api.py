@@ -457,6 +457,57 @@ class ImportPreviewApiTest(TestCase):
             ],
         )
 
+    @patch("importer.views.MAX_IMPORT_ROWS", 2)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_preview_returns_row_limit_warning_when_file_has_too_many_data_rows(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+        )
+
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.LEAD,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="too-many-rows.xlsx",
+        )
+        session.stored_file.save(
+            "too-many-rows.xlsx",
+            SimpleUploadedFile(
+                "too-many-rows.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        ("Leads", [["Name", "Phone"], ["Alice", "+123"], ["Bob", "+456"], ["Carol", "+789"]]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["total_rows"], 3)
+        self.assertEqual(response.json()["item"]["max_import_rows"], 2)
+        self.assertEqual(response.json()["item"]["row_limit_exceeded"], True)
+        self.assertEqual(
+            response.json()["item"]["row_limit_error"],
+            "Файл содержит слишком много строк данных (3). Максимум: 2 строк за один импорт.",
+        )
+
+        session.refresh_from_db()
+        self.assertEqual(session.total_rows, 3)
+        self.assertEqual(session.preview_data["total_rows"], 3)
+        self.assertEqual(session.preview_data["max_import_rows"], 2)
+        self.assertEqual(session.preview_data["row_limit_exceeded"], True)
+
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_preview_requires_uploaded_file(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(

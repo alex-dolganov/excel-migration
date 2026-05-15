@@ -82,6 +82,35 @@ def get_max_import_file_size_megabytes() -> int:
     return max(1, get_max_import_file_size_bytes() // (1024 * 1024))
 
 
+def build_import_row_limit_payload(total_rows: int) -> dict:
+    normalized_total_rows = max(0, int(total_rows or 0))
+    row_limit_exceeded = normalized_total_rows > MAX_IMPORT_ROWS
+    row_limit_error = ""
+    if row_limit_exceeded:
+        row_limit_error = (
+            f"Файл содержит слишком много строк данных ({normalized_total_rows:,}). "
+            f"Максимум: {MAX_IMPORT_ROWS:,} строк за один импорт."
+        )
+
+    return {
+        "total_rows": normalized_total_rows,
+        "max_import_rows": MAX_IMPORT_ROWS,
+        "row_limit_exceeded": row_limit_exceeded,
+        "row_limit_error": row_limit_error,
+    }
+
+
+def build_import_row_limit_error_response(total_rows: int, *, status: int = 400):
+    row_limit = build_import_row_limit_payload(total_rows)
+    return JsonResponse(
+        {
+            "error": row_limit["row_limit_error"],
+            "row_limit": row_limit,
+        },
+        status=status,
+    )
+
+
 def _validate_and_sanitize_upload(upload) -> str:
     """Validate file extension + magic bytes; return sanitized filename. Raises ValueError."""
     raw_name = str(upload.name or "").strip()
@@ -1116,6 +1145,11 @@ def load_session_preflight_context(
     return fields, rows, row_numbers, preflight
 
 
+def calculate_import_total_rows(session: ImportSession, selected_sheet_name: str, data_start_row: int) -> int:
+    _columns, _rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+    return sum(1 for row_number in row_numbers if row_number >= data_start_row)
+
+
 def build_field_title_map(fields: list[dict]) -> dict[str, str]:
     return {
         str(field.get("id") or ""): str(field.get("title") or field.get("id") or "")
@@ -1912,6 +1946,15 @@ def import_session_validate(request: AuthorizedRequest, session_id):
         return JsonResponse({"error": str(error)}, status=400)
 
     data_start_row = max(1, int(session.data_start_row or preview_data.get("data_start_row") or 1))
+    total_rows = int(session.total_rows or preview_data.get("total_rows") or 0)
+    if total_rows <= 0:
+        try:
+            total_rows = calculate_import_total_rows(session, str(selected_sheet_name), data_start_row)
+        except ValueError as error:
+            return JsonResponse({"error": str(error)}, status=400)
+    if build_import_row_limit_payload(total_rows)["row_limit_exceeded"]:
+        return build_import_row_limit_error_response(total_rows)
+
     try:
         fields, rows, row_numbers, preflight = load_session_preflight_context(
             account,
@@ -2627,9 +2670,20 @@ def import_session_preview(request: AuthorizedRequest, session_id):
         except ValueError as error:
             return JsonResponse({"error": str(error)}, status=400)
 
+    try:
+        total_rows = calculate_import_total_rows(
+            session,
+            str(selected_sheet_name),
+            int(structure["data_start_row"] or 1),
+        )
+    except ValueError as error:
+        return JsonResponse({"error": str(error)}, status=400)
+    row_limit = build_import_row_limit_payload(total_rows)
+
     session.source_sheet_name = selected_sheet_name
     session.header_row = structure["header_row"]
     session.data_start_row = structure["data_start_row"]
+    session.total_rows = total_rows
     session.preview_data = {
         "sheet_names": sheet_names,
         "selected_sheet_name": selected_sheet_name,
@@ -2638,6 +2692,7 @@ def import_session_preview(request: AuthorizedRequest, session_id):
         "header_row": structure["header_row"],
         "data_start_row": structure["data_start_row"],
         "headers": structure["headers"],
+        **row_limit,
         **({} if not preview_meta else {"csv_delimiter": preview_meta.get("csv_delimiter")}),
     }
     session.last_error = ""
@@ -2646,6 +2701,7 @@ def import_session_preview(request: AuthorizedRequest, session_id):
             "source_sheet_name",
             "header_row",
             "data_start_row",
+            "total_rows",
             "preview_data",
             "last_error",
             "updated_at",
@@ -2661,6 +2717,7 @@ def import_session_preview(request: AuthorizedRequest, session_id):
         "header_row": structure["header_row"],
         "data_start_row": structure["data_start_row"],
         "headers": structure["headers"],
+        **row_limit,
     }
     if preview_meta.get("csv_delimiter"):
         response_item["csv_delimiter"] = preview_meta["csv_delimiter"]

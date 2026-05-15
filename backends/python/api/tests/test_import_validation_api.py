@@ -141,6 +141,47 @@ class ImportValidationApiTest(TestCase):
             ),
         )
 
+    def create_linked_company_contact_account(self, member_id="member-1", domain_url="test.bitrix24.ru"):
+        return SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "XML_ID": {
+                                    "title": "Внешний ключ",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
     def create_uploaded_session(self):
         session = ImportSession.objects.create(
             portal_member_id="member-1",
@@ -254,6 +295,46 @@ class ImportValidationApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_crm_activity_session(self, rows, *, filename="crm-activity.xlsx"):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="crm_activity",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets([("Activities", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_company_contact_session(self, rows, *, filename="linked-company-contact.xlsx"):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_company_contact",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets([("Linked", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def save_mapping(self, session):
         preview_response = self.client.get(
             reverse("importer:session-preview", kwargs={"session_id": session.id}),
@@ -336,6 +417,40 @@ class ImportValidationApiTest(TestCase):
                     "COMMENT": {
                         "source_header": "Текст заметки",
                         "column": "C",
+                    },
+                }
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+    def save_crm_activity_mapping(self, session):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "OWNER_TYPE_ID": {
+                        "source_header": "Тип сущности CRM",
+                        "column": "A",
+                    },
+                    "OWNER_ID": {
+                        "source_header": "ID записи CRM",
+                        "column": "B",
+                    },
+                    "TYPE_ID": {
+                        "source_header": "Тип активности",
+                        "column": "C",
+                    },
+                    "SUBJECT": {
+                        "source_header": "Тема / заголовок",
+                        "column": "D",
                     },
                 }
             },
@@ -434,6 +549,33 @@ class ImportValidationApiTest(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Saved mapping is required before validation")
 
+    @patch("importer.views.MAX_IMPORT_ROWS", 1)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_validation_blocks_early_when_preview_detected_row_limit_exceeded(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_session()
+        self.save_mapping(session)
+
+        response = self.client.post(
+            reverse("importer:session-validate", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "Файл содержит слишком много строк данных (2). Максимум: 1 строк за один импорт.",
+        )
+        self.assertEqual(response.json()["row_limit"], {
+            "total_rows": 2,
+            "max_import_rows": 1,
+            "row_limit_exceeded": True,
+            "row_limit_error": "Файл содержит слишком много строк данных (2). Максимум: 1 строк за один импорт.",
+        })
+
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_validation_rejects_unmapped_list_values_before_run(self, get_from_jwt_token):
         get_from_jwt_token.return_value = self.create_account()
@@ -449,11 +591,179 @@ class ImportValidationApiTest(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["error"], "Complete value mapping for list and status fields before validation")
-        self.assertEqual(response.json()["unmapped_values"], {
-            "STAGE_ID": ["Queued", "Paused"],
+        self.assertEqual(response.json()["error"], "Resolve preflight issues before validation")
+        self.assertEqual(response.json()["preflight"], {
+            "blocking_issue_count": 1,
+            "warning_count": 0,
+            "issues": [
+                {
+                    "code": "field_values_unmapped",
+                    "severity": "error",
+                    "field_id": "STAGE_ID",
+                    "value_count": 2,
+                    "values": ["Queued", "Paused"],
+                },
+            ],
         })
-        self.assertEqual(response.json()["unmapped_value_count"], 2)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_validation_blocks_when_crm_activity_call_has_no_communications_in_preflight(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_crm_activity_session(
+            [
+                ["Тип сущности CRM", "ID записи CRM", "Тип активности", "Тема / заголовок"],
+                ["1", "501", "2", "Созвон с клиентом"],
+                ["2", "502", "4", "Письмо по сделке"],
+            ]
+        )
+        self.save_crm_activity_mapping(session)
+
+        response = self.client.post(
+            reverse("importer:session-validate", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Resolve preflight issues before validation")
+        self.assertEqual(response.json()["preflight"], {
+            "blocking_issue_count": 1,
+            "warning_count": 0,
+            "issues": [
+                {
+                    "code": "crm_activity_communications_missing",
+                    "severity": "error",
+                    "field_id": "COMMUNICATIONS_VALUE",
+                    "row_count": 2,
+                    "activity_types": ["call", "email"],
+                },
+            ],
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_validation_blocks_when_selected_dedup_field_is_not_mapped(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_session()
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "TITLE": {
+                        "source_header": "Lead title",
+                        "column": "A",
+                    },
+                },
+                "dedup": {
+                    "strategy": "update",
+                    "fields": ["PHONE"],
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+        self.assertEqual(mapping_response.json()["item"]["preflight"], {
+            "blocking_issue_count": 1,
+            "warning_count": 0,
+            "issues": [
+                {
+                    "code": "dedup_field_unmapped",
+                    "severity": "error",
+                    "field_id": "PHONE",
+                },
+            ],
+        })
+
+        response = self.client.post(
+            reverse("importer:session-validate", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Resolve preflight issues before validation")
+        self.assertEqual(response.json()["preflight"], {
+            "blocking_issue_count": 1,
+            "warning_count": 0,
+            "issues": [
+                {
+                    "code": "dedup_field_unmapped",
+                    "severity": "error",
+                    "field_id": "PHONE",
+                },
+            ],
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_validation_returns_linked_preflight_warning_for_repeated_company_rows_without_identity_strategy(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_company_contact_account()
+
+        session = self.create_uploaded_linked_company_contact_session(
+            [
+                ["Название компании", "Имя контакта"],
+                ["ООО Альфа", "Алиса"],
+                ["ООО Альфа", "Боб"],
+            ],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "COMPANY__TITLE": {
+                        "source_header": "Название компании",
+                        "column": "A",
+                    },
+                    "CONTACT__NAME": {
+                        "source_header": "Имя контакта",
+                        "column": "B",
+                    },
+                },
+                "dedup": {
+                    "strategy": "create",
+                    "fields": [],
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        response = self.client.post(
+            reverse("importer:session-validate", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["preflight"], {
+            "blocking_issue_count": 0,
+            "warning_count": 1,
+            "issues": [
+                {
+                    "code": "linked_company_identity_missing",
+                    "severity": "warning",
+                    "entity": "company",
+                    "row_count": 2,
+                },
+            ],
+        })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_validation_accepts_exact_list_values_without_manual_value_mapping(self, get_from_jwt_token):

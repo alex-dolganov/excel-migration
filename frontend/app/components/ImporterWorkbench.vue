@@ -51,12 +51,22 @@ type MappingRow = {
   targetFieldTitle: string
   autoMatchType?: string
   autoMatchLabel?: string
+  autoMatchReason?: string
+  autoMatchReasonLabel?: string
   targetFieldType?: string
   targetFieldTypeLabel?: string
   targetFieldRequired?: boolean
   targetFieldIsCustom?: boolean
   targetFieldIsMultiple?: boolean
   targetFieldGuidanceHints?: string[]
+  candidateSuggestions?: Array<{
+    targetFieldId: string
+    targetFieldTitle: string
+    matchType: string
+    matchLabel: string
+    matchReason: string
+    matchReasonLabel: string
+  }>
   valueMapping?: Record<string, string>
   columnType?: string
 }
@@ -163,6 +173,7 @@ const validationData = ref<Record<string, any> | null>(null)
 const dryRunData = ref<Record<string, any> | null>(null)
 const importRunData = ref<Record<string, any> | null>(null)
 const importTemplates = ref<ImportTemplateItem[]>([])
+const importAliasRules = ref<Record<string, any>[]>([])
 const selectedTemplateId = ref('')
 const templateNameInput = ref('')
 const headerRowInput = ref(1)
@@ -247,6 +258,10 @@ const fieldOptionsIndex = computed(() => new Map(
 ))
 const previewRows = computed(() => Array.isArray(preview.value?.preview_rows) ? preview.value.preview_rows : [])
 const previewColumnsSource = computed(() => Array.isArray(preview.value?.columns) ? preview.value.columns : [])
+const previewTotalRows = computed(() => Number(preview.value?.total_rows || session.value?.total_rows || 0))
+const previewMaxImportRows = computed(() => Number(preview.value?.max_import_rows || 0))
+const previewRowLimitExceeded = computed(() => Boolean(preview.value?.row_limit_exceeded))
+const previewRowLimitError = computed(() => String(preview.value?.row_limit_error || '').trim())
 const mappingSavedCount = computed(() => (
   mappingData.value?.saved_mapping && typeof mappingData.value.saved_mapping === 'object'
     ? Object.keys(mappingData.value.saved_mapping).length
@@ -264,6 +279,21 @@ const requiredFieldSummary = computed(() => buildRequiredFieldSummary({
 const requiredFieldMissingIds = computed(() => new Set(
   requiredFieldSummary.value.missingRequired.map((field) => field.id),
 ))
+const mappingPreflight = computed(() => {
+  const payload = mappingData.value?.preflight
+  if (payload && typeof payload === 'object') {
+    return payload
+  }
+  return {
+    blocking_issue_count: 0,
+    warning_count: 0,
+    issues: [],
+  }
+})
+const mappingPreflightIssues = computed<Record<string, any>[]>(() => (
+  Array.isArray(mappingPreflight.value?.issues) ? mappingPreflight.value.issues : []
+))
+const hasBlockingPreflightIssues = computed(() => Number(mappingPreflight.value?.blocking_issue_count || 0) > 0)
 const isMappingAdvanceBlocked = computed(() => (
   currentStep.value === 4
   && requiredFieldSummary.value.hasMissingRequired
@@ -344,6 +374,8 @@ const canRunValidation = computed(() => (
   && Boolean(session.value?.id)
   && mappingSavedCount.value > 0
   && !unmappedValueSummary.value.hasUnmappedValues
+  && !previewRowLimitExceeded.value
+  && !hasBlockingPreflightIssues.value
   && !busyAction.value
 ))
 const canRunDryRun = computed(() => (
@@ -356,6 +388,7 @@ const canRunImport = computed(() => (
   importerPermissionState.value.canRunSessions
   && Boolean(session.value?.id)
   && Boolean(validationData.value)
+  && !hasBlockingPreflightIssues.value
   && !busyAction.value
 ))
 const canCancelActiveImport = computed(() => (
@@ -487,6 +520,10 @@ const footerStatusLabel = computed(() => {
     return validationIssueCount.value > 0
       ? `Найдено ошибок: ${validationIssueCount.value}`
       : 'Проверка завершена'
+  }
+
+  if (previewRowLimitExceeded.value) {
+    return 'Превышен лимит строк для импорта'
   }
 
   if (mappingSavedCount.value > 0) {
@@ -1021,6 +1058,7 @@ function resetFlowState() {
   dryRunData.value = null
   importRunData.value = null
   importTemplates.value = []
+  importAliasRules.value = []
   selectedTemplateId.value = ''
   templateNameInput.value = ''
   headerRowInput.value = 1
@@ -1053,6 +1091,7 @@ function syncDedupSettings() {
 function syncMappingRows() {
   if (!mappingData.value) {
     mappingRows.value = []
+    importAliasRules.value = []
     taskDefaultResponsibleId.value = ''
     taskDefaultCommentAuthorId.value = ''
     dedupStrategy.value = 'create'
@@ -1066,11 +1105,105 @@ function syncMappingRows() {
     columns: mappingData.value.columns,
     fields: mappingData.value.fields,
     candidateMapping: mappingData.value.candidate_mapping,
+    candidateSuggestions: mappingData.value.candidate_suggestions,
     savedMapping: mappingData.value.saved_mapping,
   })
+  importAliasRules.value = Array.isArray(mappingData.value.alias_rules) ? mappingData.value.alias_rules : []
   taskDefaultResponsibleId.value = String(mappingData.value?.task_defaults?.default_responsible_id || '')
   taskDefaultCommentAuthorId.value = String(mappingData.value?.task_defaults?.default_comment_author_id || '')
   syncDedupSettings()
+}
+
+function normalizeAliasRuleSourceLabel(value: string) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function hasImportAliasRule(row: MappingRow) {
+  const sourceLabel = normalizeAliasRuleSourceLabel(row.sourceHeader)
+  const targetFieldId = String(row.targetFieldId || '').trim()
+  if (!sourceLabel || !targetFieldId) {
+    return false
+  }
+
+  return importAliasRules.value.some((item) => (
+    normalizeAliasRuleSourceLabel(String(item?.source_label || '')) === sourceLabel
+    && String(item?.target_field_id || '').trim() === targetFieldId
+  ))
+}
+
+function applyCandidateSuggestion(
+  row: MappingRow,
+  suggestion: {
+    targetFieldId: string
+    matchType?: string
+    matchLabel?: string
+    matchReason?: string
+    matchReasonLabel?: string
+  },
+) {
+  updateMappingFieldSelection(row, suggestion.targetFieldId)
+  row.autoMatchType = String(suggestion.matchType || '').trim().toLowerCase()
+  row.autoMatchLabel = String(suggestion.matchLabel || '').trim()
+  row.autoMatchReason = String(suggestion.matchReason || '').trim().toLowerCase()
+  row.autoMatchReasonLabel = String(suggestion.matchReasonLabel || '').trim()
+}
+
+function buildPreflightSeverityLabel(severity: string) {
+  return String(severity || '').trim().toLowerCase() === 'error' ? 'Ошибка' : 'Предупреждение'
+}
+
+function buildPreflightIssueDescription(issue: Record<string, any>) {
+  const code = String(issue?.code || '').trim()
+  const fieldId = String(issue?.field_id || '').trim()
+  const entity = String(issue?.entity || '').trim()
+  const rowCount = Number(issue?.row_count || 0)
+  const valueCount = Number(issue?.value_count || 0)
+  const values = Array.isArray(issue?.values)
+    ? issue.values.map((value: any) => String(value || '').trim()).filter(Boolean)
+    : []
+  const activityTypes = Array.isArray(issue?.activity_types)
+    ? issue.activity_types.map((value: any) => String(value || '').trim()).filter(Boolean)
+    : []
+
+  if (code === 'required_field_unmapped') {
+    return `Не сопоставлено обязательное поле ${formatImporterFieldLabel(fieldId)}.`
+  }
+  if (code === 'dedup_field_unmapped') {
+    const entityLabelMap: Record<string, string> = {
+      company: 'компании',
+      contact: 'контакта',
+      deal: 'сделки',
+      lead: 'лида',
+    }
+    const entityLabel = entity ? ` для ${entityLabelMap[entity] || entity}` : ''
+    return `Не выбрано поле поиска дублей${entityLabel}: ${formatImporterFieldLabel(fieldId)}.`
+  }
+  if (code === 'field_values_unmapped') {
+    const valuesLabel = values.length ? ` Значения: ${values.join(', ')}.` : ''
+    const countLabel = valueCount > 0 ? ` Не сопоставлено значений: ${valueCount}.` : ''
+    return `Не заполнено соответствие значений для поля ${formatImporterFieldLabel(fieldId)}.${countLabel}${valuesLabel}`
+  }
+  if (code === 'field_options_unavailable') {
+    const valuesLabel = values.length ? ` Значения из файла: ${values.join(', ')}.` : ''
+    const countLabel = valueCount > 0 ? ` Найдено значений: ${valueCount}.` : ''
+    return `Для поля ${formatImporterFieldLabel(fieldId)} не загрузились варианты Bitrix24.${countLabel}${valuesLabel}`
+  }
+  if (code === 'crm_activity_communications_missing') {
+    const activityTypeLabels: Record<string, string> = {
+      call: 'звонков',
+      email: 'писем',
+    }
+    const activityLabel = activityTypes.length
+      ? activityTypes.map((item) => activityTypeLabels[item] || item).join(', ')
+      : 'звонков и писем'
+    const rowCountLabel = rowCount > 0 ? ` Строк: ${rowCount}.` : ''
+    return `Для ${activityLabel} не заполнено поле ${formatImporterFieldLabel(fieldId)}.${rowCountLabel}`
+  }
+  if (code === 'linked_company_identity_missing') {
+    const companyRowLabel = rowCount > 0 ? ` Повторяющихся строк: ${rowCount}.` : ''
+    return `В связанных данных компании повторяются по названию без явного идентификатора. Добавьте COMPANY__XML_ID или настройте дедупликацию компании.${companyRowLabel}`
+  }
+  return code || 'Проблема предварительной проверки.'
 }
 
 watch(dedupStrategy, (value) => {
@@ -1298,7 +1431,10 @@ async function refreshMapping() {
   dryRunData.value = null
   importRunData.value = null
   syncMappingRows()
-  await refreshTemplates()
+  await Promise.all([
+    refreshTemplates(),
+    refreshAliasRules(),
+  ])
 }
 
 async function refreshTemplates() {
@@ -1311,6 +1447,21 @@ async function refreshTemplates() {
   if (selectedTemplateId.value && !importTemplates.value.find((item) => item.id === selectedTemplateId.value)) {
     selectedTemplateId.value = ''
   }
+}
+
+async function refreshAliasRules() {
+  if (!entityType.value) {
+    importAliasRules.value = []
+    return
+  }
+
+  if (!importerPermissionState.value.canManageTemplates) {
+    importAliasRules.value = Array.isArray(mappingData.value?.alias_rules) ? mappingData.value.alias_rules : []
+    return
+  }
+
+  const response = await apiStore.getImportAliasRules(entityType.value, selectedSmartProcessConfig.value)
+  importAliasRules.value = Array.isArray(response.items) ? response.items : []
 }
 
 function openFilePicker() {
@@ -1432,6 +1583,7 @@ function applyCandidateMapping() {
     columns: mappingData.value.columns,
     fields: mappingData.value.fields,
     candidateMapping: mappingData.value.candidate_mapping,
+    candidateSuggestions: mappingData.value.candidate_suggestions,
     savedMapping: {},
   })
 
@@ -1465,6 +1617,47 @@ function updateMappingFieldSelection(row: MappingRow, value: string) {
   row.targetFieldIsCustom = Boolean(selectedField?.is_custom)
   row.targetFieldIsMultiple = Boolean(selectedField?.multiple)
   row.targetFieldGuidanceHints = selectedField ? buildFieldGuidanceHints(selectedField) : []
+  row.autoMatchType = ''
+  row.autoMatchLabel = ''
+  row.autoMatchReason = ''
+  row.autoMatchReasonLabel = ''
+}
+
+async function saveImportAliasRule(row: MappingRow) {
+  if (!session.value?.id || !row.targetFieldId || !row.sourceHeader || !importerPermissionState.value.canManageTemplates) {
+    return
+  }
+
+  if (hasImportAliasRule(row)) {
+    setSuccess('Такое правило сопоставления уже сохранено.')
+    return
+  }
+
+  resetMessages()
+  busyAction.value = 'alias-rule'
+
+  try {
+    const response = await apiStore.saveImportAliasRule(
+      String(session.value.id),
+      row.sourceHeader,
+      row.targetFieldId,
+    )
+    const savedRule = response.item && typeof response.item === 'object' ? response.item : null
+    if (savedRule) {
+      const sourceLabel = normalizeAliasRuleSourceLabel(String(savedRule.source_label || ''))
+      importAliasRules.value = [
+        savedRule,
+        ...importAliasRules.value.filter((item) => (
+          normalizeAliasRuleSourceLabel(String(item?.source_label || '')) !== sourceLabel
+        )),
+      ]
+    }
+    setSuccess(`Правило сохранено: «${row.sourceHeader}» → «${row.targetFieldTitle || row.targetFieldId}».`)
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
+  } finally {
+    busyAction.value = ''
+  }
 }
 
 function onMappingDragStart(index: number, event: DragEvent) {
@@ -2522,13 +2715,24 @@ onMounted(loadHistory)
                   <div class="mt-1 text-lg font-semibold text-[#314256]">{{ previewColumnsSource.length || 0 }}</div>
                 </div>
                 <div class="rounded-[18px] border border-[#e5ebf2] bg-white px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Строки</div>
-                  <div class="mt-1 text-lg font-semibold text-[#314256]">{{ previewRows.length || 0 }}</div>
+                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Строки данных</div>
+                  <div class="mt-1 text-lg font-semibold text-[#314256]">{{ previewTotalRows || 0 }}</div>
                 </div>
                 <div class="rounded-[18px] border border-[#e5ebf2] bg-white px-4 py-4 text-sm text-[#5f7285]">
                   <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Лист</div>
                   <div class="mt-1 truncate text-lg font-semibold text-[#314256]">{{ preview?.selected_sheet_name || '—' }}</div>
                 </div>
+              </div>
+            </div>
+
+            <div
+              v-if="previewRowLimitExceeded"
+              class="mt-5 rounded-[18px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-4 text-[#8f5b18]"
+            >
+              <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">Лимит строк на импорт</div>
+              <div class="mt-2 text-sm font-semibold">{{ previewRowLimitError }}</div>
+              <div class="mt-2 text-sm text-[#9c6a2a]">
+                Измените файл или разбейте импорт на несколько частей. Максимум для одного запуска: {{ preview?.max_import_rows || '—' }} строк.
               </div>
             </div>
 
@@ -2583,6 +2787,17 @@ onMounted(loadHistory)
 
               <div class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
                 {{ previewTableRows.length }} строк в предпросмотре
+              </div>
+            </div>
+
+            <div
+              v-if="previewRowLimitExceeded"
+              class="mb-5 rounded-[18px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-4 text-[#8f5b18]"
+            >
+              <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">Лимит строк на импорт</div>
+              <div class="mt-2 text-sm font-semibold">{{ previewRowLimitError }}</div>
+              <div class="mt-2 text-sm text-[#9c6a2a]">
+                В предпросмотре показаны только первые строки. Всего данных: {{ previewTotalRows }}.
               </div>
             </div>
 
@@ -2756,6 +2971,93 @@ onMounted(loadHistory)
                 </div>
               </div>
             </section>
+
+            <div class="mb-5 grid gap-4 xl:grid-cols-2">
+              <section class="rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4">
+                <div class="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Правила сопоставления</div>
+                    <div class="mt-1 text-sm text-[#5f7285]">
+                      Сохраняйте удачные соответствия заголовков, чтобы автоподбор в следующих импортах срабатывал точнее.
+                    </div>
+                  </div>
+                  <div class="rounded-full border border-[#d7e7ff] bg-white px-3 py-1 text-xs font-semibold text-[#2e6bd9]">
+                    {{ importAliasRules.length }}
+                  </div>
+                </div>
+
+                <div v-if="importAliasRules.length" class="flex flex-wrap gap-2">
+                  <div
+                    v-for="rule in importAliasRules"
+                    :key="String(rule.id || `${rule.source_label}:${rule.target_field_id}`)"
+                    class="rounded-full border border-[#d7e7ff] bg-white px-3 py-1.5 text-xs font-medium text-[#314256]"
+                  >
+                    {{ String(rule.source_label || '—') }} → {{ String(rule.target_field_title || rule.target_field_id || '—') }}
+                  </div>
+                </div>
+                <div v-else class="rounded-[14px] border border-dashed border-[#d7e7ff] bg-white/80 px-4 py-3 text-sm text-[#6f8194]">
+                  Пока нет сохранённых правил. Используйте кнопку «Запомнить правило» у нужной строки.
+                </div>
+              </section>
+
+              <section
+                class="rounded-[20px] border p-4"
+                :class="hasBlockingPreflightIssues
+                  ? 'border-[#ffc89a] bg-[#fff8ef]'
+                  : (mappingPreflightIssues.length
+                    ? 'border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)]'
+                    : 'border-[#dcefe1] bg-[#f4fbf6]')"
+              >
+                <div class="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Проверка перед запуском</div>
+                    <div class="mt-1 text-sm text-[#5f7285]">
+                      Здесь видно, что остановит проверку данных и какие места стоит уточнить заранее.
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap gap-2 text-xs font-semibold">
+                    <span
+                      class="rounded-full px-2.5 py-1"
+                      :class="hasBlockingPreflightIssues ? 'bg-[#fff0e0] text-[#a96017]' : 'bg-white text-[#6f8194]'"
+                    >
+                      Ошибки: {{ Number(mappingPreflight.blocking_issue_count || 0) }}
+                    </span>
+                    <span class="rounded-full bg-white px-2.5 py-1 text-[#2e6bd9]">
+                      Предупреждения: {{ Number(mappingPreflight.warning_count || 0) }}
+                    </span>
+                  </div>
+                </div>
+
+                <div v-if="mappingPreflightIssues.length" class="space-y-2">
+                  <div
+                    v-for="(issue, issueIndex) in mappingPreflightIssues"
+                    :key="`${String(issue.code || 'issue')}:${issueIndex}`"
+                    class="rounded-[14px] border bg-white/85 px-4 py-3"
+                    :class="String(issue.severity || '').trim().toLowerCase() === 'error'
+                      ? 'border-[#f2d1ac]'
+                      : 'border-[#d7e7ff]'"
+                  >
+                    <div class="mb-1 flex items-center gap-2">
+                      <span
+                        class="rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em]"
+                        :class="String(issue.severity || '').trim().toLowerCase() === 'error'
+                          ? 'bg-[#fff0e0] text-[#a96017]'
+                          : 'bg-[#edf5ff] text-[#2e6bd9]'"
+                      >
+                        {{ buildPreflightSeverityLabel(String(issue.severity || '')) }}
+                      </span>
+                      <span class="text-xs text-[#8ea0b2]">{{ String(issue.code || '') }}</span>
+                    </div>
+                    <div class="text-sm text-[#314256]">
+                      {{ buildPreflightIssueDescription(issue) }}
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="rounded-[14px] border border-[#dcefe1] bg-white/85 px-4 py-3 text-sm text-[#2d7a4b]">
+                  Блокирующих проблем и предупреждений на текущем сопоставлении не найдено.
+                </div>
+              </section>
+            </div>
 
             <div class="mb-5 grid gap-4 xl:grid-cols-2">
               <section class="rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4">
@@ -3012,6 +3314,12 @@ onMounted(loadHistory)
                           >
                             Множественное
                           </span>
+                          <span
+                            v-if="row.autoMatchReasonLabel"
+                            class="rounded-full border border-[#d7e7ff] bg-white px-2.5 py-1 text-xs font-medium text-[#58708b]"
+                          >
+                            {{ row.autoMatchReasonLabel }}
+                          </span>
                         </div>
 
                         <div
@@ -3024,6 +3332,49 @@ onMounted(loadHistory)
                           >
                             {{ hint }}
                           </div>
+                        </div>
+
+                        <div
+                          v-if="row.candidateSuggestions?.length"
+                          class="mt-3 rounded-[14px] border border-[#dce7f7] bg-white/85 px-3 py-3"
+                        >
+                          <div class="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#8ea0b2]">
+                            Возможные поля
+                          </div>
+                          <div class="flex flex-wrap gap-2">
+                            <button
+                              v-for="suggestion in row.candidateSuggestions"
+                              :key="`${row.key}:${suggestion.targetFieldId}`"
+                              type="button"
+                              class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
+                              :class="row.targetFieldId === suggestion.targetFieldId
+                                ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
+                                : 'border-[#d7e7ff] bg-white text-[#58708b] hover:border-[#2e6bd9] hover:text-[#2e6bd9]'"
+                              @click="applyCandidateSuggestion(row, suggestion)"
+                            >
+                              {{ suggestion.targetFieldTitle }}
+                              <span v-if="suggestion.matchReasonLabel || suggestion.matchLabel">
+                                · {{ suggestion.matchReasonLabel || suggestion.matchLabel }}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <div
+                          v-if="row.targetFieldId && row.sourceHeader && importerPermissionState.canManageTemplates"
+                          class="mt-3 flex flex-wrap items-center gap-2"
+                        >
+                          <B24Button
+                            :label="hasImportAliasRule(row) ? 'Правило сохранено' : 'Запомнить правило'"
+                            color="air-secondary-accent-2"
+                            size="sm"
+                            :loading="busyAction === 'alias-rule'"
+                            :disabled="busyAction === 'alias-rule' || hasImportAliasRule(row)"
+                            @click="saveImportAliasRule(row)"
+                          />
+                          <span v-if="hasImportAliasRule(row)" class="text-xs text-[#6f8194]">
+                            Это соответствие уже будет учитываться при следующем автоподборе.
+                          </span>
                         </div>
                       </div>
                     </td>

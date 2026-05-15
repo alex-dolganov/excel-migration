@@ -2427,3 +2427,30 @@ test('mapping step renders alias-rules and preflight sections', () => {
   assert.equal(importerWorkbenchSource.includes('Проверка перед запуском'), true)
   assert.equal(importerWorkbenchSource.includes('saveImportAliasRule'), true)
 })
+
+test('mapping step describes new preflight blockers and blocks import button on them', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes("code === 'field_values_unmapped'"), true)
+  assert.equal(importerWorkbenchSource.includes("code === 'field_options_unavailable'"), true)
+  assert.equal(importerWorkbenchSource.includes("code === 'crm_activity_communications_missing'"), true)
+  assert.equal(importerWorkbenchSource.includes('не загрузились варианты Bitrix24'), true)
+  assert.equal(importerWorkbenchSource.includes('не заполнено поле'), true)
+  assert.equal(importerWorkbenchSource.includes('&& !hasBlockingPreflightIssues.value'), true)
+})
+
+test('preview step renders row limit hint before validation starts', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const previewRowLimitExceeded = computed(() =>'), true)
+  assert.equal(importerWorkbenchSource.includes('const previewRowLimitError = computed(() =>'), true)
+  assert.equal(importerWorkbenchSource.includes('Лимит строк на импорт'), true)
+  assert.equal(importerWorkbenchSource.includes('preview?.max_import_rows'), true)
+  assert.equal(importerWorkbenchSource.includes('!previewRowLimitExceeded.value'), true)
+})
