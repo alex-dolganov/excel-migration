@@ -119,6 +119,30 @@ test('builds scenario selection summary for linked company deal import', () => {
   })
 })
 
+test('builds scenario selection summary for crm activity import', () => {
+  assert.deepEqual(buildScenarioSelectionSummary('crm_activity'), {
+    family: 'crm',
+    familyLabel: 'CRM-сущности',
+    selectedLabel: 'Активности CRM',
+    title: 'Импорт активностей CRM',
+    description: 'Каждая строка создаёт отдельную активность CRM для существующей записи.',
+    minimumFields: ['OWNER_TYPE_ID', 'OWNER_ID', 'TYPE_ID', 'SUBJECT'],
+    destinationLabel: 'Импортирует активность в таймлайн выбранной CRM-записи.',
+  })
+})
+
+test('builds scenario selection summary for crm note import', () => {
+  assert.deepEqual(buildScenarioSelectionSummary('crm_note'), {
+    family: 'crm',
+    familyLabel: 'CRM-сущности',
+    selectedLabel: 'Заметки CRM',
+    title: 'Импорт заметок CRM',
+    description: 'Каждая строка добавляет заметку в таймлайн существующей CRM-записи.',
+    minimumFields: ['ENTITY_TYPE', 'ENTITY_ID', 'COMMENT'],
+    destinationLabel: 'Импортирует заметку напрямую в таймлайн выбранной CRM-сущности.',
+  })
+})
+
 test('builds scenario guide for linked company deal import', () => {
   assert.deepEqual(buildEntityScenarioGuide('linked_company_deal'), {
     title: 'Связанный импорт компании и сделки',
@@ -129,6 +153,32 @@ test('builds scenario guide for linked company deal import', () => {
       'Если для сделки нужны суммы и этапы, используйте DEAL__OPPORTUNITY, DEAL__CURRENCY_ID и DEAL__STAGE_ID.',
     ],
     exampleColumns: ['COMPANY__TITLE', 'COMPANY__PHONE', 'DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__CURRENCY_ID', 'DEAL__STAGE_ID'],
+  })
+})
+
+test('builds scenario guide for crm activity import', () => {
+  assert.deepEqual(buildEntityScenarioGuide('crm_activity'), {
+    title: 'Импорт активностей CRM',
+    description: 'Каждая строка создаёт отдельную активность CRM для существующей записи.',
+    highlights: [
+      'Минимум для импорта: OWNER_TYPE_ID, OWNER_ID, TYPE_ID и SUBJECT.',
+      'Для звонков и email обязательно заполните COMMUNICATIONS_VALUE телефоном или email.',
+      'OWNER_TYPE_ID принимает тип сущности CRM: 1 — лид, 2 — сделка, 3 — контакт, 4 — компания.',
+    ],
+    exampleColumns: ['OWNER_TYPE_ID', 'OWNER_ID', 'TYPE_ID', 'SUBJECT', 'COMMUNICATIONS_VALUE'],
+  })
+})
+
+test('builds scenario guide for crm note import', () => {
+  assert.deepEqual(buildEntityScenarioGuide('crm_note'), {
+    title: 'Импорт заметок CRM',
+    description: 'Каждая строка добавляет заметку в таймлайн существующей CRM-записи.',
+    highlights: [
+      'Минимум для импорта: ENTITY_TYPE, ENTITY_ID и COMMENT.',
+      'ENTITY_TYPE можно передавать как код сущности: lead, contact, company или deal.',
+      'Комментарий попадёт в таймлайн записи как обычная заметка CRM.',
+    ],
+    exampleColumns: ['ENTITY_TYPE', 'ENTITY_ID', 'COMMENT', 'CREATED_TIME'],
   })
 })
 
@@ -439,6 +489,80 @@ test('keeps exact and fuzzy auto-match metadata only for candidate mapping', () 
       sourceHeader: 'Lead Name',
       targetFieldId: 'TITLE',
       targetFieldTitle: 'Lead title',
+      targetFieldType: 'string',
+      targetFieldTypeLabel: 'Текст',
+      targetFieldRequired: true,
+      targetFieldIsCustom: false,
+      targetFieldIsMultiple: false,
+      targetFieldGuidanceHints: [],
+    },
+  ])
+})
+
+test('builds mapping rows with match reasons and alternative candidate suggestions', () => {
+  const rows = buildMappingRows({
+    headers: ['Nazvanie'],
+    columns: ['A'],
+    fields: [
+      { id: 'TITLE', title: 'Lead title', required: true },
+      { id: 'COMMENTS', title: 'Comments', required: false },
+    ],
+    candidateMapping: {
+      TITLE: {
+        source_header: 'Nazvanie',
+        column: 'A',
+        target_field: 'TITLE',
+        match_type: 'fuzzy',
+        match_reason: 'translit_alias',
+      },
+    },
+    candidateSuggestions: {
+      'A:Nazvanie': [
+        {
+          target_field: 'TITLE',
+          target_field_title: 'Lead title',
+          match_type: 'fuzzy',
+          match_reason: 'translit_alias',
+        },
+        {
+          target_field: 'COMMENTS',
+          target_field_title: 'Comments',
+          match_type: 'fuzzy',
+        },
+      ],
+    },
+    savedMapping: {},
+  })
+
+  assert.deepEqual(rows, [
+    {
+      key: 'A:Nazvanie',
+      column: 'A',
+      sourceHeader: 'Nazvanie',
+      targetFieldId: 'TITLE',
+      targetFieldTitle: 'Lead title',
+      autoMatchType: 'fuzzy',
+      autoMatchLabel: 'Похожее',
+      autoMatchReason: 'translit_alias',
+      autoMatchReasonLabel: 'Транслит / синоним',
+      candidateSuggestions: [
+        {
+          targetFieldId: 'TITLE',
+          targetFieldTitle: 'Lead title',
+          matchType: 'fuzzy',
+          matchLabel: 'Похожее',
+          matchReason: 'translit_alias',
+          matchReasonLabel: 'Транслит / синоним',
+        },
+        {
+          targetFieldId: 'COMMENTS',
+          targetFieldTitle: 'Comments',
+          matchType: 'fuzzy',
+          matchLabel: 'Похожее',
+          matchReason: '',
+          matchReasonLabel: '',
+        },
+      ],
       targetFieldType: 'string',
       targetFieldTypeLabel: 'Текст',
       targetFieldRequired: true,
@@ -864,6 +988,71 @@ test('builds value-mapping rows from backend observed values when they are provi
         { value: 'NEW', label: 'New' },
         { value: 'IN_PROGRESS', label: 'In progress' },
         { value: 'WON', label: 'Won' },
+      ],
+    },
+  ])
+})
+
+test('auto-selects exact cyrillic enum values for source and deal type fields', () => {
+  const rows = buildValueMappingRows({
+    observedValues: {
+      SOURCE_ID: ['Реклама'],
+      TYPE_ID: ['Сделка'],
+    },
+    mappingRows: [
+      {
+        column: 'B',
+        sourceHeader: 'Источник',
+        targetFieldId: 'SOURCE_ID',
+      },
+      {
+        column: 'C',
+        sourceHeader: 'Тип сделки',
+        targetFieldId: 'TYPE_ID',
+      },
+    ],
+    fields: [
+      {
+        id: 'SOURCE_ID',
+        title: 'Источник',
+        items: [
+          { id: 'SALE', title: 'Продажа' },
+          { id: 'ADVERTISING', title: 'Реклама' },
+        ],
+      },
+      {
+        id: 'TYPE_ID',
+        title: 'Тип сделки',
+        items: [
+          { id: 'SALE', title: 'Продажа' },
+          { id: 'DEAL', title: 'Сделка' },
+        ],
+      },
+    ],
+    savedMapping: {},
+  })
+
+  assert.deepEqual(rows, [
+    {
+      key: 'SOURCE_ID:Реклама',
+      targetFieldId: 'SOURCE_ID',
+      targetFieldTitle: 'Источник',
+      sourceValue: 'Реклама',
+      selectedTargetValue: 'ADVERTISING',
+      options: [
+        { value: 'SALE', label: 'Продажа' },
+        { value: 'ADVERTISING', label: 'Реклама' },
+      ],
+    },
+    {
+      key: 'TYPE_ID:Сделка',
+      targetFieldId: 'TYPE_ID',
+      targetFieldTitle: 'Тип сделки',
+      sourceValue: 'Сделка',
+      selectedTargetValue: 'DEAL',
+      options: [
+        { value: 'SALE', label: 'Продажа' },
+        { value: 'DEAL', label: 'Сделка' },
       ],
     },
   ])
@@ -2225,4 +2414,16 @@ test('importer workbench can switch to dedup risk rows from banner', () => {
   assert.equal(importerWorkbenchSource.includes("selectImportRunFilter(activeImportRunFilter === 'dedup_risk' ? 'all' : 'dedup_risk')"), true)
   assert.equal(importerWorkbenchSource.includes('Показать только строки риска'), true)
   assert.equal(importerWorkbenchSource.includes('Сбросить фильтр'), true)
+})
+
+test('mapping step renders alias-rules and preflight sections', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('Правила сопоставления'), true)
+  assert.equal(importerWorkbenchSource.includes('Запомнить правило'), true)
+  assert.equal(importerWorkbenchSource.includes('Проверка перед запуском'), true)
+  assert.equal(importerWorkbenchSource.includes('saveImportAliasRule'), true)
 })

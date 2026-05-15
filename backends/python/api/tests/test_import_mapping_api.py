@@ -240,6 +240,94 @@ class ImportMappingApiTest(TestCase):
             ),
         )
 
+    def create_deal_account_with_generic_titles(self, member_id="member-1", domain_url="test.bitrix24.ru"):
+        return SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Title",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "SOURCE_ID": {
+                                    "title": "Source",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": {
+                                        "SALE": "Продажа",
+                                        "ADVERTISING": "Реклама",
+                                    },
+                                },
+                                "TYPE_ID": {
+                                    "title": "Type",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": {
+                                        "SALE": "Продажа",
+                                        "COMPLEX": "Комплексная",
+                                    },
+                                },
+                                "OPENED": {
+                                    "title": "Available to all",
+                                    "type": "boolean",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+
+    def create_account_with_nested_source_items(self, member_id="member-1", domain_url="test.bitrix24.ru"):
+        return SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    lead=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Lead title",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "SOURCE_ID": {
+                                    "title": "Source",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": {
+                                        "SALE": {
+                                            "ID": "SALE",
+                                            "VALUE": "Продажа",
+                                        },
+                                        "ADVERTISING": {
+                                            "ID": "ADVERTISING",
+                                            "VALUE": "Реклама",
+                                        },
+                                    },
+                                },
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+
     def create_uploaded_session(self):
         session = ImportSession.objects.create(
             portal_member_id="member-1",
@@ -294,6 +382,36 @@ class ImportMappingApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_linked_company_contact_session_with_headers(
+        self,
+        headers,
+        data_rows,
+        *,
+        filename="linked-company-contact-custom.xlsx",
+    ):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_company_contact",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets(
+                    [
+                        ("Linked", [headers, *data_rows]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def create_uploaded_linked_company_deal_session(self):
         session = ImportSession.objects.create(
             portal_member_id="member-1",
@@ -317,6 +435,30 @@ class ImportMappingApiTest(TestCase):
                                 ["ООО Альфа", "+78005550101", "Редизайн сайта", "150000"],
                             ],
                         ),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_deal_session_with_headers(self, headers, data_rows, *, filename="deal-custom.xlsx"):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.DEAL,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets(
+                    [
+                        ("Deals", [headers, *data_rows]),
                     ]
                 ),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -348,6 +490,31 @@ class ImportMappingApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_linked_company_contact_session_with_custom_rows(
+        self,
+        rows,
+        *,
+        filename="linked-company-contact-repeat.xlsx",
+    ):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_company_contact",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets([("Linked", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def create_uploaded_session_with_stage(self):
         session = ImportSession.objects.create(
             portal_member_id="member-1",
@@ -365,6 +532,30 @@ class ImportMappingApiTest(TestCase):
                 build_xlsx_with_sheets(
                     [
                         ("Leads", [["Lead title", "Stage"], ["Alice", "Queued"]]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_session_with_source(self):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.LEAD,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="leads-source.xlsx",
+        )
+        session.stored_file.save(
+            "leads-source.xlsx",
+            SimpleUploadedFile(
+                "leads-source.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        ("Leads", [["Lead title", "Source"], ["Alice", "Реклама"]]),
                     ]
                 ),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -411,6 +602,36 @@ class ImportMappingApiTest(TestCase):
             SimpleUploadedFile(
                 filename,
                 build_xlsx_with_sheets([("Notes", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_smart_process_session(self, headers, data_rows, *, filename="smart-process.xlsx"):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.SMART_PROCESS,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+            import_settings={
+                "entity_config": {
+                    "entityTypeId": 128,
+                    "title": "Согласования",
+                }
+            },
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets(
+                    [
+                        ("Smart", [headers, *data_rows]),
+                    ]
+                ),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             ),
         )
@@ -517,6 +738,53 @@ class ImportMappingApiTest(TestCase):
         )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_candidate_mapping_for_short_russian_linked_headers(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_company_contact_account()
+
+        session = self.create_uploaded_linked_company_contact_session_with_headers(
+            ["Название", "Телефон", "Имя", "Почта"],
+            [["ООО Альфа", "+78005550101", "Алиса", "alice@example.ru"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["candidate_mapping"], {
+            "COMPANY__TITLE": {
+                "source_header": "Название",
+                "column": "A",
+                "target_field": "COMPANY__TITLE",
+                "match_type": "fuzzy",
+            },
+            "COMPANY__PHONE": {
+                "source_header": "Телефон",
+                "column": "B",
+                "target_field": "COMPANY__PHONE",
+                "match_type": "fuzzy",
+            },
+            "CONTACT__NAME": {
+                "source_header": "Имя",
+                "column": "C",
+                "target_field": "CONTACT__NAME",
+                "match_type": "fuzzy",
+            },
+            "CONTACT__EMAIL": {
+                "source_header": "Почта",
+                "column": "D",
+                "target_field": "CONTACT__EMAIL",
+                "match_type": "fuzzy",
+            },
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_returns_linked_entity_metadata_for_linked_company_deal_sessions(self, get_from_jwt_token):
         get_from_jwt_token.return_value = self.create_linked_company_deal_account()
 
@@ -592,6 +860,235 @@ class ImportMappingApiTest(TestCase):
                 "target_field": "UF_CRM_CITY",
                 "match_type": "fuzzy",
             },
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_auto_matches_russian_deal_headers_to_generic_source_type_and_opened_fields(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_deal_account_with_generic_titles()
+
+        session = self.create_uploaded_deal_session_with_headers(
+            ["Название сделки", "Источник", "Тип сделки", "Доступна для всех"],
+            [["Редизайн сайта", "Реклама", "Продажа", "Да"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["candidate_mapping"], {
+            "TITLE": {
+                "source_header": "Название сделки",
+                "column": "A",
+                "target_field": "TITLE",
+                "match_type": "fuzzy",
+            },
+            "SOURCE_ID": {
+                "source_header": "Источник",
+                "column": "B",
+                "target_field": "SOURCE_ID",
+                "match_type": "fuzzy",
+            },
+            "TYPE_ID": {
+                "source_header": "Тип сделки",
+                "column": "C",
+                "target_field": "TYPE_ID",
+                "match_type": "fuzzy",
+            },
+            "OPENED": {
+                "source_header": "Доступна для всех",
+                "column": "D",
+                "target_field": "OPENED",
+                "match_type": "fuzzy",
+            },
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_candidate_suggestions_and_match_reasons_for_transliterated_headers(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_session_with_headers(
+            ["Nazvanie", "Telefon", "Gorod"],
+            [["Alice", "+123", "Moscow"]],
+            filename="leads-translit.xlsx",
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["candidate_mapping"], {
+            "TITLE": {
+                "source_header": "Nazvanie",
+                "column": "A",
+                "target_field": "TITLE",
+                "match_type": "fuzzy",
+                "match_reason": "translit_alias",
+            },
+            "PHONE": {
+                "source_header": "Telefon",
+                "column": "B",
+                "target_field": "PHONE",
+                "match_type": "fuzzy",
+                "match_reason": "translit_alias",
+            },
+            "UF_CRM_CITY": {
+                "source_header": "Gorod",
+                "column": "C",
+                "target_field": "UF_CRM_CITY",
+                "match_type": "fuzzy",
+                "match_reason": "translit_alias",
+            },
+        })
+        self.assertEqual(response.json()["item"]["candidate_suggestions"], {
+            "A:Nazvanie": [
+                {
+                    "target_field": "TITLE",
+                    "target_field_title": "Lead title",
+                    "match_type": "fuzzy",
+                    "match_reason": "translit_alias",
+                },
+            ],
+            "B:Telefon": [
+                {
+                    "target_field": "PHONE",
+                    "target_field_title": "Phone",
+                    "match_type": "fuzzy",
+                    "match_reason": "translit_alias",
+                },
+            ],
+            "C:Gorod": [
+                {
+                    "target_field": "UF_CRM_CITY",
+                    "target_field_title": "City",
+                    "match_type": "fuzzy",
+                    "match_reason": "translit_alias",
+                },
+            ],
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_applies_saved_alias_rule_to_candidate_mapping(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_session_with_headers(
+            ["Контрагент", "Телефон"],
+            [["ООО Альфа", "+123"]],
+            filename="leads-alias.xlsx",
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        create_rule_response = self.client.post(
+            reverse("importer:alias-rules"),
+            data={
+                "session_id": str(session.id),
+                "source_label": "Контрагент",
+                "target_field_id": "TITLE",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(create_rule_response.status_code, 201)
+        self.assertEqual(create_rule_response.json()["item"]["source_label"], "Контрагент")
+        self.assertEqual(create_rule_response.json()["item"]["target_field_id"], "TITLE")
+
+        list_response = self.client.get(
+            f"{reverse('importer:alias-rules')}?entity_type=lead",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.json()["items"]), 1)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["candidate_mapping"]["TITLE"], {
+            "source_header": "Контрагент",
+            "column": "A",
+            "target_field": "TITLE",
+            "match_type": "alias",
+            "match_reason": "alias_rule",
+        })
+        self.assertEqual(response.json()["item"]["alias_rules"], [
+            {
+                "id": create_rule_response.json()["item"]["id"],
+                "source_label": "Контрагент",
+                "target_field_id": "TITLE",
+                "target_field_title": "Lead title",
+            },
+        ])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_preflight_warning_for_repeated_company_rows_without_identity_strategy(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_company_contact_account()
+
+        session = self.create_uploaded_linked_company_contact_session_with_custom_rows(
+            [
+                ["Название компании", "Имя контакта"],
+                ["ООО Альфа", "Алиса"],
+                ["ООО Альфа", "Боб"],
+            ],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "COMPANY__TITLE": {
+                        "source_header": "Название компании",
+                        "column": "A",
+                    },
+                    "CONTACT__NAME": {
+                        "source_header": "Имя контакта",
+                        "column": "B",
+                    },
+                },
+                "dedup": {
+                    "strategy": "create",
+                    "fields": [],
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["preflight"], {
+            "blocking_issue_count": 0,
+            "warning_count": 1,
+            "issues": [
+                {
+                    "code": "linked_company_identity_missing",
+                    "severity": "warning",
+                    "entity": "company",
+                    "row_count": 2,
+                },
+            ],
         })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
@@ -784,6 +1281,49 @@ class ImportMappingApiTest(TestCase):
         self.assertEqual(mapping_response.json()["item"]["unmapped_value_count"], 1)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_treats_nested_bitrix_list_items_as_exact_matches(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account_with_nested_source_items()
+
+        session = self.create_uploaded_session_with_source()
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "TITLE": {
+                        "source_header": "Lead title",
+                        "column": "A",
+                    },
+                    "SOURCE_ID": {
+                        "source_header": "Source",
+                        "column": "B",
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(mapping_response.status_code, 200)
+        self.assertEqual(mapping_response.json()["item"]["observed_values"], {
+            "SOURCE_ID": ["Реклама"],
+        })
+        self.assertEqual(mapping_response.json()["item"]["unmapped_values"], {})
+        self.assertEqual(mapping_response.json()["item"]["unmapped_value_count"], 0)
+        self.assertEqual(
+            next(field for field in mapping_response.json()["item"]["fields"] if field["id"] == "SOURCE_ID")["items"],
+            [
+                {"id": "SALE", "title": "Продажа"},
+                {"id": "ADVERTISING", "title": "Реклама"},
+            ],
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_treats_exact_crm_note_entity_types_as_already_resolved(self, get_from_jwt_token):
         get_from_jwt_token.return_value = self.create_account()
 
@@ -831,6 +1371,129 @@ class ImportMappingApiTest(TestCase):
             "ENTITY_TYPE": ["Партнер"],
         })
         self.assertEqual(mapping_response.json()["item"]["unmapped_value_count"], 1)
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_treats_smart_process_source_status_values_as_already_resolved(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = self.create_account()
+        bitrix_api_request.side_effect = [
+            SimpleNamespace(
+                result={
+                    "title": {
+                        "title": "Название",
+                        "type": "string",
+                        "isRequired": True,
+                        "isReadOnly": False,
+                        "upperName": "TITLE",
+                    },
+                    "sourceId": {
+                        "title": "Источник",
+                        "type": "crm_status",
+                        "isRequired": False,
+                        "isReadOnly": False,
+                        "upperName": "SOURCE_ID",
+                        "settings": {
+                            "statusType": "SOURCE",
+                        },
+                    },
+                }
+            ),
+            SimpleNamespace(
+                result={
+                    "statuses": [
+                        {
+                            "ENTITY_ID": "SOURCE",
+                            "STATUS_ID": "OTHER",
+                            "NAME": "Другое",
+                        },
+                        {
+                            "ENTITY_ID": "SOURCE",
+                            "STATUS_ID": "ADVERTISING",
+                            "NAME": "Реклама",
+                        },
+                    ]
+                }
+            ),
+            SimpleNamespace(
+                result={
+                    "title": {
+                        "title": "Название",
+                        "type": "string",
+                        "isRequired": True,
+                        "isReadOnly": False,
+                        "upperName": "TITLE",
+                    },
+                    "sourceId": {
+                        "title": "Источник",
+                        "type": "crm_status",
+                        "isRequired": False,
+                        "isReadOnly": False,
+                        "upperName": "SOURCE_ID",
+                        "settings": {
+                            "statusType": "SOURCE",
+                        },
+                    },
+                }
+            ),
+            SimpleNamespace(
+                result={
+                    "statuses": [
+                        {
+                            "ENTITY_ID": "SOURCE",
+                            "STATUS_ID": "OTHER",
+                            "NAME": "Другое",
+                        },
+                        {
+                            "ENTITY_ID": "SOURCE",
+                            "STATUS_ID": "ADVERTISING",
+                            "NAME": "Реклама",
+                        },
+                    ]
+                }
+            ),
+        ]
+
+        session = self.create_uploaded_smart_process_session(
+            ["Название", "Источник"],
+            [["Согласование 1", "другое"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "title": {
+                        "source_header": "Название",
+                        "column": "A",
+                    },
+                    "sourceId": {
+                        "source_header": "Источник",
+                        "column": "B",
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(mapping_response.status_code, 200)
+        self.assertEqual(mapping_response.json()["item"]["observed_values"], {
+            "sourceId": ["другое"],
+        })
+        self.assertEqual(mapping_response.json()["item"]["unmapped_values"], {})
+        self.assertEqual(mapping_response.json()["item"]["unmapped_value_count"], 0)
+        self.assertEqual(
+            next(field for field in mapping_response.json()["item"]["fields"] if field["id"] == "sourceId")["items"],
+            [
+                {"id": "OTHER", "title": "Другое"},
+                {"id": "ADVERTISING", "title": "Реклама"},
+            ],
+        )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_task_mapping_returns_default_responsible_options_and_persists_selection(self, get_from_jwt_token):

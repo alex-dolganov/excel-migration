@@ -1292,6 +1292,89 @@ class ImportFieldCatalogApiTest(TestCase):
             ],
         )
 
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_smart_process_source_items_from_status_type(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+        bitrix_api_request.side_effect = [
+            SimpleNamespace(
+                result={
+                    "title": {
+                        "title": "Название",
+                        "type": "string",
+                        "isRequired": True,
+                        "isReadOnly": False,
+                        "upperName": "TITLE",
+                    },
+                    "sourceId": {
+                        "title": "Источник",
+                        "type": "crm_status",
+                        "isRequired": False,
+                        "isReadOnly": False,
+                        "upperName": "SOURCE_ID",
+                        "settings": {
+                            "statusType": "SOURCE",
+                        },
+                    },
+                }
+            ),
+            SimpleNamespace(
+                result={
+                    "statuses": [
+                        {
+                            "ENTITY_ID": "SOURCE",
+                            "STATUS_ID": "OTHER",
+                            "NAME": "Другое",
+                        },
+                        {
+                            "ENTITY_ID": "SOURCE",
+                            "STATUS_ID": "ADVERTISING",
+                            "NAME": "Реклама",
+                        },
+                    ]
+                }
+            ),
+        ]
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "smart_process", "entity_type_id": "128"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+        self.assertEqual(
+            items_by_id["sourceId"]["items"],
+            [
+                {"id": "OTHER", "title": "Другое"},
+                {"id": "ADVERTISING", "title": "Реклама"},
+            ],
+        )
+        self.assertEqual(
+            [call.kwargs for call in bitrix_api_request.call_args_list],
+            [
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.item.fields",
+                    "params": {"entityTypeId": 128},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.status.list",
+                    "params": {"filter": {"ENTITY_ID": "SOURCE"}},
+                },
+            ],
+        )
+
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_smart_process_fields_require_entity_type_id(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(

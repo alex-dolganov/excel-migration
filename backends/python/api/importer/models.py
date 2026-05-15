@@ -9,6 +9,8 @@ class EntityType(models.TextChoices):
     COMPANY = "company", "Company"
     DEAL = "deal", "Deal"
     SMART_PROCESS = "smart_process", "Smart process"
+    CRM_ACTIVITY = "crm_activity", "CRM activity"
+    CRM_NOTE = "crm_note", "CRM note"
     LINKED_COMPANY_CONTACT = "linked_company_contact", "Linked company + contact"
     LINKED_COMPANY_DEAL = "linked_company_deal", "Linked company + deal"
     TASK = "task", "Task"
@@ -99,6 +101,33 @@ class ImportTemplate(models.Model):
             models.UniqueConstraint(
                 fields=["portal_member_id", "entity_type", "entity_scope_key", "name"],
                 name="uniq_import_template_per_portal_scope_name",
+            ),
+        ]
+
+
+class ImportAliasRule(models.Model):
+    EntityType = EntityType
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    portal_member_id = models.CharField(max_length=255, db_index=True)
+    portal_domain = models.CharField(max_length=255)
+    entity_type = models.CharField(max_length=32, choices=EntityType.choices)
+    entity_scope_key = models.CharField(max_length=128, default="", blank=True)
+    source_label = models.CharField(max_length=255)
+    normalized_source_label = models.CharField(max_length=255)
+    target_field_id = models.CharField(max_length=128)
+    created_by_b24_user_id = models.IntegerField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "import_alias_rule"
+        ordering = ["source_label", "target_field_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["portal_member_id", "entity_type", "entity_scope_key", "normalized_source_label"],
+                name="uniq_import_alias_rule_per_portal_scope_label",
             ),
         ]
 

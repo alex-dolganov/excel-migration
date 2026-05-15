@@ -115,6 +115,46 @@ const TASK_IMPORT_SCENARIOS = {
     },
   },
 }
+const CRM_IMPORT_SCENARIOS = {
+  crm_activity: {
+    value: 'crm_activity',
+    label: 'Активности CRM',
+    family: 'crm',
+    title: 'Импорт активностей CRM',
+    description: 'Каждая строка создаёт отдельную активность CRM для существующей записи.',
+    minimumFields: ['OWNER_TYPE_ID', 'OWNER_ID', 'TYPE_ID', 'SUBJECT'],
+    destinationLabel: 'Импортирует активность в таймлайн выбранной CRM-записи.',
+    guide: {
+      title: 'Импорт активностей CRM',
+      description: 'Каждая строка создаёт отдельную активность CRM для существующей записи.',
+      highlights: [
+        'Минимум для импорта: OWNER_TYPE_ID, OWNER_ID, TYPE_ID и SUBJECT.',
+        'Для звонков и email обязательно заполните COMMUNICATIONS_VALUE телефоном или email.',
+        'OWNER_TYPE_ID принимает тип сущности CRM: 1 — лид, 2 — сделка, 3 — контакт, 4 — компания.',
+      ],
+      exampleColumns: ['OWNER_TYPE_ID', 'OWNER_ID', 'TYPE_ID', 'SUBJECT', 'COMMUNICATIONS_VALUE'],
+    },
+  },
+  crm_note: {
+    value: 'crm_note',
+    label: 'Заметки CRM',
+    family: 'crm',
+    title: 'Импорт заметок CRM',
+    description: 'Каждая строка добавляет заметку в таймлайн существующей CRM-записи.',
+    minimumFields: ['ENTITY_TYPE', 'ENTITY_ID', 'COMMENT'],
+    destinationLabel: 'Импортирует заметку напрямую в таймлайн выбранной CRM-сущности.',
+    guide: {
+      title: 'Импорт заметок CRM',
+      description: 'Каждая строка добавляет заметку в таймлайн существующей CRM-записи.',
+      highlights: [
+        'Минимум для импорта: ENTITY_TYPE, ENTITY_ID и COMMENT.',
+        'ENTITY_TYPE можно передавать как код сущности: lead, contact, company или deal.',
+        'Комментарий попадёт в таймлайн записи как обычная заметка CRM.',
+      ],
+      exampleColumns: ['ENTITY_TYPE', 'ENTITY_ID', 'COMMENT', 'CREATED_TIME'],
+    },
+  },
+}
 const CRM_IMPORT_SCENARIO_GUIDES = {
   contact: {
     title: 'Импорт контактов',
@@ -387,6 +427,19 @@ export function buildScenarioSelectionSummary(entityType) {
     }
   }
 
+  const crmScenario = CRM_IMPORT_SCENARIOS[normalizedEntityType]
+  if (crmScenario) {
+    return {
+      family: 'crm',
+      familyLabel: CRM_IMPORT_FAMILY_LABEL,
+      selectedLabel: crmScenario.label,
+      title: crmScenario.title,
+      description: crmScenario.description,
+      minimumFields: [...crmScenario.minimumFields],
+      destinationLabel: crmScenario.destinationLabel,
+    }
+  }
+
   const linkedScenario = LINKED_IMPORT_SCENARIOS[normalizedEntityType]
   if (linkedScenario) {
     return {
@@ -531,6 +584,17 @@ function buildAutoMatchLabel(matchType) {
   return ''
 }
 
+function buildAutoMatchReasonLabel(matchReason) {
+  const normalizedMatchReason = String(matchReason || '').trim().toLowerCase()
+  if (normalizedMatchReason === 'alias_rule') {
+    return 'Пользовательское правило'
+  }
+  if (normalizedMatchReason === 'translit_alias') {
+    return 'Транслит / синоним'
+  }
+  return ''
+}
+
 export function buildFieldGuidanceHints(field) {
   const fieldId = String(field?.id || '').trim().toUpperCase()
   const normalizedType = normalizeFieldType(field?.type)
@@ -596,6 +660,11 @@ export function buildEntityScenarioGuide(entityType) {
   const taskScenario = TASK_IMPORT_SCENARIOS[normalizedEntityType]
   if (taskScenario) {
     return taskScenario.guide
+  }
+
+  const crmScenario = CRM_IMPORT_SCENARIOS[normalizedEntityType]
+  if (crmScenario) {
+    return crmScenario.guide
   }
 
   const crmGuide = CRM_IMPORT_SCENARIO_GUIDES[normalizedEntityType]
@@ -747,7 +816,31 @@ export function buildMappingFieldItems(fields) {
   ]
 }
 
-export function buildMappingRows({ headers, columns, fields, candidateMapping, savedMapping }) {
+function normalizeCandidateSuggestions(items, fieldMap) {
+  const seenSuggestions = new Set()
+
+  return (Array.isArray(items) ? items : []).reduce((normalized, item) => {
+    const targetFieldId = String(item?.target_field || '').trim()
+    if (!targetFieldId || seenSuggestions.has(targetFieldId)) {
+      return normalized
+    }
+
+    seenSuggestions.add(targetFieldId)
+    const matchType = String(item?.match_type || '').trim().toLowerCase()
+    const matchReason = String(item?.match_reason || '').trim().toLowerCase()
+    normalized.push({
+      targetFieldId,
+      targetFieldTitle: String(item?.target_field_title || fieldMap.get(targetFieldId) || targetFieldId),
+      matchType,
+      matchLabel: buildAutoMatchLabel(matchType),
+      matchReason,
+      matchReasonLabel: buildAutoMatchReasonLabel(matchReason),
+    })
+    return normalized
+  }, [])
+}
+
+export function buildMappingRows({ headers, columns, fields, candidateMapping, candidateSuggestions, savedMapping }) {
   const safeHeaders = Array.isArray(headers) ? headers : []
   const safeColumns = Array.isArray(columns) ? columns : []
   const fieldMap = buildFieldMap(fields)
@@ -764,7 +857,12 @@ export function buildMappingRows({ headers, columns, fields, candidateMapping, s
     const field = targetFieldId ? fieldIndex.get(targetFieldId) : null
     const valueMapping = normalizeValueMapping(mappingItem?.value_mapping)
     const autoMatchType = hasSavedMapping ? '' : String(mappingItem?.match_type || '').trim().toLowerCase()
+    const autoMatchReason = hasSavedMapping ? '' : String(mappingItem?.match_reason || '').trim().toLowerCase()
     const columnType = String(mappingItem?.column_type || '').trim().toLowerCase()
+    const normalizedCandidateSuggestions = normalizeCandidateSuggestions(
+      candidateSuggestions?.[`${column}:${sourceHeader}`],
+      fieldMap,
+    )
 
     const row = {
       key: `${column}:${sourceHeader}`,
@@ -778,12 +876,24 @@ export function buildMappingRows({ headers, columns, fields, candidateMapping, s
       targetFieldIsCustom: Boolean(field?.is_custom),
       targetFieldIsMultiple: Boolean(field?.multiple),
       targetFieldGuidanceHints: field ? buildFieldGuidanceHints(field) : [],
-      columnType,
+    }
+
+    if (columnType) {
+      row.columnType = columnType
     }
 
     if (autoMatchType) {
       row.autoMatchType = autoMatchType
       row.autoMatchLabel = buildAutoMatchLabel(autoMatchType)
+    }
+
+    if (autoMatchReason) {
+      row.autoMatchReason = autoMatchReason
+      row.autoMatchReasonLabel = buildAutoMatchReasonLabel(autoMatchReason)
+    }
+
+    if (normalizedCandidateSuggestions.length > 0) {
+      row.candidateSuggestions = normalizedCandidateSuggestions
     }
 
     if (Object.keys(valueMapping).length > 0) {

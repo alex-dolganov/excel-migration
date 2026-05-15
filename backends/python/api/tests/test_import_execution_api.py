@@ -13,6 +13,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.test.utils import override_settings
 from django.urls import reverse
+from kombu.exceptions import OperationalError as KombuOperationalError
 
 from importer.models import ImportSession
 
@@ -397,6 +398,46 @@ class ImportExecutionApiTest(TestCase):
             SimpleUploadedFile(
                 "linked-company-deal.xlsx",
                 build_xlsx_with_sheets([("Linked", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_crm_activity_session(self, rows):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.CRM_ACTIVITY,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="crm-activity.xlsx",
+        )
+        session.stored_file.save(
+            "crm-activity.xlsx",
+            SimpleUploadedFile(
+                "crm-activity.xlsx",
+                build_xlsx_with_sheets([("Activities", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_crm_note_session(self, rows):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.CRM_NOTE,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="crm-note.xlsx",
+        )
+        session.stored_file.save(
+            "crm-note.xlsx",
+            SimpleUploadedFile(
+                "crm-note.xlsx",
+                build_xlsx_with_sheets([("Notes", rows)]),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             ),
         )
@@ -891,6 +932,30 @@ class ImportExecutionApiTest(TestCase):
             )
             self.assertEqual(validation_response.status_code, 200)
 
+    def prepare_custom_mapping_session(self, session, mapping, *, validate=True):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={"mapping": mapping},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        if validate:
+            validation_response = self.client.post(
+                reverse("importer:session-validate", kwargs={"session_id": session.id}),
+                data={},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+            self.assertEqual(validation_response.status_code, 200)
+
     def prepare_linked_company_contact_session(self, session, *, validate=True, dedup=None):
         preview_response = self.client.get(
             reverse("importer:session-preview", kwargs={"session_id": session.id}),
@@ -1185,6 +1250,40 @@ class ImportExecutionApiTest(TestCase):
             "Bitrix24 не ответил за 10 сек. Повторите импорт.",
         )
 
+    @patch("importer.services.error_messages.format_import_error", side_effect=RuntimeError("formatter failed"))
+    @patch("importer.views.execute_import", side_effect=OSError(-5, "No address associated with hostname"))
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_marks_session_failed_even_when_error_formatter_crashes(
+        self,
+        get_from_jwt_token,
+        _execute_import,
+        _format_import_error,
+    ):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session(
+            [
+                ["Lead title", "Email", "Phone"],
+                ["Alice", "alice@example.com", "+123456789"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json()["error"], "[Errno -5] No address associated with hostname")
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ImportSession.Status.FAILED)
+        self.assertEqual(session.last_error, "[Errno -5] No address associated with hostname")
+
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     @patch("importer.views.enqueue_import_session_run")
     @patch.dict("os.environ", {"ENABLE_RABBITMQ": "1"}, clear=False)
@@ -1220,6 +1319,47 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.json()["item"]["processed_rows"], 0)
         self.assertEqual(response.json()["item"]["successful_rows"], 0)
         self.assertEqual(response.json()["item"]["failed_rows"], 0)
+
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch("importer.views.enqueue_import_session_run", side_effect=KombuOperationalError("[Errno -5] No address associated with hostname"))
+    @patch.dict("os.environ", {"ENABLE_RABBITMQ": "1"}, clear=False)
+    def test_run_falls_back_to_synchronous_execution_when_queue_broker_is_unavailable(
+        self,
+        enqueue_import_session_run,
+        get_from_jwt_token,
+        _batch,
+    ):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session(
+            [
+                ["Lead title", "Email", "Phone"],
+                ["Alice", "alice@example.com", "+123456789"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        enqueue_import_session_run.assert_called_once()
+        self.assertEqual(response.json()["item"]["created_rows"], 1)
+        self.assertEqual(response.json()["item"]["failed_rows"], 0)
+        self.assertEqual(response.json()["item"]["created_ids"], [501])
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ImportSession.Status.COMPLETED)
+        self.assertEqual(session.last_error, "")
+        self.assertEqual(session.processed_rows, 1)
+        self.assertEqual(session.successful_rows, 1)
+        self.assertEqual(session.failed_rows, 0)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     @patch("importer.views.enqueue_import_session_run")
@@ -1318,6 +1458,68 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(retry_response.json()["item"]["processed_rows"], 0)
         self.assertEqual(retry_response.json()["item"]["successful_rows"], 0)
         self.assertEqual(retry_response.json()["item"]["failed_rows"], 0)
+
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch("importer.views.enqueue_import_session_retry", side_effect=KombuOperationalError("[Errno -5] No address associated with hostname"))
+    @patch.dict("os.environ", {"ENABLE_RABBITMQ": "1"}, clear=False)
+    def test_retry_failed_falls_back_to_synchronous_execution_when_queue_broker_is_unavailable(
+        self,
+        enqueue_import_session_retry,
+        get_from_jwt_token,
+        _batch,
+    ):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session(
+            [
+                ["Lead title", "Email", "Phone"],
+                ["Alice", "alice@example.com", "+123456789"],
+                ["Bob", "bob@example.com", "+987654321"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+        session.summary = {
+            **session.summary,
+            "import_run": {
+                "checked_rows": 2,
+                "created_rows": 1,
+                "updated_rows": 0,
+                "failed_rows": 1,
+                "skipped_rows": 0,
+                "cancelled": False,
+                "cancelled_rows": 0,
+                "remaining_rows": 0,
+                "created_ids": [501],
+                "updated_ids": [],
+                "results": [
+                    {"row_number": 2, "status": "created", "record_id": 501},
+                    {"row_number": 3, "status": "failed", "error": 'Bitrix create failed for "Bob"'},
+                ],
+            },
+        }
+        session.status = ImportSession.Status.COMPLETED
+        session.save(update_fields=["summary", "status", "updated_at"])
+
+        retry_response = self.client.post(
+            reverse("importer:session-retry-failed", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(retry_response.status_code, 200, retry_response.content)
+        enqueue_import_session_retry.assert_called_once()
+        self.assertEqual(retry_response.json()["item"]["retried_rows"], 1)
+        self.assertEqual(retry_response.json()["item"]["created_rows"], 2)
+        self.assertEqual(retry_response.json()["item"]["failed_rows"], 0)
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ImportSession.Status.COMPLETED)
+        self.assertEqual(session.last_error, "")
+        self.assertEqual(session.successful_rows, 2)
+        self.assertEqual(session.failed_rows, 0)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     @patch("importer.views.enqueue_import_session_retry")
@@ -2277,6 +2479,128 @@ class ImportExecutionApiTest(TestCase):
                 "FIELDS": {
                     "POST_MESSAGE": "Status update",
                     "AUTHOR_ID": 73,
+                }
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_creates_crm_activity(self, get_from_jwt_token, bitrix_api_request):
+        account = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+        get_from_jwt_token.return_value = account
+        bitrix_api_request.return_value = SimpleNamespace(result=913)
+
+        session = self.create_uploaded_crm_activity_session(
+            [
+                ["Тип сущности CRM", "ID записи CRM", "Тип активности", "Тема / заголовок"],
+                ["1", "501", "6", "Перезвонить клиенту"],
+            ]
+        )
+        self.prepare_custom_mapping_session(
+            session,
+            {
+                "OWNER_TYPE_ID": {"source_header": "Тип сущности CRM", "column": "A"},
+                "OWNER_ID": {"source_header": "ID записи CRM", "column": "B"},
+                "TYPE_ID": {"source_header": "Тип активности", "column": "C"},
+                "SUBJECT": {"source_header": "Тема / заголовок", "column": "D"},
+            },
+            validate=True,
+        )
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 1)
+        self.assertEqual(response.json()["item"]["created_ids"], [913])
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
+            {
+                "row_number": 2,
+                "status": "created",
+                "record_id": 913,
+            }
+        ])
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="crm.activity.add",
+            params={
+                "fields": {
+                    "OWNER_TYPE_ID": 1,
+                    "OWNER_ID": 501,
+                    "TYPE_ID": 6,
+                    "SUBJECT": "Перезвонить клиенту",
+                    "COMMUNICATIONS": [
+                        {
+                            "ENTITY_ID": 501,
+                            "ENTITY_TYPE_ID": 1,
+                        }
+                    ],
+                }
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_creates_crm_note(self, get_from_jwt_token, bitrix_api_request):
+        account = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+        get_from_jwt_token.return_value = account
+        bitrix_api_request.return_value = SimpleNamespace(result=914)
+
+        session = self.create_uploaded_crm_note_session(
+            [
+                ["Тип сущности CRM", "ID записи CRM", "Текст заметки"],
+                ["contact", "701", "Комментарий по клиенту"],
+            ]
+        )
+        self.prepare_custom_mapping_session(
+            session,
+            {
+                "ENTITY_TYPE": {"source_header": "Тип сущности CRM", "column": "A"},
+                "ENTITY_ID": {"source_header": "ID записи CRM", "column": "B"},
+                "COMMENT": {"source_header": "Текст заметки", "column": "C"},
+            },
+            validate=True,
+        )
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 1)
+        self.assertEqual(response.json()["item"]["created_ids"], [914])
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
+            {
+                "row_number": 2,
+                "status": "created",
+                "record_id": 914,
+            }
+        ])
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="crm.timeline.comment.add",
+            params={
+                "fields": {
+                    "ENTITY_TYPE": "CONTACT",
+                    "ENTITY_ID": 701,
+                    "COMMENT": "Комментарий по клиенту",
                 }
             },
         )

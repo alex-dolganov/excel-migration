@@ -773,6 +773,34 @@ def normalize_fields_result(fields_result: dict[str, Any], entity_type: str = ""
     return sorted(normalized_fields, key=lambda item: (item["is_custom"], item["title"], item["id"]))
 
 
+def extract_smart_process_status_entity_ids(fields_result: dict[str, Any]) -> dict[str, str]:
+    if not isinstance(fields_result, dict):
+        return {}
+
+    status_entity_ids_by_field = {}
+
+    for field_id, meta in fields_result.items():
+        field_meta = meta if isinstance(meta, dict) else {}
+        field_type = str(field_meta.get("type") or field_meta.get("TYPE") or "").strip().lower()
+        if field_type != "crm_status":
+            continue
+
+        settings = field_meta.get("settings") if isinstance(field_meta.get("settings"), dict) else {}
+        status_entity_id = str(
+            field_meta.get("statusType")
+            or field_meta.get("status_type")
+            or settings.get("statusType")
+            or settings.get("status_type")
+            or ""
+        ).strip()
+        if not status_entity_id:
+            continue
+
+        status_entity_ids_by_field[str(field_id).strip().lower()] = status_entity_id
+
+    return status_entity_ids_by_field
+
+
 def unwrap_bitrix_result(response):
     return getattr(response, "result", response)
 
@@ -1058,15 +1086,24 @@ def enrich_standard_crm_status_fields(account, entity_type: str, fields: list[di
     return enriched_fields
 
 
-def enrich_smart_process_fields(account, entity_type_id: int, fields: list[dict]) -> list[dict]:
+def enrich_smart_process_fields(
+    account,
+    entity_type_id: int,
+    fields: list[dict],
+    *,
+    status_entity_ids_by_field: dict[str, str] | None = None,
+) -> list[dict]:
     categories = None
     stages = None
+    cached_status_items: dict[str, list[dict]] = {}
     enriched_fields = []
+    smart_status_entity_ids = status_entity_ids_by_field if isinstance(status_entity_ids_by_field, dict) else {}
 
     for field in fields:
         field_id = str(field.get("id") or "")
         normalized_field_id = field_id.lower()
         field_items = field.get("items") if isinstance(field.get("items"), list) else []
+        field_type = str(field.get("type") or "").strip().lower()
 
         if field_items:
             enriched_fields.append(field)
@@ -1082,6 +1119,13 @@ def enrich_smart_process_fields(account, entity_type_id: int, fields: list[dict]
             if stages is None:
                 stages = fetch_smart_process_stages(account, entity_type_id, categories=categories)
             enriched_fields.append({**field, "items": stages})
+            continue
+
+        status_entity_id = smart_status_entity_ids.get(normalized_field_id, "")
+        if field_type == "crm_status" and status_entity_id:
+            if status_entity_id not in cached_status_items:
+                cached_status_items[status_entity_id] = fetch_standard_crm_status_items(account, (status_entity_id,))
+            enriched_fields.append({**field, "items": cached_status_items[status_entity_id]})
             continue
 
         enriched_fields.append(field)
@@ -1175,7 +1219,13 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
         if not isinstance(fields_result, dict):
             raise ValueError("Unable to load entity fields")
         normalized_fields = normalize_fields_result(fields_result, entity_type=entity_type)
-        return enrich_smart_process_fields(account, smart_process_config["entityTypeId"], normalized_fields)
+        smart_status_entity_ids = extract_smart_process_status_entity_ids(fields_result)
+        return enrich_smart_process_fields(
+            account,
+            smart_process_config["entityTypeId"],
+            normalized_fields,
+            status_entity_ids_by_field=smart_status_entity_ids,
+        )
 
     loader = entity_fields_loaders.get(entity_type)
     if loader is None:
