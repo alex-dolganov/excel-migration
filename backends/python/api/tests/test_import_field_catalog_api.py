@@ -777,6 +777,296 @@ class ImportFieldCatalogApiTest(TestCase):
 
     @patch("importer.services.b24_fields.BitrixAPIRequest")
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_deal_crm_status_items_from_crm_status_list_when_field_catalog_is_empty(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "SOURCE_ID": {
+                                    "title": "Источник",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": [],
+                                },
+                                "TYPE_ID": {
+                                    "title": "Тип",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": [],
+                                },
+                                "STAGE_ID": {
+                                    "title": "Стадия сделки",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": [],
+                                },
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+        statuses_by_entity_id = {
+            "SOURCE": [
+                {"STATUS_ID": "ADVERTISING", "NAME": "Реклама"},
+                {"STATUS_ID": "WEB", "NAME": "Сайт"},
+            ],
+            "DEAL_TYPE": [
+                {"STATUS_ID": "SALE", "NAME": "Продажа"},
+            ],
+            "DEAL_STAGE": [
+                {"STATUS_ID": "NEW", "NAME": "Новая"},
+            ],
+        }
+
+        def build_status_response(*args, **kwargs):
+            entity_id = kwargs["params"]["filter"]["ENTITY_ID"]
+            return SimpleNamespace(result={"statuses": statuses_by_entity_id[entity_id]})
+
+        bitrix_api_request.side_effect = build_status_response
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "deal"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+        self.assertEqual(
+            items_by_id["SOURCE_ID"]["items"],
+            [
+                {"id": "ADVERTISING", "title": "Реклама"},
+                {"id": "WEB", "title": "Сайт"},
+            ],
+        )
+        self.assertEqual(
+            items_by_id["TYPE_ID"]["items"],
+            [
+                {"id": "SALE", "title": "Продажа"},
+            ],
+        )
+        self.assertEqual(
+            items_by_id["STAGE_ID"]["items"],
+            [
+                {"id": "NEW", "title": "Новая"},
+            ],
+        )
+        self.assertEqual(
+            [call.kwargs for call in bitrix_api_request.call_args_list],
+            [
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.status.list",
+                    "params": {"filter": {"ENTITY_ID": "SOURCE"}},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.status.list",
+                    "params": {"filter": {"ENTITY_ID": "DEAL_STAGE"}},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.status.list",
+                    "params": {"filter": {"ENTITY_ID": "DEAL_TYPE"}},
+                },
+            ],
+        )
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_standard_crm_status_items_for_leads_contacts_and_companies_when_field_catalog_is_empty(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    lead=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "SOURCE_ID": {
+                                    "title": "Источник",
+                                    "type": "crm_status",
+                                    "items": [],
+                                },
+                                "HONORIFIC": {
+                                    "title": "Обращение",
+                                    "type": "crm_status",
+                                    "items": [],
+                                },
+                                "STATUS_ID": {
+                                    "title": "Стадия",
+                                    "type": "crm_status",
+                                    "items": [],
+                                },
+                            }
+                        )
+                    ),
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "SOURCE_ID": {
+                                    "title": "Источник",
+                                    "type": "crm_status",
+                                    "items": [],
+                                },
+                                "HONORIFIC": {
+                                    "title": "Обращение",
+                                    "type": "crm_status",
+                                    "items": [],
+                                },
+                                "TYPE_ID": {
+                                    "title": "Тип контакта",
+                                    "type": "crm_status",
+                                    "items": [],
+                                },
+                            }
+                        )
+                    ),
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "EMPLOYEES": {
+                                    "title": "Кол-во сотрудников",
+                                    "type": "crm_status",
+                                    "items": [],
+                                },
+                                "INDUSTRY": {
+                                    "title": "Сфера деятельности",
+                                    "type": "crm_status",
+                                    "items": [],
+                                },
+                                "COMPANY_TYPE": {
+                                    "title": "Тип компании",
+                                    "type": "crm_status",
+                                    "items": [],
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+        statuses_by_entity_id = {
+            "SOURCE": [
+                {"STATUS_ID": "ADVERTISING", "NAME": "Реклама"},
+            ],
+            "HONORIFIC": [
+                {"STATUS_ID": "HNR_RU_1", "NAME": "г-н"},
+            ],
+            "STATUS": [
+                {"STATUS_ID": "NEW", "NAME": "Не обработан"},
+            ],
+            "CONTACT_TYPE": [
+                {"STATUS_ID": "CLIENT", "NAME": "Клиенты"},
+            ],
+            "EMPLOYEES": [
+                {"STATUS_ID": "EMPLOYEES_1", "NAME": "менее 50"},
+            ],
+            "INDUSTRY": [
+                {"STATUS_ID": "IT", "NAME": "Информационные технологии"},
+            ],
+            "COMPANY_TYPE": [
+                {"STATUS_ID": "CUSTOMER", "NAME": "Клиент"},
+            ],
+        }
+
+        def build_status_response(*args, **kwargs):
+            entity_id = kwargs["params"]["filter"]["ENTITY_ID"]
+            return SimpleNamespace(result={"statuses": statuses_by_entity_id[entity_id]})
+
+        bitrix_api_request.side_effect = build_status_response
+
+        lead_response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "lead"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        contact_response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "contact"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        company_response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "company"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(lead_response.status_code, 200, lead_response.content)
+        self.assertEqual(contact_response.status_code, 200, contact_response.content)
+        self.assertEqual(company_response.status_code, 200, company_response.content)
+
+        lead_items_by_id = {item["id"]: item for item in lead_response.json()["items"]}
+        contact_items_by_id = {item["id"]: item for item in contact_response.json()["items"]}
+        company_items_by_id = {item["id"]: item for item in company_response.json()["items"]}
+
+        self.assertEqual(lead_items_by_id["SOURCE_ID"]["items"], [{"id": "ADVERTISING", "title": "Реклама"}])
+        self.assertEqual(lead_items_by_id["HONORIFIC"]["items"], [{"id": "HNR_RU_1", "title": "г-н"}])
+        self.assertEqual(lead_items_by_id["STATUS_ID"]["items"], [{"id": "NEW", "title": "Не обработан"}])
+
+        self.assertEqual(contact_items_by_id["SOURCE_ID"]["items"], [{"id": "ADVERTISING", "title": "Реклама"}])
+        self.assertEqual(contact_items_by_id["HONORIFIC"]["items"], [{"id": "HNR_RU_1", "title": "г-н"}])
+        self.assertEqual(contact_items_by_id["TYPE_ID"]["items"], [{"id": "CLIENT", "title": "Клиенты"}])
+
+        self.assertEqual(company_items_by_id["EMPLOYEES"]["items"], [{"id": "EMPLOYEES_1", "title": "менее 50"}])
+        self.assertEqual(company_items_by_id["INDUSTRY"]["items"], [{"id": "IT", "title": "Информационные технологии"}])
+        self.assertEqual(company_items_by_id["COMPANY_TYPE"]["items"], [{"id": "CUSTOMER", "title": "Клиент"}])
+
+        requested_entity_ids = [call.kwargs["params"]["filter"]["ENTITY_ID"] for call in bitrix_api_request.call_args_list]
+        self.assertCountEqual(
+            requested_entity_ids,
+            [
+                "SOURCE",
+                "HONORIFIC",
+                "STATUS",
+                "SOURCE",
+                "HONORIFIC",
+                "CONTACT_TYPE",
+                "EMPLOYEES",
+                "INDUSTRY",
+                "COMPANY_TYPE",
+            ],
+        )
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_returns_smart_process_fields_catalog_for_selected_entity_type_id(self, get_from_jwt_token, bitrix_api_request):
         get_from_jwt_token.return_value = SimpleNamespace(
             member_id="member-1",

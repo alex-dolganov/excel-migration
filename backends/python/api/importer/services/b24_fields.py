@@ -663,6 +663,28 @@ LINKED_IMPORT_SCHEMAS = {
         ],
     },
 }
+STANDARD_CRM_STATUS_ENTITY_IDS = {
+    "lead": {
+        "SOURCE_ID": ("SOURCE",),
+        "HONORIFIC": ("HONORIFIC",),
+        "STATUS_ID": ("STATUS",),
+    },
+    "contact": {
+        "SOURCE_ID": ("SOURCE",),
+        "HONORIFIC": ("HONORIFIC",),
+        "TYPE_ID": ("CONTACT_TYPE",),
+    },
+    "company": {
+        "EMPLOYEES": ("EMPLOYEES",),
+        "INDUSTRY": ("INDUSTRY",),
+        "COMPANY_TYPE": ("COMPANY_TYPE",),
+    },
+    "deal": {
+        "SOURCE_ID": ("SOURCE",),
+        "TYPE_ID": ("DEAL_TYPE",),
+        "STAGE_ID": ("DEAL_STAGE",),
+    },
+}
 
 
 def normalize_bitrix_bool(value: Any) -> bool:
@@ -677,13 +699,29 @@ def normalize_bitrix_bool(value: Any) -> bool:
 
 def normalize_field_items(items: Any) -> list[dict]:
     if isinstance(items, dict):
-        return [
-            {
-                "id": str(item_id),
-                "title": str(item_title),
-            }
-            for item_id, item_title in items.items()
-        ]
+        normalized_items = []
+        for item_id, item_meta in items.items():
+            if isinstance(item_meta, dict):
+                nested_item_id = item_meta.get("ID", item_meta.get("id", item_id))
+                nested_item_title = item_meta.get(
+                    "VALUE",
+                    item_meta.get("value", item_meta.get("title", item_meta.get("NAME", item_meta.get("name", "")))),
+                )
+                normalized_items.append(
+                    {
+                        "id": str(nested_item_id),
+                        "title": str(nested_item_title),
+                    }
+                )
+                continue
+
+            normalized_items.append(
+                {
+                    "id": str(item_id),
+                    "title": str(item_meta),
+                }
+            )
+        return normalized_items
 
     if isinstance(items, list):
         normalized_items = []
@@ -692,7 +730,7 @@ def normalize_field_items(items: Any) -> list[dict]:
                 normalized_items.append(
                     {
                         "id": str(item.get("ID", item.get("id", ""))),
-                        "title": str(item.get("VALUE", item.get("value", item.get("title", "")))),
+                        "title": str(item.get("VALUE", item.get("value", item.get("title", item.get("NAME", item.get("name", "")))))),
                     }
                 )
         return normalized_items
@@ -964,6 +1002,62 @@ def fetch_smart_process_stages(account, entity_type_id: int, categories: list[di
     return normalized_items
 
 
+def fetch_standard_crm_status_items(account, entity_ids: tuple[str, ...]) -> list[dict]:
+    normalized_items = []
+    seen_ids = set()
+
+    for entity_id in entity_ids:
+        response = BitrixAPIRequest(
+            bitrix_token=account,
+            api_method="crm.status.list",
+            params={"filter": {"ENTITY_ID": entity_id}},
+        )
+        result = unwrap_bitrix_result(response)
+        if isinstance(result, dict):
+            items = result.get("statuses") or result.get("items") or result.get("result") or []
+        else:
+            items = result
+
+        normalized_status_items = _normalize_bitrix_named_items(items, ("STATUS_ID", "ID", "id"), ("NAME", "name", "title"))
+        for item in normalized_status_items:
+            item_id = str(item.get("id") or "").strip()
+            if not item_id or item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+            normalized_items.append(item)
+
+        if normalized_items:
+            break
+
+    return normalized_items
+
+
+def enrich_standard_crm_status_fields(account, entity_type: str, fields: list[dict]) -> list[dict]:
+    status_entity_ids_by_field = STANDARD_CRM_STATUS_ENTITY_IDS.get(str(entity_type or "").strip(), {})
+    if not status_entity_ids_by_field:
+        return fields
+
+    cached_items: dict[tuple[str, ...], list[dict]] = {}
+    enriched_fields = []
+
+    for field in fields:
+        field_items = field.get("items") if isinstance(field.get("items"), list) else []
+        field_type = str(field.get("type") or "").strip().lower()
+        field_id = str(field.get("id") or "").strip().upper()
+        status_entity_ids = status_entity_ids_by_field.get(field_id)
+
+        if field_items or field_type != "crm_status" or not status_entity_ids:
+            enriched_fields.append(field)
+            continue
+
+        if status_entity_ids not in cached_items:
+            cached_items[status_entity_ids] = fetch_standard_crm_status_items(account, status_entity_ids)
+
+        enriched_fields.append({**field, "items": cached_items[status_entity_ids]})
+
+    return enriched_fields
+
+
 def enrich_smart_process_fields(account, entity_type_id: int, fields: list[dict]) -> list[dict]:
     categories = None
     stages = None
@@ -1091,4 +1185,5 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
     if not isinstance(fields_result, dict):
         raise ValueError("Unable to load entity fields")
 
-    return normalize_fields_result(fields_result, entity_type=entity_type)
+    normalized_fields = normalize_fields_result(fields_result, entity_type=entity_type)
+    return enrich_standard_crm_status_fields(account, entity_type, normalized_fields)
