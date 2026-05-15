@@ -153,6 +153,7 @@ const apiStore = useApiStore()
 const userStore = useUserStore()
 const MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
 const MAX_IMPORT_FILE_SIZE_LABEL = '50 МБ'
+const PER_ROW_DEDUP_DECISION_VALUES = new Set(['create', 'update', 'skip'])
 
 const entityType = ref('')
 const selectedFile = ref<File | null>(null)
@@ -188,6 +189,11 @@ const errorMessage = ref('')
 const successMessage = ref('')
 const recentSessions = ref<Record<string, any>[]>([])
 const currentView = ref<'wizard' | 'history'>('wizard')
+
+function isValidPerRowDedupDecision(value: unknown): value is string {
+  return PER_ROW_DEDUP_DECISION_VALUES.has(String(value || '').trim().toLowerCase())
+}
+
 const importerPermissionState = computed(() => buildImporterPermissionState({
   role: userStore.importerRole,
   permissions: userStore.importerPermissions,
@@ -310,11 +316,15 @@ const dryRunCheckedRows = computed(() => Number(dryRunData.value?.checked_rows |
 const dryRunReadyRows = computed(() => Number(dryRunData.value?.ready_rows || 0))
 const dryRunSkippedRows = computed(() => Number(dryRunData.value?.skipped_rows || 0))
 const dryRunPendingDecisionRows = computed(() => Number(dryRunData.value?.pending_decision_rows || 0))
+const requiresPerRowDedupDecision = computed(() => isDedupApplicable.value && dedupStrategy.value === 'ask')
 const pendingDecisionRows = computed(() =>
   (Array.isArray(dryRunData.value?.results) ? dryRunData.value.results : []).filter(
     (r: any) => r?.status === 'pending_decision'
   )
 )
+const hasUnresolvedPendingDedupDecisions = computed(() => pendingDecisionRows.value.some((row: any) => (
+  !isValidPerRowDedupDecision(perRowDedupDecisions.value[String(row?.row_number)])
+)))
 const importRunCheckedRows = computed(() => Number(importRunData.value?.checked_rows || 0))
 const importRunCreatedRows = computed(() => Number(importRunData.value?.created_rows || 0))
 const importRunUpdatedRows = computed(() => Number(importRunData.value?.updated_rows || 0))
@@ -971,11 +981,15 @@ watch(dryRunData, (value) => {
     activeDryRunDedupRiskOnly.value = false
   }
 
-  if (value && dedupStrategy.value === 'ask') {
+  if (value && requiresPerRowDedupDecision.value) {
     const decisions: Record<string, string> = {}
     for (const row of (Array.isArray(value.results) ? value.results : [])) {
       if (row?.status === 'pending_decision') {
-        decisions[String(row.row_number)] = 'skip'
+        const rowNumber = String(row.row_number || '')
+        const previousDecision = perRowDedupDecisions.value[rowNumber]
+        if (rowNumber && isValidPerRowDedupDecision(previousDecision)) {
+          decisions[rowNumber] = previousDecision
+        }
       }
     }
     perRowDedupDecisions.value = decisions
@@ -1909,13 +1923,11 @@ async function runDryRun() {
   busyAction.value = 'dry-run'
 
   try {
-    const response = await apiStore.dryRunImportSession(String(session.value.id))
-    dryRunData.value = response.item
-    activeDryRunDedupRiskOnly.value = false
-    importRunData.value = null
-    currentStep.value = 6
+    const dryRunResult = await executeDryRunRequest(String(session.value.id))
     setSuccess(
-      dryRunSkippedRows.value > 0
+      requiresPerRowDedupDecision.value && Number(dryRunResult?.pending_decision_rows || 0) > 0
+        ? 'Тестовый импорт завершен. Выберите действие для каждой строки с найденным дублем.'
+        : Number(dryRunResult?.skipped_rows || 0) > 0
         ? 'Тестовый импорт завершен. Часть строк будет пропущена.'
         : 'Тестовый импорт завершен. Можно запускать импорт.',
     )
@@ -1933,10 +1945,24 @@ async function runImport() {
 
   resetMessages()
   cancelRequested.value = false
-  busyAction.value = 'run'
-  session.value = session.value ? { ...session.value, status: 'running' } : session.value
 
   try {
+    if (requiresPerRowDedupDecision.value && !dryRunData.value) {
+      busyAction.value = 'dry-run'
+      const dryRunResult = await executeDryRunRequest(String(session.value.id))
+      if (Number(dryRunResult?.pending_decision_rows || 0) > 0) {
+        setSuccess('Найдены дубли. Выберите действие для каждой строки и затем снова запустите импорт.')
+        return
+      }
+    }
+
+    if (requiresPerRowDedupDecision.value && hasUnresolvedPendingDedupDecisions.value) {
+      setError('Выберите действие для каждой строки с найденным дублем.')
+      return
+    }
+
+    busyAction.value = 'run'
+    session.value = session.value ? { ...session.value, status: 'running' } : session.value
     const response = await apiStore.runImportSession(String(session.value.id), perRowDedupDecisions.value)
     const queuedImportRun = await resolveImportExecutionResult(String(session.value.id), response.item)
     importRunData.value = queuedImportRun
@@ -1954,6 +1980,15 @@ async function runImport() {
     cancelRequested.value = false
     busyAction.value = ''
   }
+}
+
+async function executeDryRunRequest(sessionId: string) {
+  const response = await apiStore.dryRunImportSession(sessionId)
+  dryRunData.value = response.item
+  activeDryRunDedupRiskOnly.value = false
+  importRunData.value = null
+  currentStep.value = 6
+  return response.item
 }
 
 async function retryFailedRows() {
@@ -3654,6 +3689,12 @@ onMounted(loadHistory)
                     <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Найдены дубли — выберите действие</div>
                     <div class="mt-1 text-sm text-[#5f7285]">
                       Для каждой строки с дублем выберите: создать новую запись, обновить найденную или пропустить.
+                    </div>
+                    <div
+                      v-if="hasUnresolvedPendingDedupDecisions"
+                      class="mt-2 text-xs font-semibold text-[#c24b53]"
+                    >
+                      Импорт не запустится, пока действие не выбрано для каждой строки.
                     </div>
                   </div>
                   <div class="flex gap-2 text-xs">

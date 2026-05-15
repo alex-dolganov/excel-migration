@@ -279,6 +279,17 @@ export const LINKED_IMPORT_SCENARIOS = {
   },
 }
 
+const LINKED_ENTITY_FIELD_PREFIXES = {
+  company: 'COMPANY__',
+  contact: 'CONTACT__',
+  deal: 'DEAL__',
+}
+const LINKED_FIELD_PREFIX_LABELS = {
+  COMPANY__: 'Компания',
+  CONTACT__: 'Контакт',
+  DEAL__: 'Сделка',
+}
+
 const LINKED_ENTITY_DISPLAY_META = {
   company: {
     singular: 'Компания',
@@ -1068,6 +1079,38 @@ export function buildUnmappedValueSummary({ unmappedValues, fields } = {}) {
 }
 
 export function buildDedupPayload(settings) {
+  const linkedEntityIds = Object.keys(LINKED_ENTITY_FIELD_PREFIXES)
+  const hasLinkedEntitySettings = (
+    settings
+    && typeof settings === 'object'
+    && linkedEntityIds.some((entityId) => settings[entityId] && typeof settings[entityId] === 'object')
+  )
+
+  if (hasLinkedEntitySettings) {
+    let sharedStrategy = ''
+    let sharedCondition = ''
+    const linkedFields = []
+
+    for (const entityId of linkedEntityIds) {
+      const entityPayload = buildDedupPayload(settings?.[entityId] || {})
+      if (!sharedStrategy) {
+        sharedStrategy = entityPayload.strategy
+        sharedCondition = entityPayload.condition
+      }
+
+      const prefix = LINKED_ENTITY_FIELD_PREFIXES[entityId] || ''
+      for (const fieldId of entityPayload.fields) {
+        linkedFields.push(prefix ? `${prefix}${fieldId}` : fieldId)
+      }
+    }
+
+    return {
+      strategy: sharedStrategy || 'create',
+      fields: (sharedStrategy || 'create') === 'create' ? [] : Array.from(new Set(linkedFields)),
+      condition: sharedCondition || 'any',
+    }
+  }
+
   const strategy = SUPPORTED_DEDUP_STRATEGIES.includes(String(settings?.strategy || ''))
     ? String(settings?.strategy || '')
     : 'create'
@@ -1139,6 +1182,12 @@ export function formatImporterFieldLabel(fieldId, fieldTitle = '') {
   const normalizedFieldId = String(fieldId || '').trim().toUpperCase()
   if (!normalizedFieldId) {
     return ''
+  }
+
+  for (const [prefix, entityLabel] of Object.entries(LINKED_FIELD_PREFIX_LABELS)) {
+    if (normalizedFieldId.startsWith(prefix) && normalizedFieldId.length > prefix.length) {
+      return `${entityLabel}: ${formatImporterFieldLabel(normalizedFieldId.slice(prefix.length), fieldTitle)}`
+    }
   }
 
   if (Object.hasOwn(IMPORTER_FIELD_LABELS, normalizedFieldId)) {

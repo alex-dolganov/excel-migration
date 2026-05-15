@@ -343,6 +343,182 @@ class ImportExecutionApiTest(TestCase):
         )
         return session
 
+    def create_company_account(self, *, member_id="member-1", domain_url="test.bitrix24.ru"):
+        created_fields = []
+        record_id_sequence = itertools.count(start=601)
+
+        def add(fields, *, params=None, timeout=None):
+            normalized_fields = dict(fields)
+            created_fields.append(normalized_fields)
+            return FakeAddRequest(next(record_id_sequence))
+
+        account = SimpleNamespace(
+            id=f"account-{member_id}-{domain_url}",
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Company title",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Phone",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "EMAIL": {
+                                    "title": "Email",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                            }
+                        ),
+                        add=add,
+                    )
+                )
+            ),
+        )
+        account.created_fields = created_fields
+        return account
+
+    def create_uploaded_company_session(self, rows):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.COMPANY,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="companies.xlsx",
+        )
+        session.stored_file.save(
+            "companies.xlsx",
+            SimpleUploadedFile(
+                "companies.xlsx",
+                build_xlsx_with_sheets([("Companies", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_deal_account(
+        self,
+        *,
+        member_id="member-1",
+        domain_url="test.bitrix24.ru",
+        duplicates_by_filter=None,
+    ):
+        created_fields = []
+        updated_records = []
+        list_calls = []
+        record_id_sequence = itertools.count(start=801)
+        duplicates_by_filter = duplicates_by_filter or {}
+
+        def add(fields, *, params=None, timeout=None):
+            normalized_fields = dict(fields)
+            created_fields.append(normalized_fields)
+            return FakeAddRequest(next(record_id_sequence))
+
+        def list_method(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            list_calls.append(
+                {
+                    "filter": dict(filter or {}),
+                    "select": list(select or []),
+                }
+            )
+            return FakeListRequest(duplicates_by_filter.get(normalized_filter, []))
+
+        def update(record_id, fields, *, params=None, timeout=None):
+            updated_records.append(
+                {
+                    "id": record_id,
+                    "fields": dict(fields),
+                }
+            )
+            return FakeUpdateRequest(True)
+
+        account = SimpleNamespace(
+            id=f"account-{member_id}-{domain_url}",
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Deal title",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Amount",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "CURRENCY_ID": {
+                                    "title": "Currency",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "STAGE_ID": {
+                                    "title": "Stage",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": {
+                                        "NEW": "Новая",
+                                        "IN_PROGRESS": "В работе",
+                                    },
+                                },
+                            }
+                        ),
+                        list=list_method,
+                        update=update,
+                        add=add,
+                    )
+                )
+            ),
+        )
+        account.created_fields = created_fields
+        account.updated_records = updated_records
+        account.list_calls = list_calls
+        return account
+
+    def create_uploaded_deal_session(self, rows):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.DEAL,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="deals.xlsx",
+        )
+        session.stored_file.save(
+            "deals.xlsx",
+            SimpleUploadedFile(
+                "deals.xlsx",
+                build_xlsx_with_sheets([("Deals", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def create_uploaded_task_session(self, rows):
         session = ImportSession.objects.create(
             portal_member_id="member-1",
@@ -358,6 +534,41 @@ class ImportExecutionApiTest(TestCase):
             SimpleUploadedFile(
                 "tasks.xlsx",
                 build_xlsx_with_sheets([("Tasks", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_smart_process_account(self, *, member_id="member-1", domain_url="test.bitrix24.ru"):
+        return SimpleNamespace(
+            id=f"account-{member_id}-{domain_url}",
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+
+    def create_uploaded_smart_process_session(self, rows, *, entity_type_id=128, title="Согласования"):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.SMART_PROCESS,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="smart-process.xlsx",
+            import_settings={
+                "entity_config": {
+                    "entityTypeId": entity_type_id,
+                    "title": title,
+                }
+            },
+        )
+        session.stored_file.save(
+            "smart-process.xlsx",
+            SimpleUploadedFile(
+                "smart-process.xlsx",
+                build_xlsx_with_sheets([("Smart", rows)]),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             ),
         )
@@ -885,6 +1096,88 @@ class ImportExecutionApiTest(TestCase):
             )
             self.assertEqual(validation_response.status_code, 200)
 
+    def prepare_company_session(self, session, *, validate=True):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "TITLE": {
+                        "source_header": "Company title",
+                        "column": "A",
+                    },
+                    "PHONE": {
+                        "source_header": "Phone",
+                        "column": "B",
+                    },
+                    "EMAIL": {
+                        "source_header": "Email",
+                        "column": "C",
+                    },
+                }
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        if validate:
+            validation_response = self.client.post(
+                reverse("importer:session-validate", kwargs={"session_id": session.id}),
+                data={},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+            self.assertEqual(validation_response.status_code, 200)
+
+    def prepare_deal_session(self, session, *, validate=True):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "TITLE": {
+                        "source_header": "Deal title",
+                        "column": "A",
+                    },
+                    "OPPORTUNITY": {
+                        "source_header": "Amount",
+                        "column": "B",
+                    },
+                    "CURRENCY_ID": {
+                        "source_header": "Currency",
+                        "column": "C",
+                    },
+                    "STAGE_ID": {
+                        "source_header": "Stage",
+                        "column": "D",
+                    },
+                }
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        if validate:
+            validation_response = self.client.post(
+                reverse("importer:session-validate", kwargs={"session_id": session.id}),
+                data={},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+            self.assertEqual(validation_response.status_code, 200)
+
     def prepare_task_session(self, session, *, validate=True, mapping=None):
         preview_response = self.client.get(
             reverse("importer:session-preview", kwargs={"session_id": session.id}),
@@ -915,6 +1208,49 @@ class ImportExecutionApiTest(TestCase):
                     "DEADLINE": {
                         "source_header": "Deadline",
                         "column": "E",
+                    },
+                }
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        if validate:
+            validation_response = self.client.post(
+                reverse("importer:session-validate", kwargs={"session_id": session.id}),
+                data={},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+            self.assertEqual(validation_response.status_code, 200)
+
+    def prepare_smart_process_session(self, session, *, validate=True):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "title": {
+                        "source_header": "Название",
+                        "column": "A",
+                    },
+                    "stageId": {
+                        "source_header": "Стадия",
+                        "column": "B",
+                    },
+                    "sourceId": {
+                        "source_header": "Источник",
+                        "column": "C",
+                    },
+                    "opened": {
+                        "source_header": "Доступно для всех",
+                        "column": "D",
                     },
                 }
             },
@@ -1103,6 +1439,22 @@ class ImportExecutionApiTest(TestCase):
                 HTTP_AUTHORIZATION="Bearer test-token",
             )
             self.assertEqual(validation_response.status_code, 200)
+
+    def run_session_import(self, session):
+        return self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+    def run_session_dry_run(self, session):
+        return self.client.post(
+            reverse("importer:session-dry-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
 
     @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
@@ -1867,6 +2219,377 @@ class ImportExecutionApiTest(TestCase):
 
     @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_smoke_runs_main_crm_entity_import_flows_end_to_end(self, get_from_jwt_token, _batch):
+        scenarios = [
+            {
+                "name": "lead",
+                "account_factory": self.create_account,
+                "session_factory": lambda: self.create_uploaded_session(
+                    [
+                        ["Lead title", "Email", "Phone"],
+                        ["Alice", "alice@example.com", "+123456789"],
+                    ]
+                ),
+                "prepare": self.prepare_session,
+                "assert_payload": lambda account: self.assertEqual(account.created_fields, [
+                    {
+                        "TITLE": "Alice",
+                        "EMAIL": "alice@example.com",
+                        "PHONE": "+123456789",
+                    }
+                ]),
+            },
+            {
+                "name": "contact",
+                "account_factory": self.create_contact_account,
+                "session_factory": lambda: self.create_uploaded_contact_session(
+                    [
+                        ["First name", "Phone"],
+                        ["Alice", "+123456789"],
+                    ]
+                ),
+                "prepare": lambda session: self.prepare_custom_mapping_session(
+                    session,
+                    {
+                        "NAME": {"source_header": "First name", "column": "A"},
+                        "PHONE": {"source_header": "Phone", "column": "B"},
+                    },
+                    validate=True,
+                ),
+                "assert_payload": lambda account: self.assertEqual(account.created_fields, [
+                    {
+                        "NAME": "Alice",
+                        "PHONE": [{"VALUE": "+123456789", "VALUE_TYPE": "WORK"}],
+                    }
+                ]),
+            },
+            {
+                "name": "company",
+                "account_factory": self.create_company_account,
+                "session_factory": lambda: self.create_uploaded_company_session(
+                    [
+                        ["Company title", "Phone", "Email"],
+                        ["ООО Альфа", "+78005550101", "info@example.ru"],
+                    ]
+                ),
+                "prepare": self.prepare_company_session,
+                "assert_payload": lambda account: self.assertEqual(account.created_fields, [
+                    {
+                        "TITLE": "ООО Альфа",
+                        "PHONE": [{"VALUE": "+78005550101", "VALUE_TYPE": "WORK"}],
+                        "EMAIL": [{"VALUE": "info@example.ru", "VALUE_TYPE": "WORK"}],
+                    }
+                ]),
+            },
+            {
+                "name": "deal",
+                "account_factory": self.create_deal_account,
+                "session_factory": lambda: self.create_uploaded_deal_session(
+                    [
+                        ["Deal title", "Amount", "Currency", "Stage"],
+                        ["Редизайн сайта", "150000", "Рубли", "Новая"],
+                    ]
+                ),
+                "prepare": self.prepare_deal_session,
+                "assert_payload": lambda account: self.assertEqual(account.created_fields, [
+                    {
+                        "TITLE": "Редизайн сайта",
+                        "OPPORTUNITY": 150000.0,
+                        "CURRENCY_ID": "RUB",
+                        "STAGE_ID": "NEW",
+                    }
+                ]),
+            },
+        ]
+
+        for scenario in scenarios:
+            with self.subTest(entity_type=scenario["name"]):
+                account = scenario["account_factory"]()
+                get_from_jwt_token.return_value = account
+                session = scenario["session_factory"]()
+                scenario["prepare"](session)
+
+                response = self.run_session_import(session)
+
+                self.assertEqual(response.status_code, 200, response.json())
+                self.assertEqual(response.json()["item"]["created_rows"], 1)
+                self.assertEqual(len(response.json()["item"]["created_ids"]), 1)
+                scenario["assert_payload"](account)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_smoke_runs_main_task_and_crm_service_flows_end_to_end(self, get_from_jwt_token):
+        scenarios = [
+            {
+                "name": "task",
+                "account_factory": self.create_task_account,
+                "session_factory": lambda: self.create_uploaded_task_session(
+                    [
+                        ["Task title", "Responsible", "Accomplices", "Auditors", "Deadline"],
+                        ["Task A", "59", "77", "91", "31.12.2026 18:45"],
+                    ]
+                ),
+                "prepare": self.prepare_task_session,
+                "assert_payload": lambda account: self.assertEqual(account.created_fields, [
+                    {
+                        "TITLE": "Task A",
+                        "RESPONSIBLE_ID": 59,
+                        "ACCOMPLICES": [77],
+                        "AUDITORS": [91],
+                        "DEADLINE": "2026-12-31T18:45:00",
+                    }
+                ]),
+            },
+            {
+                "name": "crm_activity",
+                "account_factory": lambda: SimpleNamespace(
+                    member_id="member-1",
+                    domain_url="test.bitrix24.ru",
+                    b24_user_id=7,
+                    client=SimpleNamespace(),
+                ),
+                "session_factory": lambda: self.create_uploaded_crm_activity_session(
+                    [
+                        ["Тип сущности CRM", "ID записи CRM", "Тип активности", "Тема / заголовок"],
+                        ["1", "501", "6", "Перезвонить клиенту"],
+                    ]
+                ),
+                "prepare": lambda session: self.prepare_custom_mapping_session(
+                    session,
+                    {
+                        "OWNER_TYPE_ID": {"source_header": "Тип сущности CRM", "column": "A"},
+                        "OWNER_ID": {"source_header": "ID записи CRM", "column": "B"},
+                        "TYPE_ID": {"source_header": "Тип активности", "column": "C"},
+                        "SUBJECT": {"source_header": "Тема / заголовок", "column": "D"},
+                    },
+                    validate=True,
+                ),
+                "patch_execution": True,
+                "expected_created_id": 913,
+            },
+            {
+                "name": "crm_note",
+                "account_factory": lambda: SimpleNamespace(
+                    member_id="member-1",
+                    domain_url="test.bitrix24.ru",
+                    b24_user_id=7,
+                    client=SimpleNamespace(),
+                ),
+                "session_factory": lambda: self.create_uploaded_crm_note_session(
+                    [
+                        ["Тип сущности CRM", "ID записи CRM", "Текст заметки"],
+                        ["contact", "701", "Комментарий по клиенту"],
+                    ]
+                ),
+                "prepare": lambda session: self.prepare_custom_mapping_session(
+                    session,
+                    {
+                        "ENTITY_TYPE": {"source_header": "Тип сущности CRM", "column": "A"},
+                        "ENTITY_ID": {"source_header": "ID записи CRM", "column": "B"},
+                        "COMMENT": {"source_header": "Текст заметки", "column": "C"},
+                    },
+                    validate=True,
+                ),
+                "patch_execution": True,
+                "expected_created_id": 914,
+            },
+        ]
+
+        for scenario in scenarios:
+            with self.subTest(entity_type=scenario["name"]):
+                account = scenario["account_factory"]()
+                get_from_jwt_token.return_value = account
+                session = scenario["session_factory"]()
+                scenario["prepare"](session)
+
+                if scenario.get("patch_execution"):
+                    with patch("importer.services.import_execution.BitrixAPIRequest", create=True) as bitrix_api_request:
+                        bitrix_api_request.return_value = SimpleNamespace(result=scenario["expected_created_id"])
+                        response = self.run_session_import(session)
+                else:
+                    response = self.run_session_import(session)
+
+                self.assertEqual(response.status_code, 200, response.json())
+                self.assertEqual(response.json()["item"]["created_rows"], 1)
+                self.assertEqual(len(response.json()["item"]["created_ids"]), 1)
+
+                if "assert_payload" in scenario:
+                    scenario["assert_payload"](account)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_smoke_runs_main_linked_import_flows_end_to_end(self, get_from_jwt_token):
+        scenarios = [
+            {
+                "name": "linked_company_contact",
+                "account_factory": self.create_linked_company_contact_account,
+                "session_factory": lambda: self.create_uploaded_linked_company_contact_session(
+                    [
+                        ["Название компании", "Телефон компании", "Имя контакта", "Фамилия контакта", "Email контакта"],
+                        ["ООО Альфа", "+78005550101", "Алиса", "Иванова", "alice@example.ru"],
+                    ]
+                ),
+                "prepare": self.prepare_linked_company_contact_session,
+                "assert_payload": lambda account: (
+                    self.assertEqual(account.company_created_fields, [
+                        {
+                            "TITLE": "ООО Альфа",
+                            "PHONE": [{"VALUE": "+78005550101", "VALUE_TYPE": "WORK"}],
+                        }
+                    ]),
+                    self.assertEqual(account.contact_created_fields, [
+                        {
+                            "NAME": "Алиса",
+                            "LAST_NAME": "Иванова",
+                            "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                            "COMPANY_ID": 601,
+                        }
+                    ]),
+                ),
+            },
+            {
+                "name": "linked_company_deal",
+                "account_factory": self.create_linked_company_deal_account,
+                "session_factory": lambda: self.create_uploaded_linked_company_deal_session(
+                    [
+                        ["Название компании", "Телефон компании", "Название сделки", "Сумма", "Валюта", "Стадия"],
+                        ["ООО Альфа", "+78005550101", "Редизайн сайта", "150000", "RUB", "Новая"],
+                    ]
+                ),
+                "prepare": self.prepare_linked_company_deal_session,
+                "assert_payload": lambda account: (
+                    self.assertEqual(account.company_created_fields, [
+                        {
+                            "TITLE": "ООО Альфа",
+                            "PHONE": [{"VALUE": "+78005550101", "VALUE_TYPE": "WORK"}],
+                        }
+                    ]),
+                    self.assertEqual(account.deal_created_fields, [
+                        {
+                            "TITLE": "Редизайн сайта",
+                            "OPPORTUNITY": 150000.0,
+                            "CURRENCY_ID": "RUB",
+                            "STAGE_ID": "NEW",
+                            "COMPANY_ID": 601,
+                        }
+                    ]),
+                ),
+            },
+        ]
+
+        for scenario in scenarios:
+            with self.subTest(entity_type=scenario["name"]):
+                account = scenario["account_factory"]()
+                get_from_jwt_token.return_value = account
+                session = scenario["session_factory"]()
+                scenario["prepare"](session)
+
+                response = self.run_session_import(session)
+
+                self.assertEqual(response.status_code, 200, response.json())
+                self.assertEqual(response.json()["item"]["created_rows"], 1)
+                self.assertEqual(len(response.json()["item"]["created_ids"]), 1)
+                scenario["assert_payload"](account)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_smoke_runs_smart_process_import_flow_end_to_end(self, get_from_jwt_token):
+        account = self.create_smart_process_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_smart_process_session(
+            [
+                ["Название", "Стадия", "Источник", "Доступно для всех"],
+                ["Согласование 1", "Новая", "ads", "yes"],
+            ]
+        )
+
+        def fake_b24_fields_request(*, bitrix_token=None, api_method=None, params=None):
+            if api_method == "crm.item.fields":
+                return SimpleNamespace(
+                    result={
+                        "title": {
+                            "title": "Название",
+                            "type": "string",
+                            "isRequired": True,
+                            "isReadOnly": False,
+                            "upperName": "TITLE",
+                        },
+                        "stageId": {
+                            "title": "Стадия",
+                            "type": "crm_status",
+                            "isRequired": False,
+                            "isReadOnly": False,
+                            "upperName": "STAGE_ID",
+                        },
+                        "sourceId": {
+                            "title": "Источник",
+                            "type": "crm_status",
+                            "isRequired": False,
+                            "isReadOnly": False,
+                            "upperName": "SOURCE_ID",
+                            "settings": {
+                                "statusType": "SOURCE",
+                            },
+                        },
+                        "opened": {
+                            "title": "Доступно для всех",
+                            "type": "boolean",
+                            "isRequired": False,
+                            "isReadOnly": False,
+                            "upperName": "OPENED",
+                        },
+                    }
+                )
+
+            if api_method == "crm.category.list":
+                return SimpleNamespace(result={"categories": []})
+
+            entity_id = str((((params or {}).get("filter") or {}).get("ENTITY_ID")) or "")
+            if api_method == "crm.status.list" and entity_id == "DYNAMIC_128_STAGE_0":
+                return SimpleNamespace(
+                    result={
+                        "statuses": [
+                            {"STATUS_ID": "DT128_0:NEW", "NAME": "Новая"},
+                        ]
+                    }
+                )
+            if api_method == "crm.status.list" and entity_id == "SOURCE":
+                return SimpleNamespace(
+                    result={
+                        "statuses": [
+                            {"STATUS_ID": "ADVERTISING", "NAME": "Реклама"},
+                        ]
+                    }
+                )
+
+            raise AssertionError(f"Unexpected Bitrix fields request: {api_method} {params}")
+
+        with patch("importer.services.b24_fields.BitrixAPIRequest", side_effect=fake_b24_fields_request), patch(
+            "importer.services.import_execution.BitrixAPIRequest",
+            create=True,
+        ) as execution_bitrix_request:
+            execution_bitrix_request.return_value = SimpleNamespace(result={"item": {"id": 501}})
+
+            self.prepare_smart_process_session(session, validate=True)
+            response = self.run_session_import(session)
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 1)
+        self.assertEqual(response.json()["item"]["created_ids"], [501])
+        execution_bitrix_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="crm.item.add",
+            params={
+                "entityTypeId": 128,
+                "fields": {
+                    "title": "Согласование 1",
+                    "stageId": "DT128_0:NEW",
+                    "sourceId": "ADVERTISING",
+                    "opened": 1,
+                },
+            },
+        )
+
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_run_formats_contact_phone_as_bitrix_multifield(self, get_from_jwt_token, _batch):
         account = self.create_contact_account()
         get_from_jwt_token.return_value = account
@@ -2051,6 +2774,136 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(session.successful_rows, 1)
         self.assertEqual(session.failed_rows, 0)
         self.assertEqual(session.summary["import_run"]["updated_rows"], 1)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_requires_explicit_duplicate_decisions_when_dedup_strategy_is_ask(self, get_from_jwt_token):
+        account = self.create_deal_account(
+            duplicates_by_filter={
+                (("TITLE", "Редизайн сайта"),): [{"ID": 903}],
+            }
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_deal_session(
+            [
+                ["Deal title", "Amount", "Currency", "Stage"],
+                ["Редизайн сайта", "150000", "Рубли", "Новая"],
+            ]
+        )
+        self.prepare_deal_session(session, validate=True)
+        session.refresh_from_db()
+        session.import_settings = {
+            **session.import_settings,
+            "dedup": {
+                "strategy": "ask",
+                "fields": ["TITLE"],
+            },
+        }
+        session.save(update_fields=["import_settings", "updated_at"])
+
+        dry_run_response = self.run_session_dry_run(session)
+
+        self.assertEqual(dry_run_response.status_code, 200, dry_run_response.json())
+        self.assertEqual(dry_run_response.json()["item"]["pending_decision_rows"], 1)
+        self.assertEqual(
+            self._strip_report_meta(dry_run_response.json()["item"]["results"]),
+            [
+                {
+                    "row_number": 2,
+                    "status": "pending_decision",
+                    "record_id": 903,
+                    "duplicate_match_fields": ["TITLE"],
+                    "fields": {
+                        "TITLE": "Редизайн сайта",
+                        "OPPORTUNITY": 150000.0,
+                        "CURRENCY_ID": "RUB",
+                        "STAGE_ID": "NEW",
+                    },
+                }
+            ],
+        )
+
+        response = self.run_session_import(session)
+
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertEqual(
+            response.json(),
+            {
+                "error": "Run a dry run and choose an action for each duplicate before import execution",
+                "pending_decision_rows": [2],
+            },
+        )
+        self.assertEqual(account.created_fields, [])
+        self.assertEqual(account.updated_records, [])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_uses_explicit_duplicate_decisions_when_dedup_strategy_is_ask(self, get_from_jwt_token):
+        account = self.create_deal_account(
+            duplicates_by_filter={
+                (("TITLE", "Редизайн сайта"),): [{"ID": 904}],
+            }
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_deal_session(
+            [
+                ["Deal title", "Amount", "Currency", "Stage"],
+                ["Редизайн сайта", "150000", "Рубли", "Новая"],
+            ]
+        )
+        self.prepare_deal_session(session, validate=True)
+        session.refresh_from_db()
+        session.import_settings = {
+            **session.import_settings,
+            "dedup": {
+                "strategy": "ask",
+                "fields": ["TITLE"],
+            },
+        }
+        session.save(update_fields=["import_settings", "updated_at"])
+
+        dry_run_response = self.run_session_dry_run(session)
+        self.assertEqual(dry_run_response.status_code, 200, dry_run_response.json())
+        self.assertEqual(dry_run_response.json()["item"]["pending_decision_rows"], 1)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={"per_row_decisions": {"2": "update"}},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 0)
+        self.assertEqual(response.json()["item"]["updated_rows"], 1)
+        self.assertEqual(response.json()["item"]["skipped_rows"], 0)
+        self.assertEqual(
+            self._strip_report_meta(response.json()["item"]["results"]),
+            [
+                {
+                    "row_number": 2,
+                    "status": "updated",
+                    "record_id": 904,
+                    "duplicate_match_fields": ["TITLE"],
+                    "updated_fields": ["TITLE", "OPPORTUNITY", "CURRENCY_ID", "STAGE_ID"],
+                }
+            ],
+        )
+        self.assertEqual(account.created_fields, [])
+        self.assertEqual(
+            account.updated_records,
+            [
+                {
+                    "id": 904,
+                    "fields": {
+                        "TITLE": "Редизайн сайта",
+                        "OPPORTUNITY": 150000.0,
+                        "CURRENCY_ID": "RUB",
+                        "STAGE_ID": "NEW",
+                    },
+                }
+            ],
+        )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_run_does_not_use_single_field_duplicate_when_multiple_dedup_fields_are_selected(self, get_from_jwt_token):
@@ -2482,6 +3335,70 @@ class ImportExecutionApiTest(TestCase):
                 }
             },
         )
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_blocks_when_preflight_has_blocking_issues_even_if_validation_summary_exists(self, get_from_jwt_token, bitrix_api_request):
+        account = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(),
+        )
+        get_from_jwt_token.return_value = account
+        bitrix_api_request.return_value = SimpleNamespace(result=913)
+
+        session = self.create_uploaded_crm_activity_session(
+            [
+                ["Тип сущности CRM", "ID записи CRM", "Тип активности", "Тема / заголовок"],
+                ["1", "501", "2", "Перезвонить клиенту"],
+            ]
+        )
+        self.prepare_custom_mapping_session(
+            session,
+            {
+                "OWNER_TYPE_ID": {"source_header": "Тип сущности CRM", "column": "A"},
+                "OWNER_ID": {"source_header": "ID записи CRM", "column": "B"},
+                "TYPE_ID": {"source_header": "Тип активности", "column": "C"},
+                "SUBJECT": {"source_header": "Тема / заголовок", "column": "D"},
+            },
+            validate=False,
+        )
+
+        session.summary = {
+            "validation": {
+                "checked_rows": 1,
+                "valid_rows": 1,
+                "invalid_rows": 0,
+                "issue_count": 0,
+                "issues": [],
+            },
+        }
+        session.save(update_fields=["summary", "updated_at"])
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Resolve preflight issues before import execution")
+        self.assertEqual(response.json()["preflight"], {
+            "blocking_issue_count": 1,
+            "warning_count": 0,
+            "issues": [
+                {
+                    "code": "crm_activity_communications_missing",
+                    "severity": "error",
+                    "field_id": "COMMUNICATIONS_VALUE",
+                    "row_count": 1,
+                    "activity_types": ["call"],
+                },
+            ],
+        })
+        bitrix_api_request.assert_not_called()
 
     @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
@@ -3117,3 +4034,190 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(results[0]["linked_records"]["company"]["id"], 601)
         self.assertEqual(results[1]["linked_records"]["company"]["status"], "existing")
         self.assertEqual(results[1]["linked_records"]["company"]["id"], 601)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_requires_explicit_duplicate_decisions_for_linked_import_when_dedup_strategy_is_ask(
+        self,
+        get_from_jwt_token,
+    ):
+        account = self.create_linked_company_contact_account(
+            company_duplicates_by_filter={
+                (("TITLE", "ООО Альфа"),): [{"ID": 601}],
+            }
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_linked_company_contact_session(
+            [
+                [
+                    "Название компании",
+                    "Телефон компании",
+                    "Имя контакта",
+                    "Фамилия контакта",
+                    "Email контакта",
+                ],
+                [
+                    "ООО Альфа",
+                    "+78005550101",
+                    "Алиса",
+                    "Иванова",
+                    "alice@example.ru",
+                ],
+            ]
+        )
+        self.prepare_linked_company_contact_session(
+            session,
+            validate=True,
+            dedup={
+                "strategy": "ask",
+                "fields": ["COMPANY__TITLE"],
+            },
+        )
+
+        dry_run_response = self.run_session_dry_run(session)
+
+        self.assertEqual(dry_run_response.status_code, 200, dry_run_response.json())
+        self.assertEqual(dry_run_response.json()["item"]["pending_decision_rows"], 1)
+        self.assertEqual(
+            self._strip_report_meta(dry_run_response.json()["item"]["results"]),
+            [
+                {
+                    "row_number": 2,
+                    "status": "pending_decision",
+                    "record_id": "Компания 601",
+                    "duplicate_match_fields": ["COMPANY__TITLE"],
+                    "fields": {
+                        "COMPANY__TITLE": "ООО Альфа",
+                        "COMPANY__PHONE": [{"VALUE": "+78005550101", "VALUE_TYPE": "WORK"}],
+                        "CONTACT__NAME": "Алиса",
+                        "CONTACT__LAST_NAME": "Иванова",
+                        "CONTACT__EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                    },
+                    "linked": {
+                        "company": {
+                            "duplicate_match_fields": ["TITLE"],
+                        }
+                    },
+                }
+            ],
+        )
+
+        response = self.run_session_import(session)
+
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertEqual(
+            response.json(),
+            {
+                "error": "Run a dry run and choose an action for each duplicate before import execution",
+                "pending_decision_rows": [2],
+            },
+        )
+        self.assertEqual(account.company_created_fields, [])
+        self.assertEqual(account.company_updated_records, [])
+        self.assertEqual(account.contact_created_fields, [])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_uses_explicit_duplicate_decisions_for_linked_import_when_dedup_strategy_is_ask(
+        self,
+        get_from_jwt_token,
+    ):
+        account = self.create_linked_company_contact_account(
+            company_duplicates_by_filter={
+                (("TITLE", "ООО Альфа"),): [{"ID": 601}],
+            }
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_linked_company_contact_session(
+            [
+                [
+                    "Название компании",
+                    "Телефон компании",
+                    "Имя контакта",
+                    "Фамилия контакта",
+                    "Email контакта",
+                ],
+                [
+                    "ООО Альфа",
+                    "+78005550101",
+                    "Алиса",
+                    "Иванова",
+                    "alice@example.ru",
+                ],
+            ]
+        )
+        self.prepare_linked_company_contact_session(
+            session,
+            validate=True,
+            dedup={
+                "strategy": "ask",
+                "fields": ["COMPANY__TITLE"],
+            },
+        )
+
+        dry_run_response = self.run_session_dry_run(session)
+        self.assertEqual(dry_run_response.status_code, 200, dry_run_response.json())
+        self.assertEqual(dry_run_response.json()["item"]["pending_decision_rows"], 1)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={"per_row_decisions": {"2": "update"}},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 0)
+        self.assertEqual(response.json()["item"]["updated_rows"], 1)
+        self.assertEqual(response.json()["item"]["skipped_rows"], 0)
+        self.assertEqual(
+            self._strip_report_meta(response.json()["item"]["results"]),
+            [
+                {
+                    "row_number": 2,
+                    "status": "updated",
+                    "record_id": 701,
+                    "linked": {
+                        "company": {
+                            "duplicate_match_fields": ["TITLE"],
+                        }
+                    },
+                    "linked_records": {
+                        "company": {
+                            "id": 601,
+                            "title": "ООО Альфа",
+                            "status": "updated",
+                        },
+                        "contact": {
+                            "id": 701,
+                            "title": "Алиса Иванова",
+                            "status": "created",
+                        },
+                    },
+                }
+            ],
+        )
+        self.assertEqual(account.company_created_fields, [])
+        self.assertEqual(
+            account.company_updated_records,
+            [
+                {
+                    "id": 601,
+                    "fields": {
+                        "TITLE": "ООО Альфа",
+                        "PHONE": [{"VALUE": "+78005550101", "VALUE_TYPE": "WORK"}],
+                    },
+                }
+            ],
+        )
+        self.assertEqual(
+            account.contact_created_fields,
+            [
+                {
+                    "NAME": "Алиса",
+                    "LAST_NAME": "Иванова",
+                    "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                    "COMPANY_ID": 601,
+                }
+            ],
+        )

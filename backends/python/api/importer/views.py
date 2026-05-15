@@ -467,6 +467,55 @@ def normalize_per_row_decisions(raw: object) -> dict:
     return result
 
 
+def collect_pending_decision_row_numbers(dry_run_summary: object) -> list[int]:
+    if not isinstance(dry_run_summary, dict):
+        return []
+
+    row_numbers = []
+    seen_row_numbers = set()
+    for item in dry_run_summary.get("results", []) if isinstance(dry_run_summary.get("results"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "").strip() != "pending_decision":
+            continue
+        try:
+            row_number = int(item.get("row_number"))
+        except (TypeError, ValueError):
+            continue
+        if row_number in seen_row_numbers:
+            continue
+        seen_row_numbers.add(row_number)
+        row_numbers.append(row_number)
+
+    return sorted(row_numbers)
+
+
+def dedup_settings_require_pending_decisions(dedup_settings: object) -> bool:
+    if not isinstance(dedup_settings, dict):
+        return False
+
+    if str(dedup_settings.get("strategy") or "").strip().lower() == "ask":
+        return True
+
+    return any(dedup_settings_require_pending_decisions(value) for value in dedup_settings.values())
+
+
+def get_missing_pending_decision_rows(dedup_settings: object, summary: object, per_row_decisions: object) -> list[int] | None:
+    if not dedup_settings_require_pending_decisions(dedup_settings):
+        return []
+
+    if not isinstance(summary, dict):
+        return None
+
+    dry_run_summary = summary.get("dry_run")
+    if not isinstance(dry_run_summary, dict):
+        return None
+
+    pending_row_numbers = collect_pending_decision_row_numbers(dry_run_summary)
+    normalized_decisions = normalize_per_row_decisions(per_row_decisions)
+    return [row_number for row_number in pending_row_numbers if str(row_number) not in normalized_decisions]
+
+
 def is_session_cancel_requested(session_id) -> bool:
     return ImportSession.objects.filter(
         id=session_id,
@@ -2142,6 +2191,13 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
     validation_summary = summary.get("validation")
     if not isinstance(validation_summary, dict):
         raise ValueError("Validation is required before import execution")
+    missing_pending_decision_rows = get_missing_pending_decision_rows(
+        saved_dedup,
+        summary,
+        normalized_per_row_decisions,
+    )
+    if missing_pending_decision_rows is None or missing_pending_decision_rows:
+        raise ValueError("Run a dry run and choose an action for each duplicate before import execution")
 
     session.status = ImportSession.Status.RUNNING
     session.last_error = ""
@@ -2268,12 +2324,21 @@ def import_session_run(request: AuthorizedRequest, session_id):
         (request.data or {}).get("per_row_decisions") if isinstance(request.data, dict) else None
     ) or normalize_per_row_decisions(import_settings.get("per_row_decisions"))
 
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    missing_pending_decision_rows = get_missing_pending_decision_rows(saved_dedup, summary, per_row_decisions)
+    if missing_pending_decision_rows is None or missing_pending_decision_rows:
+        response_payload = {
+            "error": "Run a dry run and choose an action for each duplicate before import execution",
+        }
+        if missing_pending_decision_rows:
+            response_payload["pending_decision_rows"] = missing_pending_decision_rows
+        return JsonResponse(response_payload, status=400)
+
     if per_row_decisions:
         import_settings = {**import_settings, "per_row_decisions": per_row_decisions}
         session.import_settings = import_settings
         session.save(update_fields=["import_settings", "updated_at"])
 
-    summary = session.summary if isinstance(session.summary, dict) else {}
     validation_summary = summary.get("validation")
     if not isinstance(validation_summary, dict):
         return JsonResponse({"error": "Validation is required before import execution"}, status=400)

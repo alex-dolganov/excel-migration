@@ -606,8 +606,34 @@ def normalize_linked_dedup_settings(dedup_settings, entity_type: str = LINKED_CO
         }
 
     shared_settings = normalize_dedup_settings(dedup_settings)
+    linked_prefix_map = {
+        linked_entity: str(prefix or "").strip().upper()
+        for linked_entity, prefix in get_linked_entity_prefix_map(entity_type).items()
+    }
+    split_fields = {linked_entity: [] for linked_entity in linked_entity_ids}
+
+    for field_name in shared_settings["fields"]:
+        matched_linked_entity = None
+        for linked_entity in linked_entity_ids:
+            prefix = linked_prefix_map.get(linked_entity, "")
+            if prefix and field_name.startswith(prefix):
+                normalized_field_name = str(field_name[len(prefix):] or "").strip().upper()
+                if normalized_field_name and _DEDUP_FIELD_RE.match(normalized_field_name):
+                    split_fields[linked_entity].append(normalized_field_name)
+                matched_linked_entity = linked_entity
+                break
+
+        if matched_linked_entity is not None:
+            continue
+
+        for linked_entity in linked_entity_ids:
+            split_fields[linked_entity].append(field_name)
+
     return {
-        linked_entity: dict(shared_settings)
+        linked_entity: {
+            **shared_settings,
+            "fields": split_fields[linked_entity],
+        }
         for linked_entity in linked_entity_ids
     }
 
@@ -941,6 +967,119 @@ def resolve_linked_record_action(account, entity_type: str, row_payload: dict, d
         "record_id": existing_record_id,
         "meta": build_linked_result_meta(existing_record_match),
     }
+
+
+def resolve_linked_record_action_with_decision(
+    account,
+    entity_type: str,
+    row_payload: dict,
+    dedup_settings: dict,
+    row_decision: str = "",
+) -> dict:
+    filtered_dedup_settings = filter_dedup_settings_for_payload(dedup_settings, row_payload)
+    existing_record_match = find_existing_record(account, entity_type, row_payload, filtered_dedup_settings)
+    existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
+
+    if existing_record_id is None:
+        return {
+            "mode": "create",
+            "record_id": None,
+            "meta": build_linked_result_meta(existing_record_match),
+        }
+
+    strategy = str(filtered_dedup_settings.get("strategy") or "create").strip().lower()
+    normalized_row_decision = str(row_decision or "").strip().lower()
+    if normalized_row_decision not in {"create", "update", "skip"}:
+        normalized_row_decision = ""
+
+    if strategy == "update":
+        mode = "update"
+    elif strategy == "skip":
+        mode = "reuse"
+    elif strategy == "ask":
+        if normalized_row_decision == "create":
+            mode = "create"
+        elif normalized_row_decision == "update":
+            mode = "update"
+        elif normalized_row_decision == "skip":
+            mode = "skip_row"
+        else:
+            mode = "pending_decision"
+    else:
+        mode = "create"
+
+    return {
+        "mode": mode,
+        "record_id": existing_record_id,
+        "meta": build_linked_result_meta(existing_record_match),
+    }
+
+
+def build_linked_duplicate_decision_summary(linked_actions: dict, entity_type: str) -> dict:
+    linked_entity_labels = {
+        "company": "Компания",
+        "contact": "Контакт",
+        "deal": "Сделка",
+    }
+    linked_prefix_map = get_linked_entity_prefix_map(entity_type)
+    linked_meta = {}
+    record_labels = []
+    duplicate_match_fields = []
+    dedup_missing_fields = []
+    seen_record_labels = set()
+    seen_duplicate_fields = set()
+    seen_missing_fields = set()
+
+    for linked_entity in get_linked_entity_ids(entity_type):
+        linked_action = linked_actions.get(linked_entity, {})
+        if not isinstance(linked_action, dict):
+            continue
+
+        meta = linked_action.get("meta", {})
+        if isinstance(meta, dict) and meta:
+            linked_meta[linked_entity] = meta
+
+        record_id = normalize_record_id(linked_action.get("record_id")) or linked_action.get("record_id")
+        if record_id is not None and (
+            linked_action.get("mode") in {"pending_decision", "skip_row"}
+            or (isinstance(meta, dict) and meta.get("duplicate_match_fields"))
+        ):
+            record_label = f"{linked_entity_labels.get(linked_entity, linked_entity)} {record_id}"
+            if record_label not in seen_record_labels:
+                seen_record_labels.add(record_label)
+                record_labels.append(record_label)
+
+        prefix = str(linked_prefix_map.get(linked_entity) or "")
+        for field_name in meta.get("duplicate_match_fields", []) if isinstance(meta, dict) else []:
+            normalized_field_name = str(field_name or "").strip()
+            if not normalized_field_name:
+                continue
+            prefixed_field_name = f"{prefix}{normalized_field_name}" if prefix else normalized_field_name
+            if prefixed_field_name in seen_duplicate_fields:
+                continue
+            seen_duplicate_fields.add(prefixed_field_name)
+            duplicate_match_fields.append(prefixed_field_name)
+
+        for field_name in meta.get("dedup_missing_fields", []) if isinstance(meta, dict) else []:
+            normalized_field_name = str(field_name or "").strip()
+            if not normalized_field_name:
+                continue
+            prefixed_field_name = f"{prefix}{normalized_field_name}" if prefix else normalized_field_name
+            if prefixed_field_name in seen_missing_fields:
+                continue
+            seen_missing_fields.add(prefixed_field_name)
+            dedup_missing_fields.append(prefixed_field_name)
+
+    result = {}
+    if record_labels:
+        result["record_id"] = " · ".join(record_labels)
+    if duplicate_match_fields:
+        result["duplicate_match_fields"] = duplicate_match_fields
+    if dedup_missing_fields:
+        result["dedup_missing_fields"] = dedup_missing_fields
+    if linked_meta:
+        result["linked"] = linked_meta
+    return result
 
 
 def build_linked_result_fields(linked_payload: dict, entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> dict:
@@ -1404,6 +1543,7 @@ def execute_linked_dry_run(
     ready_create_rows = 0
     ready_update_rows = 0
     skipped_rows = 0
+    pending_decision_rows = 0
     results = []
     child_entity_type = get_linked_company_child_entity_type(entity_type)
 
@@ -1439,29 +1579,39 @@ def execute_linked_dry_run(
             default_field_values=default_field_values,
         )
 
-        company_action = resolve_linked_record_action(
+        company_action = resolve_linked_record_action_with_decision(
             account,
             "company",
             linked_payload.get("company", {}),
             dedup_settings.get("company", {}),
+            "",
         ) if linked_payload.get("company") else {"mode": "skip_payload", "record_id": None, "meta": {}}
 
-        child_action = resolve_linked_record_action(
+        child_action = resolve_linked_record_action_with_decision(
             account,
             child_entity_type,
             linked_payload.get(child_entity_type, {}),
             dedup_settings.get(child_entity_type, {}),
+            "",
         ) if linked_payload.get(child_entity_type) else {"mode": "skip_payload", "record_id": None, "meta": {}}
 
-        result_meta = {}
         linked_actions = {
             "company": company_action,
             child_entity_type: child_action,
         }
-        for linked_entity in get_linked_entity_ids(entity_type):
-            linked_meta = linked_actions.get(linked_entity, {}).get("meta", {})
-            if linked_meta:
-                result_meta[linked_entity] = linked_meta
+        duplicate_decision_summary = build_linked_duplicate_decision_summary(linked_actions, entity_type)
+
+        if company_action.get("mode") == "pending_decision" or child_action.get("mode") == "pending_decision":
+            pending_decision_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "pending_decision",
+                    "fields": build_linked_result_fields(linked_payload, entity_type=entity_type),
+                    **duplicate_decision_summary,
+                }
+            )
+            continue
 
         has_updates = company_action.get("mode") == "update" or child_action.get("mode") == "update"
 
@@ -1484,8 +1634,8 @@ def execute_linked_dry_run(
         if child_action.get("record_id") is not None:
             result_item["record_id"] = child_action["record_id"]
 
-        if result_meta:
-            result_item["linked"] = result_meta
+        if duplicate_decision_summary.get("linked"):
+            result_item["linked"] = duplicate_decision_summary["linked"]
         results.append(result_item)
 
     return {
@@ -1494,6 +1644,7 @@ def execute_linked_dry_run(
         "ready_create_rows": ready_create_rows,
         "ready_update_rows": ready_update_rows,
         "skipped_rows": skipped_rows,
+        "pending_decision_rows": pending_decision_rows,
         "results": results,
     }
 
@@ -1512,6 +1663,7 @@ def execute_linked_import(
     dedup_settings: dict,
     should_cancel=None,
     default_field_values: dict | None = None,
+    per_row_decisions: dict | None = None,
     progress_callback=None,
 ) -> dict:
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
@@ -1610,18 +1762,24 @@ def execute_linked_import(
         company_payload = dict(linked_payload.get("company", {}))
         ext_key = str(company_payload.pop("EXTERNAL_KEY", "") or "").strip()
         child_payload = linked_payload.get(child_entity_type, {})
+        decisions = per_row_decisions if isinstance(per_row_decisions, dict) else {}
+        row_decision = str(decisions.get(str(row_number), "")).strip().lower()
+        if row_decision not in {"create", "update", "skip"}:
+            row_decision = ""
 
         try:
             if ext_key and ext_key in company_ext_key_cache:
                 company_action = {"mode": "cached", "record_id": company_ext_key_cache[ext_key], "meta": {}}
             elif company_payload:
-                company_action = _bitrix_retry(lambda: resolve_linked_record_action(
+                company_action = _bitrix_retry(lambda: resolve_linked_record_action_with_decision(
                     account, "company", company_payload, dedup_settings.get("company", {}),
+                    row_decision,
                 ))
             else:
                 company_action = {"mode": "skip_payload", "record_id": None, "meta": {}}
-            child_action = _bitrix_retry(lambda: resolve_linked_record_action(
+            child_action = _bitrix_retry(lambda: resolve_linked_record_action_with_decision(
                 account, child_entity_type, child_payload, dedup_settings.get(child_entity_type, {}),
+                row_decision,
             )) if child_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
         except Exception as error:
             failed_rows += 1
@@ -1630,6 +1788,28 @@ def execute_linked_import(
                     "row_number": row_number,
                     "status": "failed",
                     "error": safe_format_import_error(error),
+                    **build_import_result_report_meta(entity_type, linked_payload=linked_payload),
+                }
+            )
+            continue
+
+        linked_actions = {
+            "company": company_action,
+            child_entity_type: child_action,
+        }
+        duplicate_decision_summary = build_linked_duplicate_decision_summary(linked_actions, entity_type)
+
+        if company_action.get("mode") == "pending_decision" or child_action.get("mode") == "pending_decision":
+            raise ValueError("Run a dry run and choose an action for each duplicate before import execution")
+
+        if company_action.get("mode") == "skip_row" or child_action.get("mode") == "skip_row":
+            skipped_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "skipped_duplicate",
+                    "error": "Duplicate skipped by user decision",
+                    **duplicate_decision_summary,
                     **build_import_result_report_meta(entity_type, linked_payload=linked_payload),
                 }
             )
@@ -1683,16 +1863,6 @@ def execute_linked_import(
             )
             continue
 
-        result_meta = {}
-        linked_actions = {
-            "company": company_action,
-            child_entity_type: child_action,
-        }
-        for linked_entity in get_linked_entity_ids(entity_type):
-            linked_meta = linked_actions.get(linked_entity, {}).get("meta", {})
-            if linked_meta:
-                result_meta[linked_entity] = linked_meta
-
         has_child_link_update = (
             child_action.get("mode") == "reuse"
             and company_id is not None
@@ -1727,8 +1897,8 @@ def execute_linked_import(
                 linked_payload=linked_payload,
             ),
         }
-        if result_meta:
-            result_item["linked"] = result_meta
+        if duplicate_decision_summary.get("linked"):
+            result_item["linked"] = duplicate_decision_summary["linked"]
         if linked_records:
             result_item["linked_records"] = linked_records
         if child_record_id is not None:
@@ -1936,6 +2106,7 @@ def execute_import(
             dedup_settings=normalize_linked_dedup_settings(dedup_settings, entity_type=entity_type),
             should_cancel=should_cancel,
             default_field_values=default_field_values,
+            per_row_decisions=per_row_decisions,
             progress_callback=progress_callback,
         )
 
