@@ -17,10 +17,11 @@ from .validation import (
     split_field_values,
 )
 from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, download_attachment_source
-from .error_messages import MISSING_BITRIX_RECORD_ID_ERROR, format_import_error
+from .error_messages import MISSING_BITRIX_RECORD_ID_ERROR, safe_format_import_error
 from .report_metadata import build_import_result_report_meta
 from .task_resolution import BitrixTaskResolver, is_task_reference_field
 from .user_resolution import BitrixUserResolver, is_task_user_reference_field
+from .value_normalization import build_discrete_value_keys, resolve_value_mapping
 from .b24_fields import SMART_PROCESS_ENTITY_TYPE, get_linked_import_schema, normalize_smart_process_entity_config
 
 
@@ -101,7 +102,7 @@ def _flush_crm_batch(account, entity_type: str, pending_batch: list) -> tuple:
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": format_import_error(raw_errors[key]),
+                    "error": safe_format_import_error(raw_errors[key]),
                     **build_import_result_report_meta(entity_type, row_payload=row_payload),
                 }
             )
@@ -281,9 +282,11 @@ def build_field_items_index(field: dict) -> dict[str, str]:
         item_id = normalize_value(item.get("id"))
         item_title = normalize_value(item.get("title"))
         if item_id:
-            items_index[item_id.lower()] = item_id
+            for index_key in build_discrete_value_keys(item_id):
+                items_index.setdefault(index_key, item_id)
         if item_title:
-            items_index[item_title.lower()] = item_id
+            for index_key in build_discrete_value_keys(item_title):
+                items_index.setdefault(index_key, item_id)
 
     return items_index
 
@@ -294,13 +297,17 @@ def resolve_field_value(field: dict, value: str, mapping_item: dict) -> str:
         return ""
 
     value_mapping = mapping_item.get("value_mapping") if isinstance(mapping_item, dict) else None
-    if isinstance(value_mapping, dict):
-        mapped_value = normalize_value(value_mapping.get(normalized_value))
-        if mapped_value:
-            return mapped_value
+    mapped_value = resolve_value_mapping(value_mapping, normalized_value)
+    if mapped_value:
+        return mapped_value
 
     if field.get("items"):
-        return build_field_items_index(field).get(normalized_value.lower(), normalized_value)
+        items_index = build_field_items_index(field)
+        for index_key in build_discrete_value_keys(normalized_value):
+            resolved_value = items_index.get(index_key)
+            if resolved_value:
+                return resolved_value
+        return normalized_value
 
     return normalized_value
 
@@ -1594,7 +1601,7 @@ def execute_linked_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": format_import_error(error),
+                    "error": safe_format_import_error(error),
                     **build_import_result_report_meta(entity_type),
                 }
             )
@@ -1622,7 +1629,7 @@ def execute_linked_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": format_import_error(error),
+                    "error": safe_format_import_error(error),
                     **build_import_result_report_meta(entity_type, linked_payload=linked_payload),
                 }
             )
@@ -1643,7 +1650,7 @@ def execute_linked_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": format_import_error(error),
+                    "error": safe_format_import_error(error),
                     **build_import_result_report_meta(entity_type, linked_payload=linked_payload),
                 }
             )
@@ -1670,7 +1677,7 @@ def execute_linked_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": format_import_error(error),
+                    "error": safe_format_import_error(error),
                     **build_import_result_report_meta(entity_type, linked_payload=linked_payload),
                 }
             )
@@ -1972,7 +1979,7 @@ def execute_import(
                     {
                         "row_number": prow_number,
                         "status": "failed",
-                        "error": format_import_error(error),
+                        "error": safe_format_import_error(error),
                         **build_import_result_report_meta(
                             entity_type,
                             row_payload=pending_row_payload,
@@ -2060,7 +2067,7 @@ def execute_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": format_import_error(error),
+                    "error": safe_format_import_error(error),
                     **build_import_result_report_meta(entity_type, entity_config=report_entity_config),
                 }
             )
@@ -2089,7 +2096,7 @@ def execute_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": format_import_error(error),
+                    "error": safe_format_import_error(error),
                     **build_import_result_report_meta(
                         entity_type,
                         row_payload=row_payload,
@@ -2160,7 +2167,7 @@ def execute_import(
                         {
                             "row_number": row_number,
                             "status": "failed",
-                            "error": format_import_error(error),
+                            "error": safe_format_import_error(error),
                             **build_import_result_report_meta(
                                 entity_type,
                                 row_payload=row_payload,
@@ -2199,7 +2206,7 @@ def execute_import(
                     {
                         "row_number": row_number,
                         "status": "failed",
-                        "error": format_import_error(error),
+                        "error": safe_format_import_error(error),
                         **build_import_result_report_meta(
                             entity_type,
                             row_payload=row_payload,
@@ -2237,7 +2244,7 @@ def execute_import(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": format_import_error(error),
+                    "error": safe_format_import_error(error),
                     **build_import_result_report_meta(
                         entity_type,
                         row_payload=row_payload,

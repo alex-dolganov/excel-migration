@@ -3,6 +3,12 @@ from datetime import datetime
 
 from .task_resolution import BitrixTaskResolver, is_task_reference_field
 from .user_resolution import BitrixUserResolver, is_task_user_reference_field
+from .value_normalization import (
+    CURRENCY_CODE_RE,
+    build_discrete_value_keys,
+    normalize_currency_code,
+    resolve_value_mapping,
+)
 
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -40,22 +46,6 @@ CRM_ACTIVITY_COMMUNICATION_TYPES = {
     "2": "call",
     "4": "email",
 }
-CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
-CURRENCY_ID_ALIASES = {
-    "rub": "RUB",
-    "rur": "RUB",
-    "руб": "RUB",
-    "рубль": "RUB",
-    "рубли": "RUB",
-    "российский рубль": "RUB",
-    "usd": "USD",
-    "доллар": "USD",
-    "доллары": "USD",
-    "доллар сша": "USD",
-    "eur": "EUR",
-    "евро": "EUR",
-}
-
 
 def normalize_value(value) -> str:
     return str(value or "").strip()
@@ -70,15 +60,7 @@ def normalize_currency_id_value(value: str) -> str:
     if not normalized_value:
         return ""
 
-    alias_value = CURRENCY_ID_ALIASES.get(normalize_compare_value(normalized_value))
-    if alias_value:
-        return alias_value
-
-    uppercase_value = normalized_value.upper()
-    if CURRENCY_CODE_RE.match(uppercase_value):
-        return uppercase_value
-
-    return normalized_value
+    return normalize_currency_code(normalized_value) or normalized_value
 
 
 def resolve_default_field_value(default_field_values: dict | None, target_field: str) -> str:
@@ -212,9 +194,11 @@ def build_field_items_index(field: dict) -> dict[str, str]:
         item_id = normalize_value(item.get("id"))
         item_title = normalize_value(item.get("title"))
         if item_id:
-            items_index[normalize_compare_value(item_id)] = item_id
+            for index_key in build_discrete_value_keys(item_id):
+                items_index.setdefault(index_key, item_id)
         if item_title:
-            items_index[normalize_compare_value(item_title)] = item_id
+            for index_key in build_discrete_value_keys(item_title):
+                items_index.setdefault(index_key, item_id)
 
     return items_index
 
@@ -225,13 +209,16 @@ def resolve_mapped_field_value(field: dict, value: str, mapping_item: dict | Non
         return ""
 
     value_mapping = mapping_item.get("value_mapping") if isinstance(mapping_item, dict) else None
-    if isinstance(value_mapping, dict):
-        mapped_value = normalize_value(value_mapping.get(normalized_value))
-        if mapped_value:
-            return mapped_value
+    mapped_value = resolve_value_mapping(value_mapping, normalized_value)
+    if mapped_value:
+        return mapped_value
 
     items_index = build_field_items_index(field)
-    return items_index.get(normalize_compare_value(normalized_value), "")
+    for index_key in build_discrete_value_keys(normalized_value):
+        resolved_value = items_index.get(index_key)
+        if resolved_value:
+            return resolved_value
+    return ""
 
 
 COLUMN_TYPE_OVERRIDES = {"string", "integer", "double", "date", "datetime", "boolean"}

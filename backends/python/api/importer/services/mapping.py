@@ -1,10 +1,20 @@
 import re
 from difflib import SequenceMatcher
 
+from .value_normalization import build_discrete_value_keys
+
 
 NORMALIZE_RE = re.compile(r"[^a-z0-9Ѐ-ӿ]+")
 TOKEN_RE = re.compile(r"[a-z0-9Ѐ-ӿ]+")
 IGNORED_ID_TOKENS = {"crm", "id", "uf"}
+TRANSLIT_ALIAS_TOKENS = {
+    "nazvanie",
+    "telefon",
+    "gorod",
+    "pochta",
+    "imya",
+    "kontragent",
+}
 TOKEN_ALIASES = {
     "cell": "phone",
     "cellphone": "phone",
@@ -12,11 +22,45 @@ TOKEN_ALIASES = {
     "tel": "phone",
     "mobile": "phone",
     "town": "city",
+    "название": "title",
+    "телефон": "phone",
+    "имя": "name",
+    "почта": "email",
+    "емейл": "email",
+    "имейл": "email",
+    "город": "city",
+    "источник": "source",
+    "тип": "type",
+    "названиекомпании": "title",
+    "telefon": "phone",
+    "nazvanie": "title",
+    "gorod": "city",
+    "pochta": "email",
+    "imya": "name",
+    "kontragent": "title",
 }
 TOKEN_SEQUENCE_ALIASES = {
     ("lead", "name"): ("lead", "title"),
+    ("lead", "title"): ("title",),
     ("mobile", "phone"): ("phone",),
+    ("e", "mail"): ("email",),
+    ("эл", "почта"): ("email",),
+    ("электронная", "почта"): ("email",),
+    ("title", "компании"): ("title",),
+    ("title", "сделки"): ("title",),
+    ("title", "лида"): ("title",),
+    ("type", "сделки"): ("type",),
+    ("phone", "компании"): ("phone",),
+    ("phone", "контакта"): ("phone",),
+    ("name", "контакта"): ("name",),
+    ("email", "контакта"): ("email",),
+    ("city", "компании"): ("city",),
+    ("city", "контакта"): ("city",),
+    ("доступна", "для", "всех"): ("opened",),
+    ("доступно", "для", "всех"): ("opened",),
 }
+SUGGESTION_MIN_SCORE = 0.75
+AUTO_MATCH_MIN_SCORE = 0.9
 
 
 def normalize_mapping_value(value) -> str:
@@ -30,9 +74,18 @@ def extract_tokens(value, *, is_field_id: bool = False) -> list[str]:
     return tokens
 
 
+def _apply_sequence_aliases(tokens: list[str]) -> list[str]:
+    current = tuple(tokens)
+    seen = set()
+    while current in TOKEN_SEQUENCE_ALIASES and current not in seen:
+        seen.add(current)
+        current = tuple(TOKEN_SEQUENCE_ALIASES[current])
+    return list(current)
+
+
 def canonicalize_tokens(tokens: list[str]) -> list[str]:
     canonical_tokens = [TOKEN_ALIASES.get(token, token) for token in tokens]
-    canonical_tokens = list(TOKEN_SEQUENCE_ALIASES.get(tuple(canonical_tokens), tuple(canonical_tokens)))
+    canonical_tokens = _apply_sequence_aliases(canonical_tokens)
 
     deduplicated_tokens = []
     seen_tokens = set()
@@ -63,11 +116,20 @@ def build_field_match_keys(field: dict) -> dict:
     return keys
 
 
-def score_fuzzy_match(header_signature: str, field_keys: dict) -> float:
+def _build_match_reason(header_tokens: list[str], *, alias_rule: bool = False) -> str:
+    if alias_rule:
+        return "alias_rule"
+    if any(token in TRANSLIT_ALIAS_TOKENS for token in header_tokens):
+        return "translit_alias"
+    return ""
+
+
+def score_fuzzy_match(header_tokens: list[str], header_signature: str, field_keys: dict) -> tuple[float, str]:
     if not header_signature:
-        return 0.0
+        return 0.0, ""
 
     best_score = 0.0
+    best_reason = ""
     for candidate in (
         field_keys.get("fuzzy_title"),
         field_keys.get("fuzzy_id"),
@@ -76,13 +138,14 @@ def score_fuzzy_match(header_signature: str, field_keys: dict) -> float:
         if not candidate:
             continue
         if header_signature == candidate:
-            return 1.0
+            return 1.0, _build_match_reason(header_tokens)
 
         similarity = SequenceMatcher(None, header_signature, candidate).ratio()
-        if similarity >= 0.9:
-            best_score = max(best_score, similarity)
+        if similarity >= SUGGESTION_MIN_SCORE and similarity > best_score:
+            best_score = similarity
+            best_reason = _build_match_reason(header_tokens)
 
-    return best_score
+    return best_score, best_reason
 
 
 def build_field_index(fields: list[dict]) -> dict[str, dict]:
@@ -91,6 +154,180 @@ def build_field_index(fields: list[dict]) -> dict[str, dict]:
         for field in fields
         if isinstance(field, dict) and field.get("id")
     }
+
+
+def build_alias_rule_index(alias_rules) -> dict[str, str]:
+    index = {}
+    for rule in alias_rules or []:
+        if not isinstance(rule, dict):
+            continue
+        normalized_source_label = str(rule.get("normalized_source_label") or "").strip()
+        target_field_id = str(rule.get("target_field_id") or "").strip()
+        if normalized_source_label and target_field_id and normalized_source_label not in index:
+            index[normalized_source_label] = target_field_id
+    return index
+
+
+def _merge_header_candidate(match_index: dict[str, dict], match: dict) -> None:
+    field_id = str(match.get("target_field") or "")
+    if not field_id:
+        return
+
+    current_match = match_index.get(field_id)
+    current_score = float(current_match.get("score") or 0.0) if isinstance(current_match, dict) else 0.0
+    next_score = float(match.get("score") or 0.0)
+    if current_match is not None and current_score >= next_score:
+        return
+
+    match_index[field_id] = dict(match)
+
+
+def _serialize_suggestion(field: dict, match: dict) -> dict:
+    item = {
+        "target_field": str(match["target_field"]),
+        "target_field_title": str(field.get("title") or match["target_field"]),
+        "match_type": str(match["match_type"]),
+    }
+    match_reason = str(match.get("match_reason") or "").strip()
+    if match_reason:
+        item["match_reason"] = match_reason
+    return item
+
+
+def build_candidate_mapping_bundle(headers: list[str], columns: list[str], fields: list[dict], alias_rules=None) -> dict:
+    field_by_id = build_field_index(fields)
+    field_match_keys = {}
+    exact_fields_by_title = {}
+    exact_fields_by_id = {}
+    alias_rule_index = build_alias_rule_index(alias_rules)
+    candidates = {}
+    candidate_suggestions = {}
+    assigned_field_ids = set()
+    assigned_header_indexes = set()
+    assignable_matches = []
+
+    for field in fields:
+        field_id = str(field.get("id") or "")
+        if not field_id:
+            continue
+
+        match_keys = build_field_match_keys(field)
+        field_match_keys[field_id] = match_keys
+
+        normalized_title = match_keys["exact_title"]
+        normalized_id = match_keys["exact_id"]
+        normalized_linked_source_title = match_keys["exact_linked_source_title"]
+        if normalized_title and normalized_title not in exact_fields_by_title:
+            exact_fields_by_title[normalized_title] = field
+        if normalized_id and normalized_id not in exact_fields_by_id:
+            exact_fields_by_id[normalized_id] = field
+        if normalized_linked_source_title and normalized_linked_source_title not in exact_fields_by_title:
+            exact_fields_by_title[normalized_linked_source_title] = field
+
+    for index, header in enumerate(headers):
+        column = str(columns[index]) if index < len(columns) else ""
+        row_key = f"{column}:{header}"
+        normalized_header = normalize_mapping_value(header)
+        header_tokens = extract_tokens(header)
+        header_signature = build_canonical_signature(header)
+        header_match_index = {}
+
+        if normalized_header:
+            alias_field_id = alias_rule_index.get(normalized_header, "")
+            alias_field = field_by_id.get(alias_field_id)
+            if alias_field is not None:
+                _merge_header_candidate(header_match_index, {
+                    "header_index": index,
+                    "source_header": str(header),
+                    "column": column,
+                    "target_field": alias_field_id,
+                    "match_type": "alias",
+                    "match_reason": _build_match_reason(header_tokens, alias_rule=True),
+                    "score": 1.3,
+                })
+
+            exact_field = exact_fields_by_title.get(normalized_header) or exact_fields_by_id.get(normalized_header)
+            if exact_field is not None:
+                exact_field_id = str(exact_field.get("id") or "")
+                if exact_field_id:
+                    _merge_header_candidate(header_match_index, {
+                        "header_index": index,
+                        "source_header": str(header),
+                        "column": column,
+                        "target_field": exact_field_id,
+                        "match_type": "exact",
+                        "score": 1.2,
+                    })
+
+        if header_signature:
+            for field in fields:
+                field_id = str(field.get("id") or "")
+                if not field_id:
+                    continue
+
+                score, reason = score_fuzzy_match(header_tokens, header_signature, field_match_keys.get(field_id, {}))
+                if score < SUGGESTION_MIN_SCORE:
+                    continue
+
+                fuzzy_match = {
+                    "header_index": index,
+                    "source_header": str(header),
+                    "column": column,
+                    "target_field": field_id,
+                    "match_type": "fuzzy",
+                    "score": score,
+                }
+                if reason:
+                    fuzzy_match["match_reason"] = reason
+                _merge_header_candidate(header_match_index, fuzzy_match)
+
+        ranked_matches = sorted(
+            header_match_index.values(),
+            key=lambda item: (-float(item.get("score") or 0.0), str(item.get("target_field") or "")),
+        )
+        if ranked_matches:
+            candidate_suggestions[row_key] = [
+                _serialize_suggestion(field_by_id[str(match["target_field"])], match)
+                for match in ranked_matches[:3]
+                if str(match.get("target_field") or "") in field_by_id
+            ]
+
+        for match in ranked_matches:
+            if match["match_type"] in {"alias", "exact"} or float(match.get("score") or 0.0) >= AUTO_MATCH_MIN_SCORE:
+                assignable_matches.append(match)
+
+    assignable_matches.sort(
+        key=lambda item: (-float(item.get("score") or 0.0), int(item.get("header_index") or 0), str(item.get("target_field") or "")),
+    )
+
+    for match in assignable_matches:
+        field_id = str(match["target_field"])
+        header_index = int(match["header_index"])
+        if field_id in assigned_field_ids or header_index in assigned_header_indexes:
+            continue
+
+        candidate_item = {
+            "source_header": str(match["source_header"]),
+            "column": str(match["column"]),
+            "target_field": field_id,
+            "match_type": str(match["match_type"]),
+        }
+        match_reason = str(match.get("match_reason") or "").strip()
+        if match_reason:
+            candidate_item["match_reason"] = match_reason
+
+        candidates[field_id] = candidate_item
+        assigned_field_ids.add(field_id)
+        assigned_header_indexes.add(header_index)
+
+    return {
+        "mapping": candidates,
+        "suggestions": candidate_suggestions,
+    }
+
+
+def build_candidate_mapping(headers: list[str], columns: list[str], fields: list[dict], alias_rules=None) -> dict:
+    return build_candidate_mapping_bundle(headers, columns, fields, alias_rules=alias_rules)["mapping"]
 
 
 def normalize_value_mapping(value_mapping, field: dict) -> dict:
@@ -131,112 +368,26 @@ def build_field_item_value_index(field: dict) -> dict[str, str]:
         item_id = str(item.get("id") or "").strip()
         item_title = str(item.get("title") or "").strip()
         if item_id:
-            value_index[normalize_mapping_value(item_id)] = item_id
+            for index_key in build_discrete_value_keys(item_id):
+                value_index.setdefault(index_key, item_id)
         if item_title:
-            value_index[normalize_mapping_value(item_title)] = item_id
+            for index_key in build_discrete_value_keys(item_title):
+                value_index.setdefault(index_key, item_id)
 
     return value_index
 
 
 def resolve_field_item_value(field: dict, source_value) -> str:
-    normalized_source_value = normalize_mapping_value(source_value)
-    if not normalized_source_value:
+    source_keys = build_discrete_value_keys(source_value)
+    if not source_keys:
         return ""
 
-    return build_field_item_value_index(field).get(normalized_source_value, "")
-
-
-def build_candidate_mapping(headers: list[str], columns: list[str], fields: list[dict]) -> dict:
-    candidates = {}
-    exact_fields_by_title = {}
-    exact_fields_by_id = {}
-    field_match_keys = {}
-    assigned_field_ids = set()
-    assigned_header_indexes = set()
-
-    for field in fields:
-        field_id = str(field.get("id") or "")
-        if not field_id:
-            continue
-
-        match_keys = build_field_match_keys(field)
-        field_match_keys[field_id] = match_keys
-
-        normalized_title = match_keys["exact_title"]
-        normalized_id = match_keys["exact_id"]
-        normalized_linked_source_title = match_keys["exact_linked_source_title"]
-        if normalized_title and normalized_title not in exact_fields_by_title:
-            exact_fields_by_title[normalized_title] = field
-        if normalized_id and normalized_id not in exact_fields_by_id:
-            exact_fields_by_id[normalized_id] = field
-        if normalized_linked_source_title and normalized_linked_source_title not in exact_fields_by_title:
-            exact_fields_by_title[normalized_linked_source_title] = field
-
-    for index, header in enumerate(headers):
-        normalized_header = normalize_mapping_value(header)
-        if not normalized_header:
-            continue
-
-        field = exact_fields_by_title.get(normalized_header) or exact_fields_by_id.get(normalized_header)
-        if field is None:
-            continue
-
-        field_id = str(field["id"])
-        candidates[field_id] = {
-            "source_header": str(header),
-            "column": str(columns[index]) if index < len(columns) else "",
-            "target_field": field_id,
-            "match_type": "exact",
-        }
-        assigned_field_ids.add(field_id)
-        assigned_header_indexes.add(index)
-
-    fuzzy_matches = []
-    for index, header in enumerate(headers):
-        if index in assigned_header_indexes:
-            continue
-
-        header_signature = build_canonical_signature(header)
-        if not header_signature:
-            continue
-
-        for field in fields:
-            field_id = str(field.get("id") or "")
-            if not field_id or field_id in assigned_field_ids:
-                continue
-
-            score = score_fuzzy_match(header_signature, field_match_keys.get(field_id, {}))
-            if score < 0.9:
-                continue
-
-            fuzzy_matches.append(
-                {
-                    "field_id": field_id,
-                    "header_index": index,
-                    "header": str(header),
-                    "column": str(columns[index]) if index < len(columns) else "",
-                    "score": score,
-                }
-            )
-
-    fuzzy_matches.sort(key=lambda item: (-item["score"], item["header_index"], item["field_id"]))
-
-    for match in fuzzy_matches:
-        field_id = match["field_id"]
-        header_index = match["header_index"]
-        if field_id in assigned_field_ids or header_index in assigned_header_indexes:
-            continue
-
-        candidates[field_id] = {
-            "source_header": match["header"],
-            "column": match["column"],
-            "target_field": field_id,
-            "match_type": "fuzzy",
-        }
-        assigned_field_ids.add(field_id)
-        assigned_header_indexes.add(header_index)
-
-    return candidates
+    value_index = build_field_item_value_index(field)
+    for index_key in source_keys:
+        resolved_value = value_index.get(index_key)
+        if resolved_value:
+            return resolved_value
+    return ""
 
 
 def normalize_saved_mapping(mapping, headers: list[str], columns: list[str], fields: list[dict]) -> dict:

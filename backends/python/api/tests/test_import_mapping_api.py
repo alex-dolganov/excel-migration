@@ -1092,6 +1092,144 @@ class ImportMappingApiTest(TestCase):
         })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_preflight_error_for_unmapped_stage_values(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_session_with_exact_and_unknown_stage_values()
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "TITLE": {
+                        "source_header": "Lead title",
+                        "column": "A",
+                    },
+                    "STAGE_ID": {
+                        "source_header": "Stage",
+                        "column": "B",
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["preflight"], {
+            "blocking_issue_count": 1,
+            "warning_count": 0,
+            "issues": [
+                {
+                    "code": "field_values_unmapped",
+                    "severity": "error",
+                    "field_id": "STAGE_ID",
+                    "value_count": 1,
+                    "values": ["Paused"],
+                },
+            ],
+        })
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_preflight_error_when_smart_process_status_field_has_no_options(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = self.create_account()
+        bitrix_api_request.side_effect = [
+            SimpleNamespace(
+                result={
+                    "title": {
+                        "title": "Название",
+                        "type": "string",
+                        "isRequired": True,
+                        "isReadOnly": False,
+                        "upperName": "TITLE",
+                    },
+                    "sourceId": {
+                        "title": "Источник",
+                        "type": "crm_status",
+                        "isRequired": False,
+                        "isReadOnly": False,
+                        "upperName": "SOURCE_ID",
+                        "settings": {
+                            "statusType": "SOURCE",
+                        },
+                    },
+                }
+            ),
+            SimpleNamespace(result={"statuses": []}),
+            SimpleNamespace(
+                result={
+                    "title": {
+                        "title": "Название",
+                        "type": "string",
+                        "isRequired": True,
+                        "isReadOnly": False,
+                        "upperName": "TITLE",
+                    },
+                    "sourceId": {
+                        "title": "Источник",
+                        "type": "crm_status",
+                        "isRequired": False,
+                        "isReadOnly": False,
+                        "upperName": "SOURCE_ID",
+                        "settings": {
+                            "statusType": "SOURCE",
+                        },
+                    },
+                }
+            ),
+            SimpleNamespace(result={"statuses": []}),
+        ]
+
+        session = self.create_uploaded_smart_process_session(
+            ["Название", "Источник"],
+            [["Согласование 1", "Реклама"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "title": {
+                        "source_header": "Название",
+                        "column": "A",
+                    },
+                    "sourceId": {
+                        "source_header": "Источник",
+                        "column": "B",
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["preflight"], {
+            "blocking_issue_count": 1,
+            "warning_count": 0,
+            "issues": [
+                {
+                    "code": "field_options_unavailable",
+                    "severity": "error",
+                    "field_id": "sourceId",
+                    "value_count": 1,
+                    "values": ["Реклама"],
+                },
+            ],
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_persists_mapping_schema_in_import_settings(self, get_from_jwt_token):
         get_from_jwt_token.return_value = self.create_account()
 
@@ -1322,6 +1460,46 @@ class ImportMappingApiTest(TestCase):
                 {"id": "ADVERTISING", "title": "Реклама"},
             ],
         )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_treats_status_alias_values_as_already_resolved(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account_with_nested_source_items()
+
+        session = self.create_uploaded_session_with_headers(
+            ["Lead title", "Source"],
+            [["Alice", " advertising "]],
+            filename="leads-source-alias.xlsx",
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "TITLE": {
+                        "source_header": "Lead title",
+                        "column": "A",
+                    },
+                    "SOURCE_ID": {
+                        "source_header": "Source",
+                        "column": "B",
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(mapping_response.status_code, 200)
+        self.assertEqual(mapping_response.json()["item"]["observed_values"], {
+            "SOURCE_ID": ["advertising"],
+        })
+        self.assertEqual(mapping_response.json()["item"]["unmapped_values"], {})
+        self.assertEqual(mapping_response.json()["item"]["unmapped_value_count"], 0)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_treats_exact_crm_note_entity_types_as_already_resolved(self, get_from_jwt_token):

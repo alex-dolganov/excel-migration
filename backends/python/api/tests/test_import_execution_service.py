@@ -201,6 +201,95 @@ class ImportExecutionServiceTest(SimpleTestCase):
             },
         )
 
+    def test_build_row_payload_resolves_status_alias_before_mapping(self):
+        payload = build_row_payload(
+            row=["Alice", " advertising "],
+            columns=["A", "B"],
+            mapping={
+                "TITLE": {
+                    "column": "A",
+                    "source_header": "Title",
+                },
+                "SOURCE_ID": {
+                    "column": "B",
+                    "source_header": "Source",
+                },
+            },
+            fields=[
+                {"id": "TITLE", "type": "string", "multiple": False},
+                {
+                    "id": "SOURCE_ID",
+                    "type": "crm_status",
+                    "multiple": False,
+                    "items": [
+                        {"id": "SALE", "title": "Продажа"},
+                        {"id": "ADVERTISING", "title": "Реклама"},
+                    ],
+                },
+            ],
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "TITLE": "Alice",
+                "SOURCE_ID": "ADVERTISING",
+            },
+        )
+
+    def test_build_row_payload_applies_semantic_aliases_and_normalized_value_mapping(self):
+        for source_value, mapping_item in [
+            (
+                "ads",
+                {
+                    "column": "B",
+                    "source_header": "Source",
+                },
+            ),
+            (
+                " queued ",
+                {
+                    "column": "B",
+                    "source_header": "Source",
+                    "value_mapping": {
+                        "Queued": "ADVERTISING",
+                    },
+                },
+            ),
+        ]:
+            with self.subTest(source_value=source_value, mapping_item=mapping_item):
+                payload = build_row_payload(
+                    row=["Alice", source_value],
+                    columns=["A", "B"],
+                    mapping={
+                        "TITLE": {
+                            "column": "A",
+                            "source_header": "Title",
+                        },
+                        "SOURCE_ID": mapping_item,
+                    },
+                    fields=[
+                        {"id": "TITLE", "type": "string", "multiple": False},
+                        {
+                            "id": "SOURCE_ID",
+                            "type": "crm_status",
+                            "multiple": False,
+                            "items": [
+                                {"id": "SALE", "title": "Продажа"},
+                                {"id": "ADVERTISING", "title": "Реклама"},
+                            ],
+                        },
+                    ],
+                )
+
+                self.assertEqual(
+                    payload,
+                    {
+                        "TITLE": "Alice",
+                        "SOURCE_ID": "ADVERTISING",
+                    },
+                )
+
     def test_build_row_payload_normalizes_currency_alias_to_iso_code(self):
         payload = build_row_payload(
             row=["150000", "Рубли"],

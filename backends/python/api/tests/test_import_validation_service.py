@@ -198,6 +198,111 @@ class ImportValidationServiceTest(SimpleTestCase):
             'Field "Валюта" must contain a currency code such as RUB, USD or EUR',
         )
 
+    def test_validate_field_value_accepts_boolean_aliases_case_insensitively(self):
+        for source_value in [" Да ", "YES", "1"]:
+            with self.subTest(source_value=source_value):
+                issue = validate_field_value(
+                    field={"id": "OPENED", "title": "Доступно для всех", "type": "boolean", "required": False},
+                    value=source_value,
+                    row_number=2,
+                    column="B",
+                    source_header="Доступно для всех",
+                    target_field="OPENED",
+                )
+
+                self.assertIsNone(issue)
+
+    def test_build_validation_result_accepts_enum_value_with_case_whitespace_and_alias_normalization(self):
+        for source_value in [" реклама ", "advertising", "ADVERTISING"]:
+            with self.subTest(source_value=source_value):
+                validation_result = build_validation_result(
+                    rows=[
+                        ["Title", "Source"],
+                        ["Lead A", source_value],
+                    ],
+                    row_numbers=[1, 2],
+                    columns=["A", "B"],
+                    data_start_row=2,
+                    mapping={
+                        "TITLE": {
+                            "source_header": "Title",
+                            "column": "A",
+                            "target_field": "TITLE",
+                        },
+                        "SOURCE_ID": {
+                            "source_header": "Source",
+                            "column": "B",
+                            "target_field": "SOURCE_ID",
+                        },
+                    },
+                    fields=[
+                        {"id": "TITLE", "title": "Title", "type": "string", "required": False},
+                        {
+                            "id": "SOURCE_ID",
+                            "title": "Source",
+                            "type": "crm_status",
+                            "required": False,
+                            "items": [
+                                {"id": "SALE", "title": "Продажа"},
+                                {"id": "ADVERTISING", "title": "Реклама"},
+                            ],
+                        },
+                    ],
+                )
+
+                self.assertEqual(validation_result["issue_count"], 0)
+                self.assertEqual(validation_result["valid_rows"], 1)
+
+    def test_build_validation_result_accepts_enum_semantic_aliases_and_normalized_value_mapping(self):
+        for source_value, mapping_item in [
+            ("ads", {"source_header": "Source", "column": "B", "target_field": "SOURCE_ID"}),
+            (
+                " queued ",
+                {
+                    "source_header": "Source",
+                    "column": "B",
+                    "target_field": "SOURCE_ID",
+                    "value_mapping": {
+                        "Queued": "ADVERTISING",
+                    },
+                },
+            ),
+        ]:
+            with self.subTest(source_value=source_value, mapping_item=mapping_item):
+                validation_result = build_validation_result(
+                    rows=[
+                        ["Title", "Source"],
+                        ["Lead A", source_value],
+                    ],
+                    row_numbers=[1, 2],
+                    columns=["A", "B"],
+                    data_start_row=2,
+                    mapping={
+                        "TITLE": {
+                            "source_header": "Title",
+                            "column": "A",
+                            "target_field": "TITLE",
+                        },
+                        "SOURCE_ID": mapping_item,
+                    },
+                    fields=[
+                        {"id": "TITLE", "title": "Title", "type": "string", "required": False},
+                        {
+                            "id": "SOURCE_ID",
+                            "title": "Source",
+                            "type": "crm_status",
+                            "required": False,
+                            "items": [
+                                {"id": "SALE", "title": "Продажа"},
+                                {"id": "ADVERTISING", "title": "Реклама"},
+                            ],
+                        },
+                    ],
+                )
+
+                self.assertEqual(validation_result["issue_count"], 0)
+                self.assertEqual(validation_result["valid_rows"], 1)
+
     def test_build_validation_result_requires_communication_value_for_crm_activity_call(self):
         validation_result = build_validation_result(
             rows=[
