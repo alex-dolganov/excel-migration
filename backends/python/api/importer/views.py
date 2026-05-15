@@ -1,4 +1,5 @@
 import csv
+import logging
 import os
 import re
 from datetime import timedelta
@@ -7,6 +8,7 @@ from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
 import xlrd
+from kombu.exceptions import OperationalError as KombuOperationalError
 
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
@@ -18,7 +20,7 @@ from django.views.decorators.http import require_GET, require_http_methods
 from main.utils import AuthorizedRequest
 from main.utils.decorators import auth_required, log_errors
 
-from .models import ImportSession, ImportTemplate, ImporterUserRole
+from .models import ImportAliasRule, ImportSession, ImportTemplate, ImporterUserRole
 from .services.b24_fields import (
     SMART_PROCESS_ENTITY_TYPE,
     build_linked_entities_payload,
@@ -37,9 +39,14 @@ from .services.example_templates import (
     build_smart_process_example_template_filename,
     build_smart_process_example_template_xlsx,
 )
-from .services.error_messages import format_import_error
+from .services.error_messages import safe_format_import_error
 from .services.import_execution import execute_dry_run, execute_import, normalize_entity_dedup_settings
-from .services.mapping import build_candidate_mapping, normalize_saved_mapping, resolve_field_item_value
+from .services.mapping import (
+    build_candidate_mapping_bundle,
+    normalize_mapping_value,
+    normalize_saved_mapping,
+    resolve_field_item_value,
+)
 from .services.permissions import (
     can_cancel_session,
     can_edit_session,
@@ -50,6 +57,7 @@ from .services.permissions import (
     normalize_assignable_role,
     resolve_role,
 )
+from .services.preflight import build_mapping_preflight
 from .services.user_resolution import BitrixUserResolver, list_bitrix_users
 from .services.validation import build_validation_result
 
@@ -148,6 +156,17 @@ def serialize_template(template: ImportTemplate) -> dict:
         "is_active": template.is_active,
         "created_at": template.created_at.isoformat(),
         "updated_at": template.updated_at.isoformat(),
+    }
+
+
+def serialize_alias_rule(alias_rule: ImportAliasRule, field_titles: dict[str, str] | None = None) -> dict:
+    field_title_map = field_titles if isinstance(field_titles, dict) else {}
+    target_field_id = str(alias_rule.target_field_id or "")
+    return {
+        "id": str(alias_rule.id),
+        "source_label": str(alias_rule.source_label or ""),
+        "target_field_id": target_field_id,
+        "target_field_title": str(field_title_map.get(target_field_id) or target_field_id),
     }
 
 
@@ -533,6 +552,24 @@ def load_portal_template(
         return None
 
 
+def load_portal_alias_rules(
+    portal_member_id: str,
+    portal_domain: str,
+    *,
+    entity_type: str,
+    entity_scope_key: str = "",
+):
+    return list(
+        ImportAliasRule.objects.filter(
+            portal_member_id=portal_member_id,
+            portal_domain=portal_domain,
+            entity_type=entity_type,
+            entity_scope_key=entity_scope_key,
+            is_active=True,
+        ).order_by("source_label", "target_field_id")
+    )
+
+
 def can_view_session(account, session: ImportSession) -> bool:
     return has_permission(account, "sessions.view")
 
@@ -748,6 +785,49 @@ _CSV_SNIFF_BYTES = 8192
 _CSV_CANDIDATE_DELIMITERS = ",;\t|"
 
 
+def split_single_cell_rows_by_delimiter(rows: list[list]) -> tuple[list[list], str]:
+    if not isinstance(rows, list) or not rows:
+        return rows, ""
+
+    non_empty_rows = [row for row in rows if isinstance(row, list) and any(str(value or "").strip() for value in row)]
+    if len(non_empty_rows) < 2:
+        return rows, ""
+
+    if any(len(row) > 1 for row in non_empty_rows):
+        return rows, ""
+
+    for delimiter in _CSV_CANDIDATE_DELIMITERS:
+        parsed_rows = []
+        parsed_widths = set()
+        valid_candidate = True
+
+        for row in rows:
+            row_values = row if isinstance(row, list) else [row]
+            first_value = str(row_values[0] if row_values else "")
+
+            if not first_value.strip():
+                parsed_rows.append([""])
+                continue
+
+            parsed_row = next(csv.reader([first_value], delimiter=delimiter, skipinitialspace=True))
+            if len(parsed_row) <= 1:
+                valid_candidate = False
+                break
+
+            parsed_widths.add(len(parsed_row))
+            parsed_rows.append(parsed_row)
+
+        if valid_candidate and len(parsed_widths) == 1:
+            return parsed_rows, delimiter
+
+    return rows, ""
+
+
+def build_columns_from_rows(rows: list[list]) -> list[str]:
+    max_columns = max((len(row) for row in rows if isinstance(row, list)), default=0)
+    return [column_index_to_letter(index) for index in range(1, max_columns + 1)]
+
+
 def detect_csv_delimiter(raw_bytes: bytes) -> str:
     sample = raw_bytes.decode("utf-8-sig", errors="replace")
     try:
@@ -777,7 +857,10 @@ def extract_rows_from_csv(session: ImportSession, preview_limit: int | None = 20
     except OSError as error:
         raise ValueError("Unable to read workbook preview") from error
 
-    columns = [column_index_to_letter(index) for index in range(1, max_columns + 1)]
+    rows, detected_delimiter = split_single_cell_rows_by_delimiter(rows)
+    columns = build_columns_from_rows(rows)
+    if detected_delimiter:
+        delimiter = detected_delimiter
     return columns, rows, row_numbers, delimiter
 
 
@@ -801,7 +884,9 @@ def extract_preview_rows(session: ImportSession, selected_sheet_name: str, previ
         return columns, rows, row_numbers
 
     if session.source_format == ImportSession.SourceFormat.XLS:
-        return extract_rows_from_xls(session, selected_sheet_name, preview_limit=preview_limit)
+        _columns, rows, row_numbers = extract_rows_from_xls(session, selected_sheet_name, preview_limit=preview_limit)
+        rows, _detected_delimiter = split_single_cell_rows_by_delimiter(rows)
+        return build_columns_from_rows(rows), rows, row_numbers
 
     if session.source_format != ImportSession.SourceFormat.XLSX:
         raise ValueError("Unsupported source format")
@@ -816,7 +901,9 @@ def extract_preview_rows(session: ImportSession, selected_sheet_name: str, previ
         raise ValueError("Unable to read workbook preview")
 
     shared_strings = parse_shared_strings(shared_strings_xml)
-    return extract_rows_from_xlsx_sheet(sheet_xml, shared_strings=shared_strings, preview_limit=preview_limit)
+    _columns, rows, row_numbers = extract_rows_from_xlsx_sheet(sheet_xml, shared_strings=shared_strings, preview_limit=preview_limit)
+    rows, _detected_delimiter = split_single_cell_rows_by_delimiter(rows)
+    return build_columns_from_rows(rows), rows, row_numbers
 
 
 def row_has_values(row_values) -> bool:
@@ -1000,6 +1087,52 @@ def fetch_session_entity_fields(account, session: ImportSession) -> list[dict]:
         session.entity_type,
         entity_config=get_session_entity_config(session),
     )
+
+
+def load_session_preflight_context(
+    account,
+    session: ImportSession,
+    *,
+    columns: list[str],
+    selected_sheet_name: str,
+    mapping: dict,
+    dedup_settings,
+    default_field_values: dict | None,
+    data_start_row: int,
+) -> tuple[list[dict], list[list], list[int], dict]:
+    fields = fetch_session_entity_fields(account, session)
+    _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+    preflight = build_mapping_preflight(
+        entity_type=session.entity_type,
+        rows=rows,
+        row_numbers=row_numbers,
+        columns=columns,
+        data_start_row=data_start_row,
+        mapping=mapping,
+        fields=fields,
+        dedup_settings=dedup_settings,
+        default_field_values=default_field_values,
+    )
+    return fields, rows, row_numbers, preflight
+
+
+def build_field_title_map(fields: list[dict]) -> dict[str, str]:
+    return {
+        str(field.get("id") or ""): str(field.get("title") or field.get("id") or "")
+        for field in fields
+        if isinstance(field, dict) and field.get("id")
+    }
+
+
+def build_session_alias_rule_payloads(account, session: ImportSession, fields: list[dict]) -> list[dict]:
+    alias_rules = load_portal_alias_rules(
+        session.portal_member_id,
+        session.portal_domain,
+        entity_type=session.entity_type,
+        entity_scope_key=build_template_entity_scope(session.entity_type, get_session_entity_config(session)),
+    )
+    field_titles = build_field_title_map(fields)
+    return [serialize_alias_rule(item, field_titles) for item in alias_rules]
 
 
 def count_mapping_values(values_by_field: dict[str, list[str]]) -> int:
@@ -1238,6 +1371,101 @@ def import_templates(request: AuthorizedRequest):
 
 @xframe_options_exempt
 @csrf_exempt
+@require_http_methods(["GET", "POST"])
+@log_errors("import_alias_rules")
+@auth_required
+def import_alias_rules(request: AuthorizedRequest):
+    account = request.bitrix24_account
+    portal_member_id = getattr(account, "member_id", "")
+    portal_domain = getattr(account, "domain_url", "")
+
+    if not has_permission(account, "templates.manage"):
+        return permission_denied_response()
+
+    if request.method == "GET":
+        entity_type = str((request.GET or {}).get("entity_type") or "").strip()
+        if not entity_type:
+            return JsonResponse({"items": []})
+
+        entity_config = {}
+        if entity_type == SMART_PROCESS_ENTITY_TYPE:
+            try:
+                entity_config = normalize_session_entity_config(entity_type, request.GET)
+            except ValueError as error:
+                return JsonResponse({"error": str(error)}, status=400)
+
+        try:
+            fields = fetch_entity_fields(account, entity_type, entity_config=entity_config)
+        except ValueError as error:
+            return JsonResponse({"error": str(error)}, status=400)
+
+        field_titles = {
+            str(field.get("id") or ""): str(field.get("title") or field.get("id") or "")
+            for field in fields
+            if isinstance(field, dict) and field.get("id")
+        }
+        alias_rules = load_portal_alias_rules(
+            portal_member_id,
+            portal_domain,
+            entity_type=entity_type,
+            entity_scope_key=build_template_entity_scope(entity_type, entity_config),
+        )
+        return JsonResponse({"items": [serialize_alias_rule(item, field_titles) for item in alias_rules]})
+
+    payload = request.data or {}
+    source_label = str(payload.get("source_label") or "").strip()
+    target_field_id = str(payload.get("target_field_id") or "").strip()
+    session_id = payload.get("session_id")
+
+    if not session_id:
+        return JsonResponse({"error": "session_id is required"}, status=400)
+    if not source_label:
+        return JsonResponse({"error": "source_label is required"}, status=400)
+    if not target_field_id:
+        return JsonResponse({"error": "target_field_id is required"}, status=400)
+
+    session = load_portal_session(portal_member_id, portal_domain, session_id)
+    if session is None:
+        return JsonResponse({"error": "Import session not found"}, status=404)
+    if not can_edit_session(account, session):
+        return permission_denied_response()
+
+    try:
+        fields = fetch_session_entity_fields(account, session)
+    except ValueError as error:
+        return JsonResponse({"error": str(error)}, status=400)
+
+    field_titles = {
+        str(field.get("id") or ""): str(field.get("title") or field.get("id") or "")
+        for field in fields
+        if isinstance(field, dict) and field.get("id")
+    }
+    if target_field_id not in field_titles:
+        return JsonResponse({"error": "Unknown target field"}, status=400)
+
+    normalized_source_label = normalize_mapping_value(source_label)
+    if not normalized_source_label:
+        return JsonResponse({"error": "source_label must contain letters or numbers"}, status=400)
+
+    alias_rule, _created = ImportAliasRule.objects.update_or_create(
+        portal_member_id=portal_member_id,
+        portal_domain=portal_domain,
+        entity_type=session.entity_type,
+        entity_scope_key=build_template_entity_scope(session.entity_type, get_session_entity_config(session)),
+        normalized_source_label=normalized_source_label,
+        defaults={
+            "source_label": source_label,
+            "target_field_id": target_field_id,
+            "created_by_b24_user_id": getattr(account, "b24_user_id", 0),
+            "is_active": True,
+        },
+    )
+
+    return JsonResponse({"item": serialize_alias_rule(alias_rule, field_titles)}, status=201)
+
+
+@xframe_options_exempt
+@csrf_exempt
 @require_http_methods(["POST"])
 @log_errors("import_session_apply_template")
 @auth_required
@@ -1284,6 +1512,12 @@ def import_session_apply_template(request: AuthorizedRequest, session_id):
             },
         )
         fields = fetch_session_entity_fields(account, session)
+        alias_rules = load_portal_alias_rules(
+            portal_member_id,
+            portal_domain,
+            entity_type=session.entity_type,
+            entity_scope_key=build_template_entity_scope(session.entity_type, get_session_entity_config(session)),
+        )
         saved_mapping = normalize_saved_mapping(
             template.mapping_schema if isinstance(template.mapping_schema, dict) else {},
             structure["headers"],
@@ -1294,9 +1528,37 @@ def import_session_apply_template(request: AuthorizedRequest, session_id):
             session.entity_type,
             template.dedup_settings if isinstance(template.dedup_settings, dict) else {}
         )
-        candidate_mapping = build_candidate_mapping(structure["headers"], columns, fields)
+        candidate_bundle = build_candidate_mapping_bundle(
+            structure["headers"],
+            columns,
+            fields,
+            alias_rules=[
+                {
+                    "normalized_source_label": rule.normalized_source_label,
+                    "target_field_id": rule.target_field_id,
+                }
+                for rule in alias_rules
+            ],
+        )
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
+
+    try:
+        _columns, full_rows, full_row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+    except ValueError as error:
+        return JsonResponse({"error": str(error)}, status=400)
+
+    preflight = build_mapping_preflight(
+        entity_type=session.entity_type,
+        rows=full_rows,
+        row_numbers=full_row_numbers,
+        columns=columns,
+        data_start_row=max(1, int(structure["data_start_row"] or 1)),
+        mapping=saved_mapping if saved_mapping else candidate_bundle["mapping"],
+        fields=fields,
+        dedup_settings=saved_dedup,
+        default_field_values=build_task_default_field_values(session.entity_type, normalize_task_defaults(session.import_settings.get("task_defaults", {}))) if isinstance(session.import_settings, dict) else {},
+    )
 
     session.source_sheet_name = selected_sheet_name
     session.header_row = structure["header_row"]
@@ -1340,7 +1602,10 @@ def import_session_apply_template(request: AuthorizedRequest, session_id):
                 "columns": columns,
                 "saved_mapping": saved_mapping,
                 "saved_dedup": saved_dedup,
-                "candidate_mapping": candidate_mapping,
+                "candidate_mapping": candidate_bundle["mapping"],
+                "candidate_suggestions": candidate_bundle["suggestions"],
+                "alias_rules": build_session_alias_rule_payloads(account, session, fields),
+                "preflight": preflight,
             }
         }
     )
@@ -1479,7 +1744,24 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
-    candidate_mapping = build_candidate_mapping(headers, columns, fields)
+    alias_rules = load_portal_alias_rules(
+        portal_member_id,
+        portal_domain,
+        entity_type=session.entity_type,
+        entity_scope_key=build_template_entity_scope(session.entity_type, get_session_entity_config(session)),
+    )
+    candidate_bundle = build_candidate_mapping_bundle(
+        headers,
+        columns,
+        fields,
+        alias_rules=[
+            {
+                "normalized_source_label": rule.normalized_source_label,
+                "target_field_id": rule.target_field_id,
+            }
+            for rule in alias_rules
+        ],
+    )
     import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
     saved_mapping = import_settings.get("mapping", {})
     if not isinstance(saved_mapping, dict):
@@ -1521,7 +1803,13 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
 
     observed_values = {}
     selected_sheet_name = preview_data.get("selected_sheet_name") or session.source_sheet_name
-    mapping_for_observed_values = saved_mapping if saved_mapping else candidate_mapping
+    mapping_for_observed_values = saved_mapping if saved_mapping else candidate_bundle["mapping"]
+    default_field_values = build_task_default_field_values(session.entity_type, task_defaults)
+    preflight = {
+        "blocking_issue_count": 0,
+        "warning_count": 0,
+        "issues": [],
+    }
     try:
         task_user_options = list_bitrix_users(account) if session.entity_type in {
             ImportSession.EntityType.TASK,
@@ -1529,19 +1817,36 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
         } else []
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
-    if selected_sheet_name and mapping_has_observed_value_fields(fields, mapping_for_observed_values):
+
+    full_rows = []
+    full_row_numbers = []
+    if selected_sheet_name:
         try:
-            _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+            _columns, full_rows, full_row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
         except ValueError as error:
             return JsonResponse({"error": str(error)}, status=400)
 
-        observed_values = build_observed_mapping_values(
-            rows=rows,
-            row_numbers=row_numbers,
+        if mapping_has_observed_value_fields(fields, mapping_for_observed_values):
+            observed_values = build_observed_mapping_values(
+                rows=full_rows,
+                row_numbers=full_row_numbers,
+                data_start_row=max(1, int(session.data_start_row or preview_data.get("data_start_row") or 1)),
+                fields=fields,
+                mapping=mapping_for_observed_values,
+            )
+
+        preflight = build_mapping_preflight(
+            entity_type=session.entity_type,
+            rows=full_rows,
+            row_numbers=full_row_numbers,
+            columns=columns,
             data_start_row=max(1, int(session.data_start_row or preview_data.get("data_start_row") or 1)),
-            fields=fields,
             mapping=mapping_for_observed_values,
+            fields=fields,
+            dedup_settings=saved_dedup,
+            default_field_values=default_field_values,
         )
+
     unmapped_values = build_unmapped_mapping_values(observed_values, mapping_for_observed_values, fields)
     linked_entities = build_linked_entities_payload(session.entity_type)
 
@@ -1553,15 +1858,18 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
                 "headers": headers,
                 "columns": columns,
                 "fields": fields,
-                "candidate_mapping": candidate_mapping,
+                "candidate_mapping": candidate_bundle["mapping"],
+                "candidate_suggestions": candidate_bundle["suggestions"],
                 "saved_mapping": saved_mapping,
                 "saved_dedup": saved_dedup,
                 "task_defaults": task_defaults,
                 "task_user_options": task_user_options,
+                "alias_rules": [serialize_alias_rule(item, build_field_title_map(fields)) for item in alias_rules],
                 **({"linked_entities": linked_entities} if linked_entities else {}),
                 "observed_values": observed_values,
                 "unmapped_values": unmapped_values,
                 "unmapped_value_count": count_mapping_values(unmapped_values),
+                "preflight": preflight,
             }
         }
     )
@@ -1598,17 +1906,39 @@ def import_session_validate(request: AuthorizedRequest, session_id):
         session.entity_type,
         normalize_task_defaults(import_settings.get("task_defaults", {})),
     )
-
     try:
-        fields = fetch_session_entity_fields(account, session)
-        _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+        saved_dedup = normalize_entity_dedup_settings(session.entity_type, import_settings.get("dedup", {}))
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
+
+    data_start_row = max(1, int(session.data_start_row or preview_data.get("data_start_row") or 1))
+    try:
+        fields, rows, row_numbers, preflight = load_session_preflight_context(
+            account,
+            session,
+            columns=columns,
+            selected_sheet_name=str(selected_sheet_name),
+            mapping=saved_mapping,
+            dedup_settings=saved_dedup,
+            default_field_values=task_default_field_values,
+            data_start_row=data_start_row,
+        )
+    except ValueError as error:
+        return JsonResponse({"error": str(error)}, status=400)
+
+    if preflight["blocking_issue_count"] > 0:
+        return JsonResponse(
+            {
+                "error": "Resolve preflight issues before validation",
+                "preflight": preflight,
+            },
+            status=400,
+        )
 
     observed_values = build_observed_mapping_values(
         rows=rows,
         row_numbers=row_numbers,
-        data_start_row=max(1, int(session.data_start_row or preview_data.get("data_start_row") or 1)),
+        data_start_row=data_start_row,
         fields=fields,
         mapping=saved_mapping,
     )
@@ -1637,6 +1967,7 @@ def import_session_validate(request: AuthorizedRequest, session_id):
 
     session.summary = {
         **(session.summary if isinstance(session.summary, dict) else {}),
+        "preflight": preflight,
         "validation": validation_result,
     }
     session.status = ImportSession.Status.VALIDATED
@@ -1661,6 +1992,7 @@ def import_session_validate(request: AuthorizedRequest, session_id):
             "item": {
                 "session_id": str(session.id),
                 "status": session.status,
+                "preflight": preflight,
                 **validation_result,
             }
         }
@@ -1782,8 +2114,19 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
         session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
 
     try:
-        fields = fetch_session_entity_fields(account, session)
-        _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+        fields, rows, row_numbers, preflight = load_session_preflight_context(
+            account,
+            session,
+            columns=columns,
+            selected_sheet_name=str(selected_sheet_name),
+            mapping=saved_mapping,
+            dedup_settings=saved_dedup,
+            default_field_values=task_default_field_values,
+            data_start_row=max(1, int(session.data_start_row or preview_data.get("data_start_row") or 1)),
+        )
+        if preflight["blocking_issue_count"] > 0:
+            raise ValueError("Resolve preflight issues before import execution")
+
         session.total_rows = sum(1 for rn in row_numbers if rn >= session.data_start_row)
         if session.total_rows > MAX_IMPORT_ROWS:
             raise ValueError(
@@ -1810,7 +2153,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
-        session.last_error = format_import_error(error)
+        session.last_error = safe_format_import_error(error)
         session.save(update_fields=["status", "last_error", "updated_at"])
         raise
 
@@ -1892,6 +2235,30 @@ def import_session_run(request: AuthorizedRequest, session_id):
     if not isinstance(validation_summary, dict):
         return JsonResponse({"error": "Validation is required before import execution"}, status=400)
 
+    data_start_row = max(1, int(session.data_start_row or preview_data.get("data_start_row") or 1))
+    try:
+        _fields, _rows, _row_numbers, preflight = load_session_preflight_context(
+            account,
+            session,
+            columns=columns,
+            selected_sheet_name=str(selected_sheet_name),
+            mapping=saved_mapping,
+            dedup_settings=saved_dedup,
+            default_field_values=task_default_field_values,
+            data_start_row=data_start_row,
+        )
+    except ValueError as error:
+        return JsonResponse({"error": str(error)}, status=400)
+
+    if preflight["blocking_issue_count"] > 0:
+        return JsonResponse(
+            {
+                "error": "Resolve preflight issues before import execution",
+                "preflight": preflight,
+            },
+            status=400,
+        )
+
     if is_import_queue_enabled():
         if getattr(account, "id", None) is None:
             return JsonResponse({"error": "Queue execution requires a persisted Bitrix24 account"}, status=400)
@@ -1904,9 +2271,13 @@ def import_session_run(request: AuthorizedRequest, session_id):
         session.save(
             update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"]
         )
-        enqueue_import_session_run(session, account)
-        session.refresh_from_db()
-        return JsonResponse({"item": serialize_session_response_item(session)}, status=202)
+        try:
+            enqueue_import_session_run(session, account)
+        except KombuOperationalError as error:
+            logging.warning("Import queue is unavailable, falling back to synchronous run: %s", error)
+        else:
+            session.refresh_from_db()
+            return JsonResponse({"item": serialize_session_response_item(session)}, status=202)
 
     try:
         import_item = execute_import_session_run_now(
@@ -1915,7 +2286,7 @@ def import_session_run(request: AuthorizedRequest, session_id):
             per_row_decisions=per_row_decisions,
         )
     except Exception as error:
-        return JsonResponse({"error": format_import_error(error)}, status=400)
+        return JsonResponse({"error": safe_format_import_error(error)}, status=400)
 
     return JsonResponse({"item": import_item})
 
@@ -2045,7 +2416,7 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
-        session.last_error = format_import_error(error)
+        session.last_error = safe_format_import_error(error)
         session.save(update_fields=["status", "last_error", "updated_at"])
         raise
 
@@ -2144,14 +2515,18 @@ def import_session_retry_failed(request: AuthorizedRequest, session_id):
         session.save(
             update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"]
         )
-        enqueue_import_session_retry(session, account)
-        session.refresh_from_db()
-        return JsonResponse({"item": serialize_session_response_item(session)}, status=202)
+        try:
+            enqueue_import_session_retry(session, account)
+        except KombuOperationalError as error:
+            logging.warning("Import retry queue is unavailable, falling back to synchronous retry: %s", error)
+        else:
+            session.refresh_from_db()
+            return JsonResponse({"item": serialize_session_response_item(session)}, status=202)
 
     try:
         retry_item = execute_import_session_retry_now(session=session, account=account)
     except Exception as error:
-        return JsonResponse({"error": format_import_error(error)}, status=400)
+        return JsonResponse({"error": safe_format_import_error(error)}, status=400)
 
     return JsonResponse({"item": retry_item})
 
@@ -2486,9 +2861,9 @@ def bulk_attach_session_run(request: AuthorizedRequest, session_id):
     except Exception as error:
         session.refresh_from_db()
         session.status = ImportSession.Status.FAILED
-        session.last_error = format_import_error(error)
+        session.last_error = safe_format_import_error(error)
         session.save(update_fields=["status", "last_error", "updated_at"])
-        return JsonResponse({"error": format_import_error(error)}, status=500)
+        return JsonResponse({"error": safe_format_import_error(error)}, status=500)
 
     session.refresh_from_db()
     if session.status != ImportSession.Status.CANCELLED:

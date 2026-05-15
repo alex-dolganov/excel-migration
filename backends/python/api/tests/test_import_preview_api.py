@@ -364,6 +364,100 @@ class ImportPreviewApiTest(TestCase):
         )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_preview_splits_single_cell_xlsx_rows_by_comma(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+        )
+
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.LEAD,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="leads-comma.xlsx",
+        )
+        session.stored_file.save(
+            "leads-comma.xlsx",
+            SimpleUploadedFile(
+                "leads-comma.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        ("Leads", [["Name,Phone,City"], ["Alice,+123,Moscow"], ["Bob,+456,Samara"]]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["columns"], ["A", "B", "C"])
+        self.assertEqual(response.json()["item"]["headers"], ["Name", "Phone", "City"])
+        self.assertEqual(
+            response.json()["item"]["preview_rows"],
+            [
+                ["Name", "Phone", "City"],
+                ["Alice", "+123", "Moscow"],
+                ["Bob", "+456", "Samara"],
+            ],
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_preview_splits_single_cell_xlsx_rows_by_semicolon(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+        )
+
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.LEAD,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="leads-semicolon.xlsx",
+        )
+        session.stored_file.save(
+            "leads-semicolon.xlsx",
+            SimpleUploadedFile(
+                "leads-semicolon.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        ("Leads", [["Name;Phone;City"], ["Alice;+123;Moscow"], ["Bob;+456;Samara"]]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["columns"], ["A", "B", "C"])
+        self.assertEqual(response.json()["item"]["headers"], ["Name", "Phone", "City"])
+        self.assertEqual(
+            response.json()["item"]["preview_rows"],
+            [
+                ["Name", "Phone", "City"],
+                ["Alice", "+123", "Moscow"],
+                ["Bob", "+456", "Samara"],
+            ],
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_preview_requires_uploaded_file(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(
             member_id="member-1",
