@@ -2454,3 +2454,44 @@ test('preview step renders row limit hint before validation starts', () => {
   assert.equal(importerWorkbenchSource.includes('preview?.max_import_rows'), true)
   assert.equal(importerWorkbenchSource.includes('!previewRowLimitExceeded.value'), true)
 })
+
+test('test import results render 20 rows per page with compact bottom pagination', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const DRY_RUN_RESULTS_PAGE_SIZE = 20'), true)
+  assert.equal(importerWorkbenchSource.includes('const dryRunPage = ref(1)'), true)
+  assert.equal(importerWorkbenchSource.includes('const dryRunPageCount = computed(() =>'), true)
+  assert.equal(importerWorkbenchSource.includes('const paginatedDryRunRows = computed<DryRunRow[]>(() =>'), true)
+  assert.equal(importerWorkbenchSource.includes('function buildVisibleDryRunPageItems()'), true)
+  assert.equal(importerWorkbenchSource.includes('Показаны строки'), true)
+  assert.equal(importerWorkbenchSource.includes('Страница {{ dryRunPage }} из {{ dryRunPageCount }}'), true)
+  assert.equal(importerWorkbenchSource.includes(':data="paginatedDryRunRows"'), true)
+  assert.equal(importerWorkbenchSource.includes("pageItem === 'start-ellipsis' || pageItem === 'end-ellipsis'"), true)
+})
+
+test('run import requires explicit confirmation before mass creating crm records', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('async function confirmMassCreateImport()'), true)
+  assert.equal(importerWorkbenchSource.includes("dedupStrategy.value !== 'create'"), true)
+  assert.equal(importerWorkbenchSource.includes("window.confirm(confirmMessage)"), true)
+  assert.equal(importerWorkbenchSource.includes('Будет создано'), true)
+  assert.equal(importerWorkbenchSource.includes('Существующие записи не будут обновлены'), true)
+})
+
+test('long background import keeps running status instead of fake timeout error', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const maxAttempts = 600'), true)
+  assert.equal(importerWorkbenchSource.includes('Импорт продолжает выполняться в фоне.'), true)
+  assert.equal(importerWorkbenchSource.includes('Фоновый импорт не завершился за ожидаемое время.'), false)
+})

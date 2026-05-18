@@ -3,15 +3,18 @@ import {
   buildExampleTemplateDownloadMeta,
   buildImporterPermissionState,
   buildImportScenarioSections,
+  buildImportModeOptions,
   buildScenarioSelectionSummary,
   buildMigrationStatusBadge,
   buildDedupPayload,
   buildDedupFieldOptions,
   buildDedupWeakeningNotice,
+  buildSimpleDedupPreset,
   EMPTY_MAPPING_SELECT_VALUE,
   buildDryRunRows,
   buildFieldGuidanceHints,
   buildFieldTypeLabel,
+  getImportModeMeta,
   buildImportRunProblemGroups,
   buildImportRunRows,
   buildImportRunSummaryFromSessionSnapshot,
@@ -154,7 +157,9 @@ const userStore = useUserStore()
 const MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
 const MAX_IMPORT_FILE_SIZE_LABEL = '50 МБ'
 const PER_ROW_DEDUP_DECISION_VALUES = new Set(['create', 'update', 'skip'])
+const DRY_RUN_RESULTS_PAGE_SIZE = 20
 
+const importMode = ref('')
 const entityType = ref('')
 const selectedFile = ref<File | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -182,13 +187,14 @@ const dataStartRowInput = ref(2)
 const currentStep = ref(1)
 const activeImportRunFilter = ref('all')
 const activeDryRunDedupRiskOnly = ref(false)
+const dryRunPage = ref(1)
 const linkedSummaryPage = ref(1)
 const busyAction = ref('')
 const cancelRequested = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const recentSessions = ref<Record<string, any>[]>([])
-const currentView = ref<'wizard' | 'history'>('wizard')
+const currentView = ref<'wizard' | 'history' | 'bulkAttach'>('wizard')
 
 function isValidPerRowDedupDecision(value: unknown): value is string {
   return PER_ROW_DEDUP_DECISION_VALUES.has(String(value || '').trim().toLowerCase())
@@ -203,6 +209,10 @@ const importerPermissionState = computed(() => buildImporterPermissionState({
 const historyRows = computed(() => buildSessionHistoryRows(recentSessions.value))
 const fileName = computed(() => selectedFile.value?.name || '')
 const sourceFormat = computed(() => detectSourceFormat(fileName.value))
+const importModeOptions = computed(() => buildImportModeOptions())
+const importModeMeta = computed(() => getImportModeMeta(importMode.value))
+const isSimpleImportMode = computed(() => importModeMeta.value.value === 'simple')
+const showsAdvancedImportTools = computed(() => !importModeMeta.value.hidesAdvancedTools)
 const scenarioSections = computed(() => buildImportScenarioSections())
 const crmScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'crm')?.items || [])
 const taskScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'task')?.items || [])
@@ -212,14 +222,20 @@ const fileAttachCrmEntityItems = computed(() =>
   Object.values(FILE_ATTACH_IMPORT_SCENARIOS).map((s) => ({ value: s.value, label: s.entityLabel })),
 )
 const isFileAttachMode = computed(() => String(entityType.value || '').startsWith('crm_files_'))
+const selectedBulkAttachEntityType = computed(() => String(selectedFileAttachEntityType.value || '').replace(/^crm_files_/, ''))
 const currentScenarioSummary = computed(() => buildScenarioSelectionSummary(entityType.value))
 const isTaskEntityImport = computed(() => entityType.value === 'task')
+const isDirectCrmEntityImport = computed(() => ['lead', 'contact', 'company', 'deal'].includes(entityType.value))
 const DEDUP_NONAPPLICABLE_TYPES = new Set([
   'task', 'task_comment', 'task_checklist_item', 'task_attachment',
   'crm_files_lead', 'crm_files_contact', 'crm_files_company', 'crm_files_deal',
   'crm_activity', 'crm_note', 'smart_process',
 ])
 const isDedupApplicable = computed(() => !DEDUP_NONAPPLICABLE_TYPES.has(entityType.value))
+const simpleDedupPreset = computed(() => buildSimpleDedupPreset({
+  entityType: entityType.value,
+  mappingRows: mappingRows.value,
+}))
 const exampleTemplateDownloadMeta = computed(() => buildExampleTemplateDownloadMeta(entityType.value))
 const currentImportTitle = computed(() => 'Excel Migration')
 const selectedFamily = ref('')
@@ -282,6 +298,22 @@ const requiredFieldSummary = computed(() => buildRequiredFieldSummary({
   ],
   ignoreFieldIds: entityType.value === 'contact' ? ['SECOND_NAME'] : [],
 }))
+const effectiveDedupFields = computed(() => {
+  if (!isSimpleImportMode.value) {
+    return dedupFields.value
+  }
+
+  if (dedupStrategy.value === 'create') {
+    return []
+  }
+
+  return dedupFields.value.length ? dedupFields.value : simpleDedupPreset.value.fields
+})
+const simpleDedupFieldLabels = computed(() => (
+  effectiveDedupFields.value
+    .map((fieldId) => formatImporterFieldLabel(fieldId))
+    .filter(Boolean)
+))
 const requiredFieldMissingIds = computed(() => new Set(
   requiredFieldSummary.value.missingRequired.map((field) => field.id),
 ))
@@ -316,7 +348,11 @@ const dryRunCheckedRows = computed(() => Number(dryRunData.value?.checked_rows |
 const dryRunReadyRows = computed(() => Number(dryRunData.value?.ready_rows || 0))
 const dryRunSkippedRows = computed(() => Number(dryRunData.value?.skipped_rows || 0))
 const dryRunPendingDecisionRows = computed(() => Number(dryRunData.value?.pending_decision_rows || 0))
-const requiresPerRowDedupDecision = computed(() => isDedupApplicable.value && dedupStrategy.value === 'ask')
+const requiresPerRowDedupDecision = computed(() => (
+  isDedupApplicable.value
+  && importModeMeta.value.allowsPerRowDedupDecisions
+  && dedupStrategy.value === 'ask'
+))
 const pendingDecisionRows = computed(() =>
   (Array.isArray(dryRunData.value?.results) ? dryRunData.value.results : []).filter(
     (r: any) => r?.status === 'pending_decision'
@@ -692,12 +728,22 @@ const headerNotice = computed(() => {
 
   return null
 })
-const dedupStrategyItems = [
-  { value: 'create', label: 'Всегда создавать' },
-  { value: 'update', label: 'Обновлять найденный дубль' },
-  { value: 'skip', label: 'Пропускать дубль' },
-  { value: 'ask', label: 'Спросить по каждому дублю' },
-]
+const dedupStrategyItems = computed(() => {
+  const baseItems = [
+    { value: 'create', label: 'Всегда создавать' },
+  ]
+
+  if (isSimpleImportMode.value && !simpleDedupPreset.value.available) {
+    return baseItems
+  }
+
+  return [
+    ...baseItems,
+    { value: 'update', label: 'Обновлять найденный дубль' },
+    { value: 'skip', label: 'Пропускать дубль' },
+    ...(showsAdvancedImportTools.value ? [{ value: 'ask', label: 'Спросить по каждому дублю' }] : []),
+  ]
+})
 const dedupFieldOptions = computed(() => buildDedupFieldOptions(
   mappingRows.value,
   mappingData.value?.fields,
@@ -789,6 +835,24 @@ const filteredDryRunRows = computed<DryRunRow[]>(() => (
   activeDryRunDedupRiskOnly.value
     ? dryRunRows.value.filter((row) => dryRunDedupWeakeningNotice.value.rowNumbers.includes(row.rowNumber))
     : dryRunRows.value
+))
+const dryRunPageCount = computed(() => (
+  Math.max(1, Math.ceil(filteredDryRunRows.value.length / DRY_RUN_RESULTS_PAGE_SIZE))
+))
+const paginatedDryRunRows = computed<DryRunRow[]>(() => {
+  const page = Math.min(dryRunPage.value, dryRunPageCount.value)
+  const startIndex = (page - 1) * DRY_RUN_RESULTS_PAGE_SIZE
+  return filteredDryRunRows.value.slice(startIndex, startIndex + DRY_RUN_RESULTS_PAGE_SIZE)
+})
+const dryRunPageRangeStart = computed(() => (
+  filteredDryRunRows.value.length
+    ? ((Math.min(dryRunPage.value, dryRunPageCount.value) - 1) * DRY_RUN_RESULTS_PAGE_SIZE) + 1
+    : 0
+))
+const dryRunPageRangeEnd = computed(() => (
+  filteredDryRunRows.value.length
+    ? Math.min(dryRunPageRangeStart.value + DRY_RUN_RESULTS_PAGE_SIZE - 1, filteredDryRunRows.value.length)
+    : 0
 ))
 const importRunStatusFilters = computed<ImportRunFilterItem[]>(() => (
   buildImportRunStatusFilters(importRunData.value).filter((item) => item.count > 0)
@@ -1059,6 +1123,14 @@ function buildImportFileSizeErrorMessage(file: File) {
   return `Файл слишком большой: ${sizeInMegabytes} МБ. Максимум для импорта — ${MAX_IMPORT_FILE_SIZE_LABEL}.`
 }
 
+function clearSelectedFile() {
+  selectedFile.value = null
+
+  if (fileInputRef.value) {
+    fileInputRef.value.value = ''
+  }
+}
+
 function resetFlowState() {
   session.value = null
   preview.value = null
@@ -1084,12 +1156,18 @@ function resetFlowState() {
 
 function finishImporterFlow() {
   resetFlowState()
-  selectedFile.value = null
+  importMode.value = ''
+  selectedFamily.value = ''
+  selectedCrmEntityType.value = ''
+  selectedTaskEntityType.value = ''
+  selectedLinkedEntityType.value = ''
+  selectedHrEntityType.value = ''
+  selectedFileAttachEntityType.value = ''
+  selectedSmartProcessId.value = ''
+  entityType.value = ''
   currentStep.value = 1
 
-  if (fileInputRef.value) {
-    fileInputRef.value.value = ''
-  }
+  clearSelectedFile()
 
   setSuccess('Импорт завершен. Можно начать новый импорт.')
   loadHistory()
@@ -1226,6 +1304,24 @@ watch(dedupStrategy, (value) => {
   }
 })
 
+watch([isSimpleImportMode, simpleDedupPreset], ([simpleModeEnabled, preset]) => {
+  if (!simpleModeEnabled) {
+    return
+  }
+
+  if (!preset.available && dedupStrategy.value !== 'create') {
+    dedupStrategy.value = 'create'
+  }
+
+  if (dedupStrategy.value === 'ask') {
+    dedupStrategy.value = preset.available ? 'update' : 'create'
+  }
+
+  if (dedupStrategy.value !== 'create') {
+    dedupFields.value = preset.fields
+  }
+}, { immediate: true })
+
 watch(isDedupApplicable, (applicable) => {
   if (!applicable) {
     dedupStrategy.value = 'create'
@@ -1296,6 +1392,18 @@ watch(linkedImportRunSummary, () => {
   linkedSummaryPage.value = 1
 })
 
+watch(dryRunData, () => {
+  dryRunPage.value = 1
+})
+
+watch(activeDryRunDedupRiskOnly, () => {
+  dryRunPage.value = 1
+})
+
+watch(() => filteredDryRunRows.value.length, () => {
+  dryRunPage.value = Math.min(dryRunPage.value, dryRunPageCount.value)
+})
+
 function setLinkedSummaryPage(page: number) {
   linkedSummaryPage.value = Math.min(
     Math.max(1, Number(page || 1)),
@@ -1305,6 +1413,48 @@ function setLinkedSummaryPage(page: number) {
 
 function buildLinkedSummaryPages(): number[] {
   return Array.from({ length: linkedSummaryPageCount.value }, (_, index) => index + 1)
+}
+
+function setDryRunPage(page: number) {
+  dryRunPage.value = Math.min(
+    Math.max(1, Number(page || 1)),
+    Math.max(1, Number(dryRunPageCount.value || 1)),
+  )
+}
+
+function buildVisibleDryRunPageItems(): Array<number | 'start-ellipsis' | 'end-ellipsis'> {
+  const totalPages = dryRunPageCount.value
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1)
+  }
+
+  const currentPage = Math.min(dryRunPage.value, totalPages)
+  const lastPage = totalPages
+  let startPage = Math.max(2, currentPage - 1)
+  let endPage = Math.min(lastPage - 1, currentPage + 1)
+
+  if (currentPage <= 4) {
+    endPage = 4
+  } else if (currentPage >= lastPage - 3) {
+    startPage = lastPage - 3
+  }
+
+  const items: Array<number | 'start-ellipsis' | 'end-ellipsis'> = [1]
+
+  if (startPage > 2) {
+    items.push('start-ellipsis')
+  }
+
+  for (let page = startPage; page <= endPage; page += 1) {
+    items.push(page)
+  }
+
+  if (endPage < lastPage - 1) {
+    items.push('end-ellipsis')
+  }
+
+  items.push(lastPage)
+  return items
 }
 
 function buildVisibleLinkedSummaryItems(section: LinkedImportSummarySection): LinkedImportSummaryItem[] {
@@ -1318,6 +1468,23 @@ function formatDedupFieldList(fields: unknown): string {
     ? fields.map((field) => formatImporterFieldLabel(String(field || '').trim())).filter(Boolean)
     : []
   return normalizedFields.length ? normalizedFields.join(', ') : '—'
+}
+
+function selectImportMode(mode: string) {
+  importMode.value = getImportModeMeta(mode).value
+  goBackToFamilySelection()
+  clearSelectedFile()
+  resetFlowState()
+  currentStep.value = 1
+}
+
+function goBackToImportModeSelection() {
+  currentView.value = 'wizard'
+  importMode.value = ''
+  goBackToFamilySelection()
+  clearSelectedFile()
+  resetFlowState()
+  currentStep.value = 1
 }
 
 function selectFamily(family: string) {
@@ -1334,6 +1501,7 @@ function selectFamily(family: string) {
 }
 
 function goBackToFamilySelection() {
+  currentView.value = 'wizard'
   selectedFamily.value = ''
   selectedCrmEntityType.value = ''
   selectedTaskEntityType.value = ''
@@ -1344,6 +1512,25 @@ function goBackToFamilySelection() {
   entityType.value = ''
   departmentsExpanded.value = false
   resetMessages()
+}
+
+function goBackFromBulkAttach() {
+  currentView.value = 'wizard'
+  resetMessages()
+}
+
+function updateDedupStrategySelection(value: string) {
+  const normalizedValue = String(value || 'create').trim()
+  if (
+    isSimpleImportMode.value
+    && normalizedValue !== 'create'
+    && !simpleDedupPreset.value.available
+  ) {
+    dedupStrategy.value = 'create'
+    return
+  }
+
+  dedupStrategy.value = normalizedValue
 }
 
 async function toggleDepartments() {
@@ -1431,6 +1618,7 @@ function updateFileAttachEntityType(value: string) {
   selectedSmartProcessId.value = ''
   selectedFamily.value = 'crm'
   entityType.value = normalizedValue
+  currentView.value = 'bulkAttach'
   resetMessages()
 }
 
@@ -1763,7 +1951,7 @@ async function saveMapping() {
       buildMappingPayload(mappingRows.value),
       buildDedupPayload({
         strategy: dedupStrategy.value,
-        fields: dedupFields.value,
+        fields: effectiveDedupFields.value,
         condition: dedupCondition.value,
       }),
       {
@@ -1802,7 +1990,7 @@ async function saveDedupSettings() {
       buildMappingPayload(mappingRows.value),
       buildDedupPayload({
         strategy: dedupStrategy.value,
-        fields: dedupFields.value,
+        fields: effectiveDedupFields.value,
         condition: dedupCondition.value,
       }),
       {
@@ -1837,7 +2025,7 @@ async function saveTemplate() {
       buildMappingPayload(mappingRows.value),
       buildDedupPayload({
         strategy: dedupStrategy.value,
-        fields: dedupFields.value,
+        fields: effectiveDedupFields.value,
         condition: dedupCondition.value,
       }),
     )
@@ -1947,6 +2135,11 @@ async function runImport() {
   cancelRequested.value = false
 
   try {
+    if (isDirectCrmEntityImport.value && dedupStrategy.value === 'create' && !dryRunData.value) {
+      busyAction.value = 'dry-run'
+      await executeDryRunRequest(String(session.value.id))
+    }
+
     if (requiresPerRowDedupDecision.value && !dryRunData.value) {
       busyAction.value = 'dry-run'
       const dryRunResult = await executeDryRunRequest(String(session.value.id))
@@ -1961,6 +2154,11 @@ async function runImport() {
       return
     }
 
+    if (!await confirmMassCreateImport()) {
+      setError('Импорт остановлен. Подтвердите массовое создание новых CRM-записей, если это ожидаемое действие.')
+      return
+    }
+
     busyAction.value = 'run'
     session.value = session.value ? { ...session.value, status: 'running' } : session.value
     const response = await apiStore.runImportSession(String(session.value.id), perRowDedupDecisions.value)
@@ -1968,7 +2166,9 @@ async function runImport() {
     importRunData.value = queuedImportRun
     currentStep.value = 7
     setSuccess(
-      queuedImportRun?.status === 'cancelled'
+      queuedImportRun?.status === 'running'
+        ? `Импорт продолжает выполняться в фоне. Уже обработано ${Number(queuedImportRun?.checked_rows || 0).toLocaleString('ru-RU')} строк.`
+        : queuedImportRun?.status === 'cancelled'
         ? `Импорт остановлен. Не запущено строк: ${Number(queuedImportRun?.remaining_rows || 0)}.`
         : importRunFailedRows.value > 0
         ? 'Импорт завершен. Часть строк требует внимания.'
@@ -1989,6 +2189,30 @@ async function executeDryRunRequest(sessionId: string) {
   importRunData.value = null
   currentStep.value = 6
   return response.item
+}
+
+async function confirmMassCreateImport() {
+  if (!isDirectCrmEntityImport.value || dedupStrategy.value !== 'create') {
+    return true
+  }
+
+  const readyCreateRows = Number(dryRunData.value?.ready_create_rows || dryRunData.value?.ready_rows || 0)
+  if (readyCreateRows <= 0) {
+    return true
+  }
+
+  if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+    return true
+  }
+
+  const entityLabel = String(currentScenarioSummary.value?.selectedLabel || 'CRM-записи').trim().toLowerCase()
+  const confirmMessage = [
+    `Будет создано ${readyCreateRows.toLocaleString('ru-RU')} новых записей в разделе «${entityLabel}».`,
+    'Существующие записи не будут обновлены, потому что сейчас выбрано правило дублей «Всегда создавать».',
+    'Продолжить импорт?',
+  ].join('\n\n')
+
+  return window.confirm(confirmMessage)
 }
 
 async function retryFailedRows() {
@@ -2118,7 +2342,7 @@ function buildImportRunFromSnapshot(snapshot: Record<string, any> | null | undef
 }
 
 async function waitForImportExecutionResult(sessionId: string) {
-  const maxAttempts = 120
+  const maxAttempts = 600
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const response = await apiStore.getImportSession(sessionId)
@@ -2142,7 +2366,15 @@ async function waitForImportExecutionResult(sessionId: string) {
     await sleepAction(1500)
   }
 
-  throw new Error('Фоновый импорт не завершился за ожидаемое время.')
+  const response = await apiStore.getImportSession(sessionId)
+  const snapshot = response.item
+  syncSessionSnapshot(snapshot)
+  const resolvedImportRun = buildImportRunFromSnapshot(snapshot)
+  if (resolvedImportRun) {
+    return resolvedImportRun
+  }
+
+  throw new Error('Импорт запущен, но не удалось получить его текущее состояние.')
 }
 
 async function resolveImportExecutionResult(sessionId: string, responseItem: Record<string, any> | null | undefined) {
@@ -2264,6 +2496,51 @@ onMounted(loadHistory)
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div
+      v-else-if="currentView === 'bulkAttach'"
+      class="overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)]"
+    >
+      <div class="border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbfe_100%)] px-6 py-5 sm:px-8">
+        <div class="flex items-start justify-between gap-5">
+          <div class="flex items-start gap-5">
+            <button
+              type="button"
+              class="flex shrink-0 items-center gap-1.5 rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9] transition hover:bg-[#ddeeff]"
+              @click="goBackFromBulkAttach"
+            >
+              ← Назад
+            </button>
+            <div>
+              <div class="text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
+                Сценарий S17
+              </div>
+              <h1 class="mt-1 text-[26px] font-semibold leading-[1.1] text-[#2f4254]">
+                Массовое добавление файлов по фильтру CRM
+              </h1>
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                <span class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
+                  {{ currentScenarioSummary.selectedLabel }}
+                </span>
+                <span class="rounded-full border border-[#e5ebf2] bg-[#fbfcfe] px-3 py-1.5 text-sm text-[#627689]">
+                  Отдельный экран сценария
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="hidden max-w-[320px] rounded-[18px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-3 text-sm text-[#5a7fa8] lg:block">
+            Выберите CRM-элементы по фильтру, укажите файл и поле типа «Файл», затем запустите массовое добавление.
+          </div>
+        </div>
+      </div>
+
+      <div class="min-h-[600px] overflow-y-auto px-6 py-6 sm:px-8 sm:py-8">
+        <BulkAttachWizard
+          :initial-entity-type="selectedBulkAttachEntityType"
+          :lock-entity-type="true"
+        />
       </div>
     </div>
 
@@ -2424,20 +2701,31 @@ onMounted(loadHistory)
                   <div>
                     <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаг 1</div>
                     <h2 class="mt-1 text-xl font-semibold text-[#314256]">
-                      {{ selectedFamily ? 'Источник и назначение' : 'Выберите тип импорта' }}
+                      {{ !importMode ? 'Выберите режим импорта' : (selectedFamily ? 'Источник и назначение' : 'Выберите тип импорта') }}
                     </h2>
+                    <div v-if="importMode" class="mt-2 inline-flex rounded-full border border-[#d7e7ff] bg-white px-3 py-1 text-sm font-medium text-[#2e6bd9]">
+                      {{ importModeMeta.label }}
+                    </div>
                   </div>
                   <div class="flex items-center gap-2">
                     <B24Button
-                      v-if="selectedFamily"
+                      v-if="importMode && !selectedFamily"
+                      label="← Режим"
+                      color="air-primary"
+                      size="lg"
+                      :disabled="Boolean(busyAction)"
+                      @click="goBackToImportModeSelection"
+                    />
+                    <B24Button
+                      v-if="importMode && selectedFamily"
                       label="← Назад"
-                      color="air-tertiary"
+                      color="air-primary"
                       size="lg"
                       :disabled="Boolean(busyAction)"
                       @click="goBackToFamilySelection"
                     />
                     <B24Button
-                      v-if="selectedFamily"
+                      v-if="importMode && selectedFamily && !(showsAdvancedImportTools && selectedFileAttachEntityType)"
                       label="Загрузить файл"
                       color="air-primary"
                       size="lg"
@@ -2448,8 +2736,27 @@ onMounted(loadHistory)
                   </div>
                 </div>
 
+                <div v-if="!importMode" class="space-y-4">
+                  <div class="rounded-[18px] border border-[#dce7f7] bg-[#f4f9ff] px-4 py-3 text-sm text-[#5c7592]">
+                    Сначала выберите режим: <span class="font-semibold text-[#314256]">Простой импорт</span> для быстрого старта или <span class="font-semibold text-[#314256]">Расширенный импорт</span> для полного набора настроек.
+                  </div>
+                  <div class="grid gap-4 sm:grid-cols-2">
+                  <button
+                    v-for="option in importModeOptions"
+                    :key="option.value"
+                    type="button"
+                    class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
+                    :disabled="!importerPermissionState.canCreateSessions"
+                    @click="selectImportMode(option.value)"
+                  >
+                    <div class="text-base font-semibold text-[#2f4254]">{{ option.label }}</div>
+                    <div class="text-sm text-[#6c8093]">{{ option.description }}</div>
+                  </button>
+                  </div>
+                </div>
+
                 <!-- Выбор категории -->
-                <div v-if="!selectedFamily" class="grid gap-4 sm:grid-cols-3">
+                <div v-else-if="!selectedFamily" class="grid gap-4 sm:grid-cols-3">
                   <button
                     type="button"
                     class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
@@ -2519,7 +2826,7 @@ onMounted(loadHistory)
                         </div>
                       </B24FormField>
                     </section>
-                    <section class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
+                    <section v-if="showsAdvancedImportTools" class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
                       <div class="text-sm font-semibold text-[#314256]">Связанный импорт</div>
                       <div class="mt-1 text-sm text-[#6f8194]">Одна строка Excel создаёт и связывает несколько сущностей.</div>
                       <B24FormField label="Выберите связанный сценарий" class="mt-4">
@@ -2534,7 +2841,7 @@ onMounted(loadHistory)
                         />
                       </B24FormField>
                     </section>
-                    <section class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
+                    <section v-if="showsAdvancedImportTools" class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
                       <div class="flex items-center gap-2">
                         <div class="text-sm font-semibold text-[#314256]">Массовый импорт файлов</div>
                         <span class="rounded-full bg-[#eaf2ff] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#3d8ef0]">Бета</span>
@@ -2551,9 +2858,6 @@ onMounted(loadHistory)
                           @update:model-value="updateFileAttachEntityType(String($event || ''))"
                         />
                       </B24FormField>
-                      <div v-if="selectedFileAttachEntityType" class="mt-3 rounded-[12px] border border-[#dce7f7] bg-[#f7fbff] px-3 py-2.5 text-xs text-[#5a7fa8]">
-                        Нужен Excel с колонками <span class="font-semibold">ID</span> (ID записи) и <span class="font-semibold">FILE_URL</span> (ссылка на файл). Поле назначения выбирается на шаге соответствия.
-                      </div>
                     </section>
                   </div>
                   <div class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
@@ -2796,7 +3100,7 @@ onMounted(loadHistory)
 
                   <B24Button
                     label="Назад"
-                    color="air-tertiary"
+                    color="air-primary"
                     size="lg"
                     :disabled="!canGoBack"
                     @click="goBack"
@@ -2873,7 +3177,7 @@ onMounted(loadHistory)
 
                   <B24Button
                     label="Назад"
-                    color="air-tertiary"
+                    color="air-primary"
                     size="lg"
                     :disabled="!canGoBack"
                     @click="goBack"
@@ -3007,8 +3311,14 @@ onMounted(loadHistory)
               </div>
             </section>
 
-            <div class="mb-5 grid gap-4 xl:grid-cols-2">
-              <section class="rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4">
+            <div
+              class="mb-5 grid gap-4"
+              :class="showsAdvancedImportTools ? 'xl:grid-cols-2' : 'xl:grid-cols-1'"
+            >
+              <section
+                v-if="showsAdvancedImportTools"
+                class="rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
+              >
                 <div class="mb-3 flex items-start justify-between gap-3">
                   <div>
                     <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Правила сопоставления</div>
@@ -3094,7 +3404,7 @@ onMounted(loadHistory)
               </section>
             </div>
 
-            <div class="mb-5 grid gap-4 xl:grid-cols-2">
+            <div v-if="showsAdvancedImportTools" class="mb-5 grid gap-4 xl:grid-cols-2">
               <section class="rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4">
                 <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Сохранить шаблон</div>
                 <div class="flex flex-col gap-3 lg:flex-row">
@@ -3301,7 +3611,7 @@ onMounted(loadHistory)
                         />
 
                         <!-- Тип данных колонки (override) -->
-                        <div v-if="row.targetFieldId" class="mt-2">
+                        <div v-if="row.targetFieldId && showsAdvancedImportTools" class="mt-2">
                           <B24Select
                             :model-value="row.columnType || 'auto'"
                             size="xs"
@@ -3323,7 +3633,7 @@ onMounted(loadHistory)
                           class="mt-2 flex flex-wrap gap-2"
                         >
                           <span
-                            v-if="row.autoMatchType"
+                            v-if="showsAdvancedImportTools && row.autoMatchType"
                             class="rounded-full border border-[#d9e6f5] bg-[#f6f9fd] px-2.5 py-1 text-xs font-medium text-[#58708b]"
                           >
                             {{ row.autoMatchLabel || 'Автоподбор' }}
@@ -3350,7 +3660,7 @@ onMounted(loadHistory)
                             Множественное
                           </span>
                           <span
-                            v-if="row.autoMatchReasonLabel"
+                            v-if="showsAdvancedImportTools && row.autoMatchReasonLabel"
                             class="rounded-full border border-[#d7e7ff] bg-white px-2.5 py-1 text-xs font-medium text-[#58708b]"
                           >
                             {{ row.autoMatchReasonLabel }}
@@ -3358,7 +3668,7 @@ onMounted(loadHistory)
                         </div>
 
                         <div
-                          v-if="row.targetFieldGuidanceHints?.length"
+                          v-if="showsAdvancedImportTools && row.targetFieldGuidanceHints?.length"
                           class="mt-2 space-y-1 text-xs text-[#6f8194]"
                         >
                           <div
@@ -3370,7 +3680,7 @@ onMounted(loadHistory)
                         </div>
 
                         <div
-                          v-if="row.candidateSuggestions?.length"
+                          v-if="showsAdvancedImportTools && row.candidateSuggestions?.length"
                           class="mt-3 rounded-[14px] border border-[#dce7f7] bg-white/85 px-3 py-3"
                         >
                           <div class="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#8ea0b2]">
@@ -3396,7 +3706,7 @@ onMounted(loadHistory)
                         </div>
 
                         <div
-                          v-if="row.targetFieldId && row.sourceHeader && importerPermissionState.canManageTemplates"
+                          v-if="showsAdvancedImportTools && row.targetFieldId && row.sourceHeader && importerPermissionState.canManageTemplates"
                           class="mt-3 flex flex-wrap items-center gap-2"
                         >
                           <B24Button
@@ -3465,10 +3775,6 @@ onMounted(loadHistory)
 
               <!-- Стандартный блок дедупликации для CRM и HR -->
               <template v-if="isDedupApplicable">
-                <div class="mb-5 text-sm text-[#5f7285]">
-                  Отдельно задайте, как искать совпадения и что делать с найденными дублями, чтобы шаг соответствия полей оставался чистым и понятным.
-                </div>
-
                 <div
                   v-if="unmappedValueSummary.hasUnmappedValues"
                   class="mb-5 rounded-[16px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-3 text-sm text-[#8f5b18]"
@@ -3490,77 +3796,140 @@ onMounted(loadHistory)
                   </div>
                 </div>
 
-                <div class="grid gap-4 lg:grid-cols-[280px,1fr]">
-                  <B24Select
-                    :model-value="dedupStrategy"
-                    class="w-full"
-                    size="lg"
-                    :items="dedupStrategyItems"
-                    @update:model-value="dedupStrategy = String($event || 'create')"
-                  />
+                <div v-if="isSimpleImportMode" class="space-y-4">
+                  <div class="text-sm text-[#5f7285]">
+                    В простом режиме дубли настраиваются без дополнительных опций: выбираете действие, а ключи поиска берутся автоматически из уже сопоставленных полей.
+                  </div>
 
-                  <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                    <div class="font-medium text-[#314256]">Ключи поиска дубля</div>
-                    <div class="mt-1 text-xs text-[#7f92a7]">
-                      Используются сопоставленные поля текущего импорта. Если выбрано несколько ключей, дубль ищется по их совместному совпадению.
-                    </div>
+                  <div class="grid gap-4 lg:grid-cols-[280px,1fr]">
+                    <B24Select
+                      :model-value="dedupStrategy"
+                      class="w-full"
+                      size="lg"
+                      :items="dedupStrategyItems"
+                      @update:model-value="updateDedupStrategySelection(String($event || 'create'))"
+                    />
 
-                    <div v-if="dedupFieldOptions.length" class="mt-3 flex flex-wrap gap-3">
-                      <button
-                        v-for="item in dedupFieldOptions"
-                        :key="item.id"
-                        type="button"
-                        class="rounded-full border px-3 py-2 text-sm font-medium transition"
-                        :class="dedupFields.includes(item.id) && dedupStrategy !== 'create'
-                          ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
-                          : 'border-[#d9e2ec] bg-white text-[#516478]'"
-                        :disabled="dedupStrategy === 'create'"
-                        @click="toggleDedupField(item.id)"
-                      >
-                        {{ item.label }}
-                      </button>
-                    </div>
-
-                    <div v-else class="mt-3 text-sm text-[#7f92a7]">
-                      Сначала сопоставьте одно из полей EMAIL, PHONE или TITLE на шаге маппинга.
-                    </div>
-
-                    <div
-                      v-if="dedupStrategy !== 'create' && dedupFields.length >= 2"
-                      class="mt-4 flex items-center gap-3"
-                    >
-                      <span class="text-xs text-[#7f92a7]">Режим совпадения:</span>
-                      <div class="flex gap-1 rounded-[10px] border border-[#e5ebf2] bg-[#f4f7fa] p-1">
-                        <button
-                          type="button"
-                          class="rounded-[8px] px-3 py-1 text-xs font-medium transition"
-                          :class="dedupCondition === 'any' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
-                          @click="dedupCondition = 'any'"
-                        >
-                          Любое поле (OR)
-                        </button>
-                        <button
-                          type="button"
-                          class="rounded-[8px] px-3 py-1 text-xs font-medium transition"
-                          :class="dedupCondition === 'all' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
-                          @click="dedupCondition = 'all'"
-                        >
-                          Все поля (AND)
-                        </button>
+                    <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
+                      <div class="font-medium text-[#314256]">Проверка дублей</div>
+                      <div class="mt-1 text-xs text-[#7f92a7]">
+                        Простая проверка использует только базовые поля из маппинга: Email, Телефон и Название.
                       </div>
-                      <span class="text-xs text-[#7f92a7]">
-                        {{ dedupCondition === 'all' ? 'Дубль найден только если совпали все выбранные поля' : 'Дубль найден если совпало хотя бы одно поле' }}
-                      </span>
-                    </div>
 
-                    <div
-                      v-if="dedupStrategy !== 'create' && dedupFieldOptions.length && dedupFields.length === 0"
-                      class="mt-3 rounded-[10px] border border-[#ffd5b3] bg-[#fff7ef] px-3 py-2 text-xs text-[#9a5a10]"
-                    >
-                      Выберите хотя бы один ключ поиска — без него дубли не будут найдены и все строки будут созданы заново.
+                      <div
+                        v-if="dedupStrategy !== 'create' && simpleDedupFieldLabels.length"
+                        class="mt-3 flex flex-wrap gap-2"
+                      >
+                        <span
+                          v-for="label in simpleDedupFieldLabels"
+                          :key="label"
+                          class="rounded-full border border-[#d7e7ff] bg-[#edf5ff] px-3 py-1.5 text-xs font-medium text-[#2e6bd9]"
+                        >
+                          {{ label }}
+                        </span>
+                      </div>
+
+                      <div
+                        v-else-if="simpleDedupPreset.available"
+                        class="mt-3 rounded-[10px] border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-2 text-xs text-[#5c7592]"
+                      >
+                        Если хотите искать дубли, выберите действие «Обновлять» или «Пропускать дубль».
+                      </div>
+
+                      <div
+                        v-else
+                        class="mt-3 rounded-[10px] border border-[#ffd5b3] bg-[#fff7ef] px-3 py-2 text-xs text-[#9a5a10]"
+                      >
+                        Чтобы искать дубли в простом режиме, сопоставьте хотя бы одно поле EMAIL, PHONE или TITLE.
+                      </div>
+
+                      <div
+                        v-if="dedupStrategy !== 'create' && simpleDedupFieldLabels.length"
+                        class="mt-3 text-xs text-[#7f92a7]"
+                      >
+                        Совпадение ищется по любому из этих ключей. Для сложных сценариев переключитесь в расширенный режим.
+                      </div>
                     </div>
                   </div>
                 </div>
+
+                <template v-else>
+                  <div class="mb-5 text-sm text-[#5f7285]">
+                    Отдельно задайте, как искать совпадения и что делать с найденными дублями, чтобы шаг соответствия полей оставался чистым и понятным.
+                  </div>
+
+                  <div class="grid gap-4 lg:grid-cols-[280px,1fr]">
+                    <B24Select
+                      :model-value="dedupStrategy"
+                      class="w-full"
+                      size="lg"
+                      :items="dedupStrategyItems"
+                      @update:model-value="updateDedupStrategySelection(String($event || 'create'))"
+                    />
+
+                    <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
+                      <div class="font-medium text-[#314256]">Ключи поиска дубля</div>
+                      <div class="mt-1 text-xs text-[#7f92a7]">
+                        Используются сопоставленные поля текущего импорта. Если выбрано несколько ключей, дубль ищется по их совместному совпадению.
+                      </div>
+
+                      <div v-if="dedupFieldOptions.length" class="mt-3 flex flex-wrap gap-3">
+                        <button
+                          v-for="item in dedupFieldOptions"
+                          :key="item.id"
+                          type="button"
+                          class="rounded-full border px-3 py-2 text-sm font-medium transition"
+                          :class="dedupFields.includes(item.id) && dedupStrategy !== 'create'
+                            ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
+                            : 'border-[#d9e2ec] bg-white text-[#516478]'"
+                          :disabled="dedupStrategy === 'create'"
+                          @click="toggleDedupField(item.id)"
+                        >
+                          {{ item.label }}
+                        </button>
+                      </div>
+
+                      <div v-else class="mt-3 text-sm text-[#7f92a7]">
+                        Сначала сопоставьте одно из полей EMAIL, PHONE или TITLE на шаге маппинга.
+                      </div>
+
+                      <div
+                        v-if="dedupStrategy !== 'create' && dedupFields.length >= 2"
+                        class="mt-4 flex items-center gap-3"
+                      >
+                        <span class="text-xs text-[#7f92a7]">Режим совпадения:</span>
+                        <div class="flex gap-1 rounded-[10px] border border-[#e5ebf2] bg-[#f4f7fa] p-1">
+                          <button
+                            type="button"
+                            class="rounded-[8px] px-3 py-1 text-xs font-medium transition"
+                            :class="dedupCondition === 'any' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
+                            @click="dedupCondition = 'any'"
+                          >
+                            Любое поле (OR)
+                          </button>
+                          <button
+                            type="button"
+                            class="rounded-[8px] px-3 py-1 text-xs font-medium transition"
+                            :class="dedupCondition === 'all' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
+                            @click="dedupCondition = 'all'"
+                          >
+                            Все поля (AND)
+                          </button>
+                        </div>
+                        <span class="text-xs text-[#7f92a7]">
+                          {{ dedupCondition === 'all' ? 'Дубль найден только если совпали все выбранные поля' : 'Дубль найден если совпало хотя бы одно поле' }}
+                        </span>
+                      </div>
+
+                      <div
+                        v-if="dedupStrategy !== 'create' && dedupFieldOptions.length && dedupFields.length === 0"
+                        class="mt-3 rounded-[10px] border border-[#ffd5b3] bg-[#fff7ef] px-3 py-2 text-xs text-[#9a5a10]"
+                      >
+                        Выберите хотя бы один ключ поиска — без него дубли не будут найдены и все строки будут созданы заново.
+                      </div>
+                    </div>
+                  </div>
+                </template>
               </template>
             </section>
           </section>
@@ -3777,11 +4146,61 @@ onMounted(loadHistory)
                   loading-color="air-primary"
                   loading-animation="loading"
                   :columns="dryRunTableColumns"
-                  :data="filteredDryRunRows"
+                  :data="paginatedDryRunRows"
                   :empty="activeDryRunDedupRiskOnly
                     ? 'Строки с риском неполного поиска дублей не найдены.'
                     : 'После тестового импорта здесь появится предварительный отчет по строкам.'"
                 />
+                <div
+                  v-if="dryRunData && dryRunPageCount > 1"
+                  class="border-t border-[#e8eef5] bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-4 py-4"
+                >
+                  <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div class="text-sm text-[#5f7285]">
+                      Показаны строки <span class="font-semibold text-[#314256]">{{ dryRunPageRangeStart }}-{{ dryRunPageRangeEnd }}</span>
+                      из <span class="font-semibold text-[#314256]">{{ filteredDryRunRows.length }}</span>.
+                    </div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                      Страница {{ dryRunPage }} из {{ dryRunPageCount }}
+                    </div>
+                  </div>
+
+                  <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#d9e2ec] bg-white px-3 py-2 text-sm font-medium text-[#516478] transition hover:border-[#b8cae1] hover:text-[#2e6bd9] disabled:cursor-not-allowed disabled:opacity-45"
+                      :disabled="dryRunPage <= 1"
+                      @click="setDryRunPage(dryRunPage - 1)"
+                    >
+                      Назад
+                    </button>
+
+                    <button
+                      v-for="pageItem in buildVisibleDryRunPageItems()"
+                      :key="String(pageItem)"
+                      type="button"
+                      class="min-w-10 rounded-full border px-3 py-2 text-sm font-semibold transition"
+                      :class="pageItem === dryRunPage
+                        ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
+                        : pageItem === 'start-ellipsis' || pageItem === 'end-ellipsis'
+                          ? 'cursor-default border-transparent bg-transparent text-[#9aa9b8]'
+                          : 'border-[#d9e2ec] bg-white text-[#516478] hover:border-[#b8cae1] hover:text-[#2e6bd9]'"
+                      :disabled="pageItem === 'start-ellipsis' || pageItem === 'end-ellipsis'"
+                      @click="typeof pageItem === 'number' && setDryRunPage(pageItem)"
+                    >
+                      {{ pageItem === 'start-ellipsis' || pageItem === 'end-ellipsis' ? '…' : pageItem }}
+                    </button>
+
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#d9e2ec] bg-white px-3 py-2 text-sm font-medium text-[#516478] transition hover:border-[#b8cae1] hover:text-[#2e6bd9] disabled:cursor-not-allowed disabled:opacity-45"
+                      :disabled="dryRunPage >= dryRunPageCount"
+                      @click="setDryRunPage(dryRunPage + 1)"
+                    >
+                      Далее
+                    </button>
+                  </div>
+                </div>
                 <B24Table
                   v-else
                   class="w-full"
@@ -4071,7 +4490,7 @@ onMounted(loadHistory)
             <div class="flex flex-wrap gap-3">
               <B24Button
                 label="Назад"
-                color="air-tertiary"
+                color="air-primary"
                 size="lg"
                 :disabled="!canGoBack"
                 @click="goBack"
