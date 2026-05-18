@@ -9,6 +9,8 @@ from importer.services.import_execution import (
     build_linked_row_payload,
     build_row_payload,
     create_entity_record,
+    execute_import,
+    execute_linked_import,
     normalize_entity_dedup_settings,
 )
 
@@ -19,6 +21,117 @@ class FakeUsersRequest:
 
 
 class ImportExecutionServiceTest(SimpleTestCase):
+    @patch("importer.services.import_execution.BitrixUserResolver")
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
+    @patch("importer.services.import_execution.find_existing_record", return_value={})
+    @patch("importer.services.import_execution.create_entity_record", return_value=501)
+    @patch("importer.services.import_execution.build_row_payload", return_value={"TITLE": "Lead"})
+    @patch("importer.services.import_execution.time.sleep")
+    def test_execute_import_does_not_sleep_between_non_batch_rows(
+        self,
+        sleep,
+        _build_row_payload,
+        _create_entity_record,
+        _find_existing_record,
+        _batch_eligible,
+        _user_resolver,
+    ):
+        execute_import(
+            account=SimpleNamespace(),
+            entity_type="lead",
+            rows=[["Alpha"], ["Beta"]],
+            row_numbers=[2, 3],
+            columns=["A"],
+            data_start_row=2,
+            mapping={},
+            validation_summary={"issues": []},
+            fields=[],
+            dedup_settings={"strategy": "create"},
+        )
+
+        sleep.assert_not_called()
+
+    @patch("importer.services.import_execution.BitrixUserResolver")
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
+    @patch("importer.services.import_execution.find_existing_record", return_value={})
+    @patch("importer.services.import_execution.create_entity_record", return_value=501)
+    @patch("importer.services.import_execution.build_row_payload", return_value={"TITLE": "Lead"})
+    def test_execute_import_reports_progress_once_per_hundred_rows_by_default(
+        self,
+        _build_row_payload,
+        _create_entity_record,
+        _find_existing_record,
+        _batch_eligible,
+        _user_resolver,
+    ):
+        progress_updates = []
+
+        execute_import(
+            account=SimpleNamespace(),
+            entity_type="lead",
+            rows=[["Lead"]] * 101,
+            row_numbers=list(range(2, 103)),
+            columns=["A"],
+            data_start_row=2,
+            mapping={},
+            validation_summary={"issues": []},
+            fields=[],
+            dedup_settings={"strategy": "create"},
+            progress_callback=lambda **payload: progress_updates.append(payload),
+        )
+
+        self.assertEqual(
+            progress_updates,
+            [
+                {
+                    "checked_rows": 100,
+                    "created_rows": 99,
+                    "updated_rows": 0,
+                    "failed_rows": 0,
+                }
+            ],
+        )
+
+    @patch("importer.services.import_execution.BitrixUserResolver")
+    @patch("importer.services.import_execution.resolve_linked_record_action_with_decision")
+    @patch("importer.services.import_execution.create_entity_record", side_effect=[801, 901])
+    @patch("importer.services.import_execution.build_linked_row_payload")
+    @patch("importer.services.import_execution.time.sleep")
+    def test_execute_linked_import_does_not_sleep_between_rows(
+        self,
+        sleep,
+        build_linked_row_payload_mock,
+        _create_entity_record,
+        resolve_linked_record_action_with_decision,
+        _user_resolver,
+    ):
+        build_linked_row_payload_mock.return_value = {
+            "company": {"TITLE": "ООО Альфа"},
+            "contact": {"NAME": "Алиса"},
+        }
+        resolve_linked_record_action_with_decision.side_effect = [
+            {"mode": "create", "record_id": None, "meta": {}},
+            {"mode": "create", "record_id": None, "meta": {}},
+        ]
+
+        execute_linked_import(
+            account=SimpleNamespace(),
+            entity_type="linked_company_contact",
+            rows=[["ООО Альфа", "Алиса"]],
+            row_numbers=[2],
+            columns=["A", "B"],
+            data_start_row=2,
+            mapping={},
+            validation_summary={"issues": []},
+            fields=[],
+            dedup_settings={
+                "company": {"strategy": "create", "fields": [], "condition": "any"},
+                "contact": {"strategy": "create", "fields": [], "condition": "any"},
+            },
+        )
+
+        sleep.assert_not_called()
+
     def test_build_linked_row_payload_splits_company_and_contact_fields(self):
         payload = build_linked_row_payload(
             row=["ООО Альфа", "+78005550101", "Алиса", "Иванова", "alice@example.ru"],
@@ -391,6 +504,62 @@ class ImportExecutionServiceTest(SimpleTestCase):
                 "UF_CRM_WEIGHT": 12.5,
                 "UF_CRM_START_DATE": "2026-12-31",
                 "UF_CRM_VISIT_AT": "2026-12-31T18:45:00",
+            },
+        )
+
+    def test_build_row_payload_formats_excel_serial_dates(self):
+        payload = build_row_payload(
+            row=["46249", "46250"],
+            columns=["A", "B"],
+            mapping={
+                "UF_CRM_START_DATE": {
+                    "column": "A",
+                    "source_header": "Дата начала",
+                },
+                "UF_CRM_END_DATE": {
+                    "column": "B",
+                    "source_header": "Дата завершения",
+                },
+            },
+            fields=[
+                {"id": "UF_CRM_START_DATE", "type": "date", "multiple": False},
+                {"id": "UF_CRM_END_DATE", "type": "date", "multiple": False},
+            ],
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "UF_CRM_START_DATE": "2026-08-15",
+                "UF_CRM_END_DATE": "2026-08-16",
+            },
+        )
+
+    def test_build_row_payload_formats_excel_serial_datetimes(self):
+        payload = build_row_payload(
+            row=["46249.75", "46250.5"],
+            columns=["A", "B"],
+            mapping={
+                "START_DATE_PLAN": {
+                    "column": "A",
+                    "source_header": "Дата начала",
+                },
+                "END_DATE_PLAN": {
+                    "column": "B",
+                    "source_header": "Дата завершения",
+                },
+            },
+            fields=[
+                {"id": "START_DATE_PLAN", "type": "datetime", "multiple": False},
+                {"id": "END_DATE_PLAN", "type": "datetime", "multiple": False},
+            ],
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "START_DATE_PLAN": "2026-08-15T18:00:00",
+                "END_DATE_PLAN": "2026-08-16T12:00:00",
             },
         )
 
@@ -797,7 +966,7 @@ class ImportExecutionServiceTest(SimpleTestCase):
             },
         )
 
-    def test_smart_process_dedup_is_forced_to_create_only(self):
+    def test_smart_process_dedup_preserves_supported_strategy_and_fields(self):
         self.assertEqual(
             normalize_entity_dedup_settings(
                 "smart_process",
@@ -808,9 +977,9 @@ class ImportExecutionServiceTest(SimpleTestCase):
                 },
             ),
             {
-                "strategy": "create",
-                "fields": [],
-                "condition": "any",
+                "strategy": "update",
+                "fields": ["title"],
+                "condition": "all",
             },
         )
 

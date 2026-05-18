@@ -2619,6 +2619,220 @@ class ImportExecutionApiTest(TestCase):
             },
         )
 
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_dry_run_marks_smart_process_duplicate_for_update(self, get_from_jwt_token):
+        account = self.create_smart_process_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_smart_process_session(
+            [
+                ["Название", "Стадия", "Источник", "Доступно для всех"],
+                ["Согласование 1", "Новая", "ads", "yes"],
+            ]
+        )
+
+        def fake_b24_fields_request(*, bitrix_token=None, api_method=None, params=None):
+            if api_method == "crm.item.fields":
+                return SimpleNamespace(
+                    result={
+                        "title": {
+                            "title": "Название",
+                            "type": "string",
+                            "isRequired": True,
+                            "isReadOnly": False,
+                            "upperName": "TITLE",
+                        },
+                        "stageId": {
+                            "title": "Стадия",
+                            "type": "crm_status",
+                            "isRequired": False,
+                            "isReadOnly": False,
+                            "upperName": "STAGE_ID",
+                        },
+                        "sourceId": {
+                            "title": "Источник",
+                            "type": "crm_status",
+                            "isRequired": False,
+                            "isReadOnly": False,
+                            "upperName": "SOURCE_ID",
+                            "settings": {
+                                "statusType": "SOURCE",
+                            },
+                        },
+                        "opened": {
+                            "title": "Доступно для всех",
+                            "type": "boolean",
+                            "isRequired": False,
+                            "isReadOnly": False,
+                            "upperName": "OPENED",
+                        },
+                    }
+                )
+
+            if api_method == "crm.category.list":
+                return SimpleNamespace(result={"categories": []})
+
+            entity_id = str((((params or {}).get("filter") or {}).get("ENTITY_ID")) or "")
+            if api_method == "crm.status.list" and entity_id == "DYNAMIC_128_STAGE_0":
+                return SimpleNamespace(result={"statuses": [{"STATUS_ID": "DT128_0:NEW", "NAME": "Новая"}]})
+            if api_method == "crm.status.list" and entity_id == "SOURCE":
+                return SimpleNamespace(result={"statuses": [{"STATUS_ID": "ADVERTISING", "NAME": "Реклама"}]})
+
+            raise AssertionError(f"Unexpected Bitrix fields request: {api_method} {params}")
+
+        execution_calls = []
+
+        def fake_execution_request(*, bitrix_token=None, api_method=None, params=None):
+            execution_calls.append({"api_method": api_method, "params": params})
+            if api_method == "crm.item.list":
+                self.assertEqual(params, {
+                    "entityTypeId": 128,
+                    "select": ["id"],
+                    "filter": {
+                        "title": "Согласование 1",
+                    },
+                })
+                return SimpleNamespace(result={"items": [{"id": 911}]})
+            raise AssertionError(f"Unexpected Bitrix execution request: {api_method} {params}")
+
+        with patch("importer.services.b24_fields.BitrixAPIRequest", side_effect=fake_b24_fields_request), patch(
+            "importer.services.import_execution.BitrixAPIRequest",
+            side_effect=fake_execution_request,
+        ):
+            self.prepare_smart_process_session(session, validate=True)
+            session.refresh_from_db()
+            session.import_settings = {
+                **session.import_settings,
+                "dedup": {
+                    "strategy": "update",
+                    "fields": ["title"],
+                },
+            }
+            session.save(update_fields=["import_settings", "updated_at"])
+
+            response = self.run_session_dry_run(session)
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["results"], [
+            {
+                "row_number": 2,
+                "status": "ready_update",
+                "record_id": 911,
+                "duplicate_match_fields": ["title"],
+                "fields": {
+                    "title": "Согласование 1",
+                    "stageId": "DT128_0:NEW",
+                    "sourceId": "ADVERTISING",
+                    "opened": 1,
+                },
+            },
+        ])
+        self.assertEqual([call["api_method"] for call in execution_calls], ["crm.item.list"])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_updates_smart_process_duplicate_when_dedup_enabled(self, get_from_jwt_token):
+        account = self.create_smart_process_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_smart_process_session(
+            [
+                ["Название", "Стадия", "Источник", "Доступно для всех"],
+                ["Согласование 1", "Новая", "ads", "yes"],
+            ]
+        )
+
+        def fake_b24_fields_request(*, bitrix_token=None, api_method=None, params=None):
+            if api_method == "crm.item.fields":
+                return SimpleNamespace(
+                    result={
+                        "title": {
+                            "title": "Название",
+                            "type": "string",
+                            "isRequired": True,
+                            "isReadOnly": False,
+                            "upperName": "TITLE",
+                        },
+                        "stageId": {
+                            "title": "Стадия",
+                            "type": "crm_status",
+                            "isRequired": False,
+                            "isReadOnly": False,
+                            "upperName": "STAGE_ID",
+                        },
+                        "sourceId": {
+                            "title": "Источник",
+                            "type": "crm_status",
+                            "isRequired": False,
+                            "isReadOnly": False,
+                            "upperName": "SOURCE_ID",
+                            "settings": {
+                                "statusType": "SOURCE",
+                            },
+                        },
+                        "opened": {
+                            "title": "Доступно для всех",
+                            "type": "boolean",
+                            "isRequired": False,
+                            "isReadOnly": False,
+                            "upperName": "OPENED",
+                        },
+                    }
+                )
+
+            if api_method == "crm.category.list":
+                return SimpleNamespace(result={"categories": []})
+
+            entity_id = str((((params or {}).get("filter") or {}).get("ENTITY_ID")) or "")
+            if api_method == "crm.status.list" and entity_id == "DYNAMIC_128_STAGE_0":
+                return SimpleNamespace(result={"statuses": [{"STATUS_ID": "DT128_0:NEW", "NAME": "Новая"}]})
+            if api_method == "crm.status.list" and entity_id == "SOURCE":
+                return SimpleNamespace(result={"statuses": [{"STATUS_ID": "ADVERTISING", "NAME": "Реклама"}]})
+
+            raise AssertionError(f"Unexpected Bitrix fields request: {api_method} {params}")
+
+        execution_calls = []
+
+        def fake_execution_request(*, bitrix_token=None, api_method=None, params=None):
+            execution_calls.append({"api_method": api_method, "params": params})
+            if api_method == "crm.item.list":
+                return SimpleNamespace(result={"items": [{"id": 911}]})
+            if api_method == "crm.item.update":
+                self.assertEqual(params, {
+                    "entityTypeId": 128,
+                    "id": 911,
+                    "fields": {
+                        "title": "Согласование 1",
+                        "stageId": "DT128_0:NEW",
+                        "sourceId": "ADVERTISING",
+                        "opened": 1,
+                    },
+                })
+                return SimpleNamespace(result=True)
+            raise AssertionError(f"Unexpected Bitrix execution request: {api_method} {params}")
+
+        with patch("importer.services.b24_fields.BitrixAPIRequest", side_effect=fake_b24_fields_request), patch(
+            "importer.services.import_execution.BitrixAPIRequest",
+            side_effect=fake_execution_request,
+        ):
+            self.prepare_smart_process_session(session, validate=True)
+            session.refresh_from_db()
+            session.import_settings = {
+                **session.import_settings,
+                "dedup": {
+                    "strategy": "update",
+                    "fields": ["title"],
+                },
+            }
+            session.save(update_fields=["import_settings", "updated_at"])
+
+            response = self.run_session_import(session)
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 0)
+        self.assertEqual(response.json()["item"]["updated_rows"], 1)
+        self.assertEqual(response.json()["item"]["updated_ids"], [911])
+        self.assertEqual([call["api_method"] for call in execution_calls], ["crm.item.list", "crm.item.update"])
+
     @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_run_formats_contact_phone_as_bitrix_multifield(self, get_from_jwt_token, _batch):

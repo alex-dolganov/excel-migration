@@ -1,6 +1,6 @@
 export const EMPTY_MAPPING_SELECT_VALUE = '__skip_import__'
 export const SUPPORTED_DEDUP_FIELDS = ['EMAIL', 'PHONE', 'TITLE']  // legacy list kept for reference
-const _DEDUP_FIELD_RE = /^[A-Z][A-Z0-9_]*$/
+const _DEDUP_FIELD_RE = /^[A-Za-z][A-Za-z0-9_]*$/
 export const SUPPORTED_DEDUP_STRATEGIES = ['create', 'skip', 'update', 'ask']
 const IMPORT_MODE_OPTIONS = [
   {
@@ -41,7 +41,6 @@ const SIMPLE_MODE_DEDUP_UNSUPPORTED_TYPES = new Set([
   'crm_files_deal',
   'crm_activity',
   'crm_note',
-  'smart_process',
 ])
 export const ASSIGNABLE_IMPORTER_ROLES = ['operator', 'viewer']
 export const IMPORTER_PERMISSION_CODES = [
@@ -1194,7 +1193,7 @@ export function buildDedupPayload(settings) {
 
   const fields = Array.from(new Set(
     (Array.isArray(settings?.fields) ? settings.fields : [])
-      .map((field) => String(field || '').trim().toUpperCase())
+      .map((field) => String(field || '').trim())
       .filter((field) => field && _DEDUP_FIELD_RE.test(field)),
   ))
 

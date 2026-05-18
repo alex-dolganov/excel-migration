@@ -49,7 +49,7 @@ LINKED_COMPANY_CHILD_ENTITY_TYPES = {
 
 SUPPORTED_DEDUP_STRATEGIES = {"create", "skip", "update", "ask"}
 SUPPORTED_DEDUP_FIELDS = {"EMAIL", "PHONE", "TITLE"}   # legacy whitelist kept for reference
-_DEDUP_FIELD_RE = re.compile(r'^[A-Z][A-Z0-9_]*$')    # any valid Bitrix24 field name
+_DEDUP_FIELD_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_]*$')    # any valid Bitrix24 field name
 BITRIX_MULTIFIELD_IDS = {"PHONE", "EMAIL", "WEB", "IM"}
 TASK_CHILD_ENTITY_TYPES = {"task_comment", "task_checklist_item"}
 
@@ -674,7 +674,7 @@ def normalize_dedup_settings(dedup_settings) -> dict:
 
     normalized_fields = []
     for field_name in dedup_settings.get("fields", []):
-        normalized_field_name = str(field_name or "").strip().upper()
+        normalized_field_name = str(field_name or "").strip()
         if normalized_field_name and _DEDUP_FIELD_RE.match(normalized_field_name) and normalized_field_name not in normalized_fields:
             normalized_fields.append(normalized_field_name)
 
@@ -733,8 +733,6 @@ def normalize_linked_dedup_settings(dedup_settings, entity_type: str = LINKED_CO
 def normalize_entity_dedup_settings(entity_type: str, dedup_settings):
     if is_linked_import_entity_type(entity_type):
         return normalize_linked_dedup_settings(dedup_settings, entity_type=entity_type)
-    if str(entity_type or "").strip() == SMART_PROCESS_ENTITY_TYPE:
-        return normalize_dedup_settings({})
     return normalize_dedup_settings(dedup_settings)
 
 
@@ -945,12 +943,68 @@ def _find_hr_existing_record(account, entity_type: str, row_payload: dict, dedup
     }
 
 
-def find_existing_record(account, entity_type: str, row_payload: dict, dedup_settings: dict):
+def _find_smart_process_record_by_filter(account, entity_type_id: int, lookup_filter: dict):
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="crm.item.list",
+        params={
+            "entityTypeId": entity_type_id,
+            "filter": dict(lookup_filter or {}),
+            "select": ["id"],
+        },
+    )
+    return extract_record_id_from_list_response(response)
+
+
+def _find_smart_process_existing_record(account, row_payload: dict, dedup_settings: dict, *, context: dict | None = None):
+    smart_process_config = normalize_smart_process_entity_config((context or {}).get("entity_config"))
+    entity_type_id = smart_process_config["entityTypeId"]
+    lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, dedup_settings)
+    dedup_missing_fields = missing_fields if matched_fields and missing_fields else []
+
+    if not lookup_filter:
+        return None
+
+    condition = str(dedup_settings.get("condition") or "any")
+
+    if condition == "all":
+        record_id = _find_smart_process_record_by_filter(account, entity_type_id, lookup_filter)
+        if record_id is None:
+            if dedup_missing_fields:
+                return {"dedup_missing_fields": dedup_missing_fields}
+            return None
+        return {
+            "record_id": record_id,
+            "duplicate_match_fields": matched_fields,
+            "dedup_missing_fields": dedup_missing_fields,
+        }
+
+    for field_name, field_value in lookup_filter.items():
+        record_id = _find_smart_process_record_by_filter(account, entity_type_id, {field_name: field_value})
+        if record_id is not None:
+            return {
+                "record_id": record_id,
+                "duplicate_match_fields": [field_name],
+                "dedup_missing_fields": dedup_missing_fields,
+            }
+
+    if dedup_missing_fields:
+        return {
+            "dedup_missing_fields": dedup_missing_fields,
+        }
+
+    return None
+
+
+def find_existing_record(account, entity_type: str, row_payload: dict, dedup_settings: dict, *, context: dict | None = None):
     if dedup_settings["strategy"] == "create" or not dedup_settings["fields"]:
         return None
 
     if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES or entity_type in CRM_ACTIVITY_ENTITY_TYPES:
         return None
+
+    if entity_type == SMART_PROCESS_ENTITY_TYPE:
+        return _find_smart_process_existing_record(account, row_payload, dedup_settings, context=context)
 
     if entity_type in HR_ENTITY_TYPES:
         return _find_hr_existing_record(account, entity_type, row_payload, dedup_settings)
@@ -1007,7 +1061,7 @@ def find_existing_record(account, entity_type: str, row_payload: dict, dedup_set
     return None
 
 
-def build_dedup_lookup_cache_key(entity_type: str, row_payload: dict, dedup_settings: dict):
+def build_dedup_lookup_cache_key(entity_type: str, row_payload: dict, dedup_settings: dict, *, context: dict | None = None):
     if not isinstance(row_payload, dict) or not isinstance(dedup_settings, dict):
         return None
 
@@ -1043,6 +1097,20 @@ def build_dedup_lookup_cache_key(entity_type: str, row_payload: dict, dedup_sett
             ("ID", extract_dedup_lookup_value(row_payload.get("ID"))),
         )
 
+    if normalized_entity_type == SMART_PROCESS_ENTITY_TYPE:
+        smart_process_config = normalize_smart_process_entity_config((context or {}).get("entity_config"))
+        lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, dedup_settings)
+        return (
+            normalized_entity_type,
+            smart_process_config["entityTypeId"],
+            strategy,
+            condition,
+            fields,
+            tuple(sorted(lookup_filter.items())),
+            tuple(matched_fields),
+            tuple(missing_fields),
+        )
+
     lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, dedup_settings)
     return (
         normalized_entity_type,
@@ -1055,13 +1123,13 @@ def build_dedup_lookup_cache_key(entity_type: str, row_payload: dict, dedup_sett
     )
 
 
-def find_existing_record_cached(account, entity_type: str, row_payload: dict, dedup_settings: dict, *, cache=None):
-    cache_key = build_dedup_lookup_cache_key(entity_type, row_payload, dedup_settings)
+def find_existing_record_cached(account, entity_type: str, row_payload: dict, dedup_settings: dict, *, cache=None, context: dict | None = None):
+    cache_key = build_dedup_lookup_cache_key(entity_type, row_payload, dedup_settings, context=context)
     if not isinstance(cache, dict) or cache_key is None:
-        return find_existing_record(account, entity_type, row_payload, dedup_settings)
+        return find_existing_record(account, entity_type, row_payload, dedup_settings, context=context)
 
     if cache_key not in cache:
-        cache[cache_key] = find_existing_record(account, entity_type, row_payload, dedup_settings)
+        cache[cache_key] = find_existing_record(account, entity_type, row_payload, dedup_settings, context=context)
 
     return cache[cache_key]
 
@@ -1315,6 +1383,9 @@ def update_entity_record(account, entity_type: str, record_id, fields: dict):
     if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES or entity_type in CRM_ACTIVITY_ENTITY_TYPES:
         raise ValueError("Update is not supported for this entity type")
 
+    if entity_type == SMART_PROCESS_ENTITY_TYPE:
+        raise ValueError("Smart process update requires entity context")
+
     if entity_type == "user":
         _update_user(account, record_id, fields)
         return True
@@ -1334,6 +1405,20 @@ def update_entity_record(account, entity_type: str, record_id, fields: dict):
             lambda: update_method(id=record_id, fields=fields),
             lambda: update_method(record_id, fields=fields),
         ]
+    )
+    return unwrap_bitrix_result(response)
+
+
+def update_smart_process_record(account, entity_config: dict, record_id, fields: dict):
+    smart_process_config = normalize_smart_process_entity_config(entity_config)
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="crm.item.update",
+        params={
+            "entityTypeId": smart_process_config["entityTypeId"],
+            "id": record_id,
+            "fields": dict(fields),
+        },
     )
     return unwrap_bitrix_result(response)
 
@@ -2130,6 +2215,7 @@ def execute_dry_run(
     dedup_settings=None,
     default_field_values: dict | None = None,
     progress_callback=None,
+    entity_config: dict | None = None,
 ) -> dict:
     if is_linked_import_entity_type(entity_type):
         return execute_linked_dry_run(
@@ -2150,6 +2236,7 @@ def execute_dry_run(
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
     normalized_dedup_settings = normalize_dedup_settings(dedup_settings)
     user_resolver = BitrixUserResolver(account)
+    dry_run_context = {"entity_config": dict(entity_config)} if entity_type == SMART_PROCESS_ENTITY_TYPE and isinstance(entity_config, dict) else None
     dedup_lookup_cache: dict[tuple, dict | None] = {}
     checked_rows = 0
     ready_rows = 0
@@ -2204,6 +2291,7 @@ def execute_dry_run(
                 row_payload,
                 normalized_dedup_settings,
                 cache=dedup_lookup_cache,
+                context=dry_run_context,
             )
         )
         existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
@@ -2364,6 +2452,11 @@ def execute_import(
     pending_batch: list = []
     report_entity_config = (import_context or {}).get("entity_config") if isinstance(import_context, dict) else None
 
+    def _update_existing_record(record_id, row_payload: dict):
+        if entity_type == SMART_PROCESS_ENTITY_TYPE:
+            return update_smart_process_record(account, report_entity_config or {}, record_id, row_payload)
+        return update_entity_record(account, entity_type, record_id, row_payload)
+
     def _flush_pending_batch():
         nonlocal created_rows, failed_rows
         if not pending_batch:
@@ -2491,7 +2584,13 @@ def execute_import(
 
         try:
             existing_record_match = _bitrix_retry(
-                lambda: find_existing_record(account, entity_type, row_payload, normalized_dedup_settings)
+                lambda: find_existing_record(
+                    account,
+                    entity_type,
+                    row_payload,
+                    normalized_dedup_settings,
+                    context=import_context,
+                )
             )
         except Exception as error:
             failed_rows += 1
@@ -2563,7 +2662,7 @@ def execute_import(
                 continue
             elif row_decision == "update":
                 try:
-                    _bitrix_retry(lambda: update_entity_record(account, entity_type, existing_record_id, row_payload))
+                    _bitrix_retry(lambda: _update_existing_record(existing_record_id, row_payload))
                 except Exception as error:
                     failed_rows += 1
                     results.append(
@@ -2602,7 +2701,7 @@ def execute_import(
 
         if existing_record_id is not None and normalized_dedup_settings["strategy"] == "update":
             try:
-                _bitrix_retry(lambda: update_entity_record(account, entity_type, existing_record_id, row_payload))
+                _bitrix_retry(lambda: _update_existing_record(existing_record_id, row_payload))
             except Exception as error:
                 failed_rows += 1
                 results.append(

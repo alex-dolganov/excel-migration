@@ -2184,6 +2184,7 @@ def execute_import_session_dry_run_now(session: ImportSession, account) -> dict:
         dedup_settings=saved_dedup,
         default_field_values=task_default_field_values,
         progress_callback=_save_progress,
+        entity_config=get_session_entity_config(session),
     )
 
     summary = session.summary if isinstance(session.summary, dict) else {}

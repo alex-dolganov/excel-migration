@@ -234,7 +234,7 @@ const isDirectCrmEntityImport = computed(() => ['lead', 'contact', 'company', 'd
 const DEDUP_NONAPPLICABLE_TYPES = new Set([
   'task', 'task_comment', 'task_checklist_item', 'task_attachment',
   'crm_files_lead', 'crm_files_contact', 'crm_files_company', 'crm_files_deal',
-  'crm_activity', 'crm_note', 'smart_process',
+  'crm_activity', 'crm_note',
 ])
 const isDedupApplicable = computed(() => !DEDUP_NONAPPLICABLE_TYPES.has(entityType.value))
 const simpleDedupPreset = computed(() => buildSimpleDedupPreset({

@@ -1134,6 +1134,20 @@ test('builds dedup payload with supported strategy and normalized fields', () =>
   })
 })
 
+test('builds dedup payload for smart process fields without uppercasing camelCase ids', () => {
+  const payload = buildDedupPayload({
+    strategy: 'update',
+    fields: ['title', 'stageId', 'ufCrmSmartCode'],
+    condition: 'all',
+  })
+
+  assert.deepEqual(payload, {
+    strategy: 'update',
+    fields: ['title', 'stageId', 'ufCrmSmartCode'],
+    condition: 'all',
+  })
+})
+
 test('uses a non-empty select value for unmapped fields and normalizes it back to empty', () => {
   assert.equal(resolveMappingSelectValue(''), EMPTY_MAPPING_SELECT_VALUE)
   assert.equal(resolveMappingSelectValue('PHONE'), 'PHONE')
@@ -2627,6 +2641,16 @@ test('background dry run is polled separately and shows progress on step 6', () 
   assert.equal(importerWorkbenchSource.includes('async function resolveDryRunExecutionResult(sessionId: string, responseItem: Record<string, any> | null | undefined)'), true)
   assert.equal(importerWorkbenchSource.includes("busyAction.value === 'dry-run'"), true)
   assert.equal(importerWorkbenchSource.includes('Проверка дублей и тестовый импорт'), true)
+})
+
+test('importer workbench enables duplicate step for smart processes', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes("'crm_activity', 'crm_note', 'smart_process',"), false)
+  assert.equal(importerWorkbenchSource.includes("'crm_activity', 'crm_note',"), true)
 })
 
 test('final import results render 20 rows per page with compact bottom pagination', () => {
