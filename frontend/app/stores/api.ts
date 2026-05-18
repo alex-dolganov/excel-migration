@@ -166,6 +166,25 @@ export const useApiStore = defineStore(
       })
     }
 
+    const getImportFields = async (
+      entityType: string,
+      entityConfig?: Record<string, any> | null,
+    ): Promise<{ items: Record<string, any>[] }> => {
+      const searchParams = new URLSearchParams()
+      if (entityType) {
+        searchParams.set('entity_type', entityType)
+      }
+      if (entityType === 'smart_process' && entityConfig?.entityTypeId) {
+        searchParams.set('entity_type_id', String(entityConfig.entityTypeId))
+      }
+
+      return await $api(`/api/import-fields?${searchParams.toString()}`, {
+        headers: {
+          Authorization: `Bearer ${tokenJWT.value}`
+        }
+      })
+    }
+
     const getImportTemplates = async (
       entityType: string,
       entityConfig?: Record<string, any> | null,
@@ -179,6 +198,25 @@ export const useApiStore = defineStore(
       }
 
       return await $api(`/api/import-templates?${searchParams.toString()}`, {
+        headers: {
+          Authorization: `Bearer ${tokenJWT.value}`
+        }
+      })
+    }
+
+    const getImportAliasRules = async (
+      entityType: string,
+      entityConfig?: Record<string, any> | null,
+    ): Promise<{ items: Record<string, any>[] }> => {
+      const searchParams = new URLSearchParams()
+      if (entityType) {
+        searchParams.set('entity_type', entityType)
+      }
+      if (entityType === 'smart_process' && entityConfig?.entityTypeId) {
+        searchParams.set('entity_type_id', String(entityConfig.entityTypeId))
+      }
+
+      return await $api(`/api/import-alias-rules?${searchParams.toString()}`, {
         headers: {
           Authorization: `Bearer ${tokenJWT.value}`
         }
@@ -220,6 +258,7 @@ export const useApiStore = defineStore(
       dedup: Record<string, any>,
       options: {
         default_responsible_id?: string
+        default_creator_id?: string
         default_comment_author_id?: string
       } = {},
     ): Promise<{ item: Record<string, any> }> => {
@@ -244,6 +283,24 @@ export const useApiStore = defineStore(
           Authorization: `Bearer ${tokenJWT.value}`
         },
         body: JSON.stringify({ session_id: sessionId, name, mapping, dedup }),
+      })
+    }
+
+    const saveImportAliasRule = async (
+      sessionId: string,
+      sourceLabel: string,
+      targetFieldId: string,
+    ): Promise<{ item: Record<string, any> }> => {
+      return await $api('/api/import-alias-rules', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tokenJWT.value}`
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          source_label: sourceLabel,
+          target_field_id: targetFieldId,
+        }),
       })
     }
 
@@ -474,12 +531,15 @@ export const useApiStore = defineStore(
       getImportPreview,
       updateImportPreview,
       getImportMapping,
+      getImportFields,
       getImportTemplates,
+      getImportAliasRules,
       getImportPermissions,
       getImportRoles,
       saveImportMapping,
       saveImportRole,
       saveImportTemplate,
+      saveImportAliasRule,
       applyImportTemplate,
       validateImportSession,
       dryRunImportSession,

@@ -3,7 +3,10 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from importer.services.import_execution import _flush_crm_batch
+from b24pysdk.error import BitrixRequestTimeout
+import requests
+
+from importer.services.import_execution import _flush_crm_batch, _flush_crm_batch_with_fallback
 
 
 class ImportExecutionBatchTest(SimpleTestCase):
@@ -56,3 +59,48 @@ class ImportExecutionBatchTest(SimpleTestCase):
         self.assertEqual(results[0]["error"], "Bitrix24 не подтвердил создание записи: ID не получен.")
         self.assertEqual(results[0]["report_entity"], "Сделка")
         self.assertEqual(results[0]["report_title"], "Редизайн сайта")
+
+    @patch("importer.services.import_execution._flush_crm_batch")
+    def test_flush_crm_batch_with_fallback_splits_timeout_batch_until_rows_succeed(self, flush_crm_batch):
+        def fake_flush(_account, _entity_type, pending_batch):
+            if len(pending_batch) > 1:
+                raise BitrixRequestTimeout(
+                    requests.exceptions.ReadTimeout("Read timed out. (read timeout=10)"),
+                    timeout=10,
+                )
+
+            row_number, payload = pending_batch[0]
+            record_id = 900 + row_number
+            return (
+                [
+                    {
+                        "row_number": row_number,
+                        "status": "created",
+                        "record_id": record_id,
+                        "report_entity": "Сделка",
+                        "report_title": payload["TITLE"],
+                    }
+                ],
+                1,
+                0,
+                [record_id],
+            )
+
+        flush_crm_batch.side_effect = fake_flush
+
+        results, created_count, failed_count, created_ids = _flush_crm_batch_with_fallback(
+            SimpleNamespace(),
+            "deal",
+            [
+                (2, {"TITLE": "Сделка 2"}),
+                (3, {"TITLE": "Сделка 3"}),
+                (4, {"TITLE": "Сделка 4"}),
+                (5, {"TITLE": "Сделка 5"}),
+            ],
+        )
+
+        self.assertEqual(created_count, 4)
+        self.assertEqual(failed_count, 0)
+        self.assertEqual(created_ids, [902, 903, 904, 905])
+        self.assertEqual([item["row_number"] for item in results], [2, 3, 4, 5])
+        self.assertTrue(flush_crm_batch.call_count > 1)

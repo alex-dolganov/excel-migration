@@ -630,6 +630,32 @@ test('builds summary for required fields with default task responsible satisfyin
   })
 })
 
+test('builds summary for required fields with default task creator satisfying missing mapping', () => {
+  const summary = buildRequiredFieldSummary({
+    fields: [
+      { id: 'TITLE', title: 'Task title', required: true },
+      { id: 'CREATED_BY', title: 'Creator user ID', required: true },
+    ],
+    mappingRows: [
+      { targetFieldId: 'TITLE' },
+    ],
+    defaultFieldIds: ['CREATED_BY'],
+  })
+
+  assert.deepEqual(summary, {
+    totalRequired: 2,
+    mappedRequired: 2,
+    missingRequiredCount: 0,
+    hasRequiredFields: true,
+    hasMissingRequired: false,
+    requiredFields: [
+      { id: 'TITLE', title: 'Task title' },
+      { id: 'CREATED_BY', title: 'Creator user ID' },
+    ],
+    missingRequired: [],
+  })
+})
+
 test('builds summary for required fields with ignored contact fields', () => {
   const summary = buildRequiredFieldSummary({
     fields: [
@@ -2189,6 +2215,18 @@ test('importer workbench supports default author selection for task comments', (
   assert.equal(importerWorkbenchSource.includes('AUTHOR_ID'), true)
 })
 
+test('importer workbench supports default creator selection for tasks', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes("const taskDefaultCreatorId = ref('')"), true)
+  assert.equal(importerWorkbenchSource.includes("...(taskDefaultCreatorId.value ? ['CREATED_BY'] : [])"), true)
+  assert.equal(importerWorkbenchSource.includes('Постановщик по умолчанию'), true)
+  assert.equal(importerWorkbenchSource.includes('CREATED_BY'), true)
+})
+
 test('step 1 no longer renders quick start block', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
@@ -2561,8 +2599,22 @@ test('dedup step can be skipped without enabling duplicate checks', () => {
   assert.equal(importerWorkbenchSource.includes('async function skipDedupStep()'), true)
   assert.equal(importerWorkbenchSource.includes("dedupStrategy.value = 'create'"), true)
   assert.equal(importerWorkbenchSource.includes("dedupFields.value = []"), true)
-  assert.equal(importerWorkbenchSource.includes('await runValidation()'), true)
+  assert.equal(importerWorkbenchSource.includes('async function executeValidation({'), true)
+  assert.equal(importerWorkbenchSource.includes('persistDedup = true'), true)
+  assert.equal(importerWorkbenchSource.includes("busyState = 'validation'"), true)
+  assert.equal(importerWorkbenchSource.includes("persistDedup: false"), true)
+  assert.equal(importerWorkbenchSource.includes("busyState: 'dedup-skip'"), true)
   assert.equal(importerWorkbenchSource.includes('label="Пропустить шаг"'), true)
+})
+
+test('validation step empty state points to real import after checks pass', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('empty="Ошибок не найдено. Можно запускать импорт."'), true)
+  assert.equal(importerWorkbenchSource.includes('empty="Ошибок не найдено. Можно запускать тестовый импорт."'), false)
 })
 
 test('validation and execution persist pending dedup changes automatically', () => {
@@ -2639,8 +2691,10 @@ test('background dry run is polled separately and shows progress on step 6', () 
   assert.equal(importerWorkbenchSource.includes('const sessionJobMode = computed(() => String(session.value?.summary?.job?.mode || \'\').trim())'), true)
   assert.equal(importerWorkbenchSource.includes('async function waitForDryRunExecutionResult(sessionId: string)'), true)
   assert.equal(importerWorkbenchSource.includes('async function resolveDryRunExecutionResult(sessionId: string, responseItem: Record<string, any> | null | undefined)'), true)
-  assert.equal(importerWorkbenchSource.includes("busyAction.value === 'dry-run'"), true)
-  assert.equal(importerWorkbenchSource.includes('Проверка дублей и тестовый импорт'), true)
+  assert.equal(importerWorkbenchSource.includes("['run', 'retry'].includes(String(busyAction.value || '').trim())"), true)
+  assert.equal(importerWorkbenchSource.includes('const showsDedupProgress = computed(() => ('), true)
+  assert.equal(importerWorkbenchSource.includes('Проверяем дубли и готовим следующий шаг'), true)
+  assert.equal(importerWorkbenchSource.includes('Проверка дублей и тестовый импорт'), false)
 })
 
 test('importer workbench enables duplicate step for smart processes', () => {

@@ -563,6 +563,70 @@ class ImportExecutionServiceTest(SimpleTestCase):
             },
         )
 
+    def test_build_row_payload_normalizes_typed_task_custom_field_values(self):
+        payload = build_row_payload(
+            row=["да", "31.12.2026", "Новая; В работе"],
+            columns=["A", "B", "C"],
+            mapping={
+                "UF_AUTO_100500": {
+                    "column": "A",
+                    "source_header": "Флаг",
+                },
+                "UF_AUTO_100501": {
+                    "column": "B",
+                    "source_header": "Дата начала",
+                },
+                "UF_AUTO_100502": {
+                    "column": "C",
+                    "source_header": "Этап",
+                },
+            },
+            fields=[
+                {"id": "UF_AUTO_100500", "type": "boolean", "multiple": False},
+                {"id": "UF_AUTO_100501", "type": "date", "multiple": False},
+                {
+                    "id": "UF_AUTO_100502",
+                    "type": "enumeration",
+                    "multiple": True,
+                    "items": [
+                        {"id": "32", "title": "Новая"},
+                        {"id": "33", "title": "В работе"},
+                    ],
+                },
+            ],
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "UF_AUTO_100500": "Y",
+                "UF_AUTO_100501": "2026-12-31",
+                "UF_AUTO_100502": ["32", "33"],
+            },
+        )
+
+    def test_build_row_payload_normalizes_false_task_custom_boolean_values(self):
+        payload = build_row_payload(
+            row=["нет"],
+            columns=["A"],
+            mapping={
+                "UF_AUTO_100500": {
+                    "column": "A",
+                    "source_header": "Флаг",
+                },
+            },
+            fields=[
+                {"id": "UF_AUTO_100500", "type": "boolean", "multiple": False},
+            ],
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "UF_AUTO_100500": "N",
+            },
+        )
+
     def test_build_row_payload_formats_task_user_role_fields(self):
         payload = build_row_payload(
             row=["Task A", "59", "77; 78", "91\n92", "31.12.2026 18:45"],
@@ -702,6 +766,33 @@ class ImportExecutionServiceTest(SimpleTestCase):
             {
                 "TITLE": "Task A",
                 "RESPONSIBLE_ID": 59,
+            },
+        )
+
+    def test_build_row_payload_applies_default_task_creator_when_mapping_is_missing(self):
+        payload = build_row_payload(
+            row=["Task A"],
+            columns=["A"],
+            mapping={
+                "TITLE": {
+                    "column": "A",
+                    "source_header": "Task title",
+                },
+            },
+            fields=[
+                {"id": "TITLE", "type": "string", "multiple": False},
+                {"id": "CREATED_BY", "type": "integer", "multiple": False},
+            ],
+            default_field_values={
+                "CREATED_BY": "17",
+            },
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "TITLE": "Task A",
+                "CREATED_BY": 17,
             },
         )
 
@@ -847,6 +938,32 @@ class ImportExecutionServiceTest(SimpleTestCase):
                 "FIELDS": {
                     "POST_MESSAGE": "Status update",
                     "AUTHOR_ID": 59,
+                }
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    def test_create_task_falls_back_to_raw_api_when_task_scope_is_unavailable(self, bitrix_api_request):
+        bitrix_api_request.return_value = SimpleNamespace(result={"task": {"id": 915}})
+        account = SimpleNamespace(client=SimpleNamespace())
+
+        result = create_entity_record(
+            account,
+            "task",
+            {
+                "TITLE": "Task A",
+                "CREATED_BY": 17,
+            },
+        )
+
+        self.assertEqual(result, 915)
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="tasks.task.add",
+            params={
+                "fields": {
+                    "TITLE": "Task A",
+                    "CREATED_BY": 17,
                 }
             },
         )

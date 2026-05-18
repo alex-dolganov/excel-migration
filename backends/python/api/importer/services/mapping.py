@@ -42,6 +42,8 @@ TOKEN_ALIASES = {
 TOKEN_SEQUENCE_ALIASES = {
     ("lead", "name"): ("lead", "title"),
     ("lead", "title"): ("title",),
+    ("task", "title"): ("title",),
+    ("title", "task"): ("title",),
     ("mobile", "phone"): ("phone",),
     ("e", "mail"): ("email",),
     ("эл", "почта"): ("email",),
@@ -49,6 +51,7 @@ TOKEN_SEQUENCE_ALIASES = {
     ("title", "компании"): ("title",),
     ("title", "сделки"): ("title",),
     ("title", "лида"): ("title",),
+    ("title", "задачи"): ("title",),
     ("type", "сделки"): ("type",),
     ("phone", "компании"): ("phone",),
     ("phone", "контакта"): ("phone",),

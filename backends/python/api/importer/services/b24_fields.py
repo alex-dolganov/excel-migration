@@ -132,6 +132,11 @@ TASK_FIELDS = [
         "items": [],
     },
 ]
+TASK_SYSTEM_FIELD_IDS = {
+    str(field.get("id") or "").strip()
+    for field in TASK_FIELDS
+    if str(field.get("id") or "").strip()
+}
 
 
 TASK_COMMENT_FIELDS = [
@@ -620,6 +625,20 @@ STATIC_FIELD_CATALOGS = {
     "crm_note": CRM_NOTE_FIELDS,
 }
 SMART_PROCESS_ENTITY_TYPE = "smart_process"
+TASK_USERFIELD_TYPE_MAP = {
+    "string": "string",
+    "double": "double",
+    "integer": "integer",
+    "datetime": "datetime",
+    "date": "date",
+    "boolean": "boolean",
+    "enumeration": "enumeration",
+    "file": "file",
+    "disk_file": "file",
+    "employee": "integer",
+    "crm": "string",
+    "url": "string",
+}
 
 CONTACT_OPTIONAL_NAME_FIELDS = {"NAME", "LAST_NAME", "SECOND_NAME"}
 LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
@@ -685,6 +704,13 @@ STANDARD_CRM_STATUS_ENTITY_IDS = {
         "TYPE_ID": ("DEAL_TYPE",),
         "STAGE_ID": ("DEAL_STAGE",),
     },
+}
+STANDARD_CRM_FRIENDLY_FIELD_TITLES = {
+    "UTM_SOURCE": "Сквозная аналитика: источник",
+    "UTM_MEDIUM": "Сквозная аналитика: тип трафика",
+    "UTM_CAMPAIGN": "Сквозная аналитика: кампания",
+    "UTM_CONTENT": "Сквозная аналитика: содержание",
+    "UTM_TERM": "Сквозная аналитика: ключевая фраза",
 }
 
 
@@ -769,9 +795,10 @@ def _extract_field_label_value(value: Any) -> str:
 
 def _resolve_bitrix_field_title(field_id: str, field_meta: dict[str, Any]) -> str:
     normalized_field_id = str(field_id or "").strip()
+    normalized_upper_name = str(field_meta.get("upperName") or "").strip().upper()
     machine_names = {
         normalized_field_id.upper(),
-        str(field_meta.get("upperName") or "").strip().upper(),
+        normalized_upper_name,
     }
     label_keys = (
         "title",
@@ -804,7 +831,12 @@ def _resolve_bitrix_field_title(field_id: str, field_meta: dict[str, Any]) -> st
         if label_value.upper() not in machine_names:
             return label_value
 
-    return fallback_title or normalized_field_id
+    friendly_title = STANDARD_CRM_FRIENDLY_FIELD_TITLES.get(normalized_field_id.upper()) or STANDARD_CRM_FRIENDLY_FIELD_TITLES.get(normalized_upper_name)
+    resolved_title = fallback_title or normalized_field_id
+    if friendly_title and resolved_title.upper() in machine_names:
+        return friendly_title
+
+    return resolved_title
 
 
 def normalize_fields_result(fields_result: dict[str, Any], entity_type: str = "") -> list[dict]:
@@ -888,6 +920,96 @@ def unwrap_smart_process_fields_result(result):
         return wrapped_result["fields"]
 
     return result
+
+
+def unwrap_task_fields_result(result):
+    if not isinstance(result, dict):
+        return result
+
+    wrapped_fields = result.get("fields")
+    if isinstance(wrapped_fields, dict):
+        return wrapped_fields
+
+    wrapped_result = result.get("result")
+    if isinstance(wrapped_result, dict) and isinstance(wrapped_result.get("fields"), dict):
+        return wrapped_result["fields"]
+
+    return result
+
+
+def extract_task_userfield_items(result) -> list[dict]:
+    if isinstance(result, dict):
+        for key in ("items", "result", "userFields", "user_fields"):
+            items = result.get(key)
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
+
+    if isinstance(result, list):
+        return [item for item in result if isinstance(item, dict)]
+
+    return []
+
+
+def normalize_task_userfield_result(task_userfield_meta: dict[str, Any]) -> dict | None:
+    if not isinstance(task_userfield_meta, dict):
+        return None
+
+    field_id = str(
+        task_userfield_meta.get("FIELD_NAME")
+        or task_userfield_meta.get("fieldName")
+        or task_userfield_meta.get("field_name")
+        or ""
+    ).strip()
+    if not field_id:
+        return None
+
+    settings = task_userfield_meta.get("SETTINGS") if isinstance(task_userfield_meta.get("SETTINGS"), dict) else {}
+    user_type_id = str(
+        task_userfield_meta.get("USER_TYPE_ID")
+        or task_userfield_meta.get("userTypeId")
+        or task_userfield_meta.get("user_type_id")
+        or task_userfield_meta.get("type")
+        or "string"
+    ).strip().lower()
+    normalized_type = TASK_USERFIELD_TYPE_MAP.get(user_type_id, user_type_id or "string")
+    normalized_fields = normalize_fields_result(
+        {
+            field_id: {
+                "title": task_userfield_meta.get("EDIT_FORM_LABEL")
+                or task_userfield_meta.get("editFormLabel")
+                or task_userfield_meta.get("LIST_COLUMN_LABEL")
+                or task_userfield_meta.get("listColumnLabel")
+                or task_userfield_meta.get("LIST_FILTER_LABEL")
+                or task_userfield_meta.get("listFilterLabel")
+                or task_userfield_meta.get("LABEL")
+                or task_userfield_meta.get("label")
+                or task_userfield_meta.get("FIELD_NAME")
+                or task_userfield_meta.get("fieldName")
+                or field_id,
+                "formLabel": task_userfield_meta.get("EDIT_FORM_LABEL")
+                or task_userfield_meta.get("editFormLabel")
+                or task_userfield_meta.get("LABEL")
+                or task_userfield_meta.get("label"),
+                "editFormLabel": task_userfield_meta.get("EDIT_FORM_LABEL")
+                or task_userfield_meta.get("editFormLabel"),
+                "listColumnLabel": task_userfield_meta.get("LIST_COLUMN_LABEL")
+                or task_userfield_meta.get("listColumnLabel"),
+                "filterLabel": task_userfield_meta.get("LIST_FILTER_LABEL")
+                or task_userfield_meta.get("listFilterLabel"),
+                "type": normalized_type,
+                "isRequired": task_userfield_meta.get("MANDATORY", task_userfield_meta.get("mandatory")),
+                "isMultiple": task_userfield_meta.get("MULTIPLE", task_userfield_meta.get("multiple")),
+                "items": task_userfield_meta.get("LIST")
+                or settings.get("LIST")
+                or task_userfield_meta.get("items")
+                or settings.get("items")
+                or [],
+            }
+        },
+        entity_type="task",
+    )
+    return normalized_fields[0] if normalized_fields else None
 
 
 def normalize_smart_process_entity_config(entity_config: Any) -> dict:
@@ -1285,21 +1407,95 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
         except Exception:
             task_fields_result = None
 
-        if isinstance(task_fields_result, dict):
-            normalized_task_fields = normalize_fields_result(task_fields_result, entity_type=entity_type)
-            normalized_task_fields_by_id = {
-                str(field.get("id") or "").strip(): field
-                for field in normalized_task_fields
-                if str(field.get("id") or "").strip()
-            }
-            for static_field in TASK_FIELDS:
-                normalized_task_fields_by_id.setdefault(str(static_field["id"]), dict(static_field))
-            return sorted(
-                normalized_task_fields_by_id.values(),
-                key=lambda item: (item["is_custom"], item["title"], item["id"]),
-            )
+        task_fields_payload = unwrap_task_fields_result(task_fields_result)
+        normalized_task_fields = normalize_fields_result(task_fields_payload, entity_type=entity_type) if isinstance(task_fields_payload, dict) else []
+        normalized_task_fields = [
+            field
+            for field in normalized_task_fields
+            if str(field.get("id") or "").strip() in TASK_SYSTEM_FIELD_IDS or bool(field.get("is_custom"))
+        ]
+        normalized_task_fields_by_id = {
+            str(field.get("id") or "").strip(): field
+            for field in normalized_task_fields
+            if str(field.get("id") or "").strip()
+        }
 
-        return [dict(field) for field in TASK_FIELDS]
+        task_userfields_result = None
+        try:
+            task_userfields_result = unwrap_bitrix_result(
+                BitrixAPIRequest(
+                    bitrix_token=account,
+                    api_method="task.item.userfield.getlist",
+                    params={"ORDER": {"SORT": "ASC"}},
+                )
+            )
+        except Exception:
+            task_userfields_result = None
+
+        for task_userfield_item in extract_task_userfield_items(task_userfields_result):
+            field_id = str(task_userfield_item.get("FIELD_NAME") or "").strip()
+            if not field_id:
+                continue
+
+            task_userfield_meta = task_userfield_item
+            existing_field = normalized_task_fields_by_id.get(field_id)
+            user_type_id = str(task_userfield_item.get("USER_TYPE_ID") or "").strip().lower()
+            needs_detail_lookup = (
+                existing_field is None
+                or str(existing_field.get("title") or "").strip().upper() == field_id.upper()
+                or (user_type_id == "enumeration" and not isinstance(existing_field.get("items"), list))
+                or (user_type_id == "enumeration" and not existing_field.get("items"))
+            )
+            if needs_detail_lookup:
+                raw_task_userfield_id = task_userfield_item.get("ID")
+                task_userfield_id = int(raw_task_userfield_id) if str(raw_task_userfield_id or "").strip().isdigit() else raw_task_userfield_id
+                if task_userfield_id not in (None, ""):
+                    try:
+                        task_userfield_meta = unwrap_bitrix_result(
+                            BitrixAPIRequest(
+                                bitrix_token=account,
+                                api_method="task.item.userfield.get",
+                                params={"ID": task_userfield_id},
+                            )
+                        )
+                    except Exception:
+                        task_userfield_meta = task_userfield_item
+
+            normalized_task_userfield = normalize_task_userfield_result(task_userfield_meta)
+            if normalized_task_userfield is None:
+                continue
+
+            if existing_field is None:
+                normalized_task_fields_by_id[field_id] = normalized_task_userfield
+                continue
+
+            existing_title = str(existing_field.get("title") or "").strip()
+            if not existing_title or existing_title.upper() == field_id.upper():
+                existing_field = {**existing_field, "title": normalized_task_userfield["title"]}
+
+            if not existing_field.get("items") and normalized_task_userfield.get("items"):
+                existing_field = {**existing_field, "items": normalized_task_userfield["items"]}
+
+            existing_type = str(existing_field.get("type") or "").strip().lower()
+            normalized_type = str(normalized_task_userfield.get("type") or "").strip().lower()
+            if existing_type in {"", "string"} and normalized_type not in {"", "string"}:
+                existing_field = {**existing_field, "type": normalized_task_userfield["type"]}
+
+            if not existing_field.get("multiple") and normalized_task_userfield.get("multiple"):
+                existing_field = {**existing_field, "multiple": normalized_task_userfield["multiple"]}
+
+            if not existing_field.get("required") and normalized_task_userfield.get("required"):
+                existing_field = {**existing_field, "required": normalized_task_userfield["required"]}
+
+            normalized_task_fields_by_id[field_id] = {**existing_field, "is_custom": True}
+
+        for static_field in TASK_FIELDS:
+            normalized_task_fields_by_id.setdefault(str(static_field["id"]), dict(static_field))
+
+        return sorted(
+            normalized_task_fields_by_id.values(),
+            key=lambda item: (item["is_custom"], item["title"], item["id"]),
+        )
 
     static_catalog = STATIC_FIELD_CATALOGS.get(entity_type)
     if static_catalog is not None:

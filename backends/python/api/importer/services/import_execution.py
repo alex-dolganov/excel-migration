@@ -432,7 +432,11 @@ def normalize_typed_field_value(field: dict, target_field: str, value, column_ty
     field_type = resolve_field_validation_type(field, target_field, column_type_override)
 
     if field_type in {"boolean", "bool"}:
-        return parse_boolean_value(normalized_value)
+        parsed_boolean_value = parse_boolean_value(normalized_value)
+        field_id = str(field.get("id") or target_field or "").strip().upper()
+        if field_id.startswith("UF_") and not field_id.startswith("UF_CRM_"):
+            return "Y" if parsed_boolean_value else "N"
+        return parsed_boolean_value
 
     if field_type in {"integer", "int"}:
         return parse_integer_value(normalized_value)
@@ -1590,7 +1594,9 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
             task_fields["PARENT_ID"] = _resolve_task_reference_id(
                 task_fields.get("PARENT_ID"), "PARENT_ID", task_resolver=task_resolver
             )
-        task_scope = get_entity_scope(account.client, "task")
+        client = getattr(account, "client", None)
+        tasks_root = getattr(client, "tasks", None)
+        task_scope = getattr(tasks_root, "task", None) or getattr(tasks_root, "tasks", None)
         add_method = getattr(task_scope, "add", None)
         if add_method is not None:
             response = invoke_with_fallbacks(

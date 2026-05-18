@@ -206,15 +206,19 @@ def normalize_task_defaults(payload, account=None) -> dict:
         return {}
 
     raw_default_responsible_id = payload.get("default_responsible_id")
+    raw_default_creator_id = payload.get("default_creator_id")
     raw_default_comment_author_id = payload.get("default_comment_author_id")
     if raw_default_responsible_id is None and isinstance(payload.get("task_defaults"), dict):
         raw_default_responsible_id = payload.get("task_defaults", {}).get("default_responsible_id")
+    if raw_default_creator_id is None and isinstance(payload.get("task_defaults"), dict):
+        raw_default_creator_id = payload.get("task_defaults", {}).get("default_creator_id")
     if raw_default_comment_author_id is None and isinstance(payload.get("task_defaults"), dict):
         raw_default_comment_author_id = payload.get("task_defaults", {}).get("default_comment_author_id")
 
     normalized_default_responsible_id = str(raw_default_responsible_id or "").strip()
+    normalized_default_creator_id = str(raw_default_creator_id or "").strip()
     normalized_default_comment_author_id = str(raw_default_comment_author_id or "").strip()
-    if not normalized_default_responsible_id and not normalized_default_comment_author_id:
+    if not normalized_default_responsible_id and not normalized_default_creator_id and not normalized_default_comment_author_id:
         return {}
 
     if account is not None and normalized_default_responsible_id:
@@ -222,6 +226,12 @@ def normalize_task_defaults(payload, account=None) -> dict:
         if resolved_default_responsible_id is None:
             raise ValueError("Default responsible user must be a valid Bitrix user")
         normalized_default_responsible_id = str(resolved_default_responsible_id)
+
+    if account is not None and normalized_default_creator_id:
+        resolved_default_creator_id = BitrixUserResolver(account).resolve(normalized_default_creator_id)
+        if resolved_default_creator_id is None:
+            raise ValueError("Default creator user must be a valid Bitrix user")
+        normalized_default_creator_id = str(resolved_default_creator_id)
 
     if account is not None and normalized_default_comment_author_id:
         resolved_default_comment_author_id = BitrixUserResolver(account).resolve(normalized_default_comment_author_id)
@@ -232,6 +242,8 @@ def normalize_task_defaults(payload, account=None) -> dict:
     task_defaults = {}
     if normalized_default_responsible_id:
         task_defaults["default_responsible_id"] = normalized_default_responsible_id
+    if normalized_default_creator_id:
+        task_defaults["default_creator_id"] = normalized_default_creator_id
     if normalized_default_comment_author_id:
         task_defaults["default_comment_author_id"] = normalized_default_comment_author_id
     return task_defaults
@@ -243,12 +255,13 @@ def build_task_default_field_values(entity_type: str, task_defaults: dict | None
 
     if entity_type == ImportSession.EntityType.TASK:
         default_responsible_id = str(task_defaults.get("default_responsible_id") or "").strip()
-        if not default_responsible_id:
-            return {}
-
-        return {
-            "RESPONSIBLE_ID": default_responsible_id,
-        }
+        default_creator_id = str(task_defaults.get("default_creator_id") or "").strip()
+        default_field_values = {}
+        if default_responsible_id:
+            default_field_values["RESPONSIBLE_ID"] = default_responsible_id
+        if default_creator_id:
+            default_field_values["CREATED_BY"] = default_creator_id
+        return default_field_values
 
     if entity_type == ImportSession.EntityType.TASK_COMMENT:
         default_comment_author_id = str(task_defaults.get("default_comment_author_id") or "").strip()
@@ -1893,6 +1906,7 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
             task_defaults = normalize_task_defaults(
                 {
                     "default_responsible_id": (request.data or {}).get("default_responsible_id"),
+                    "default_creator_id": (request.data or {}).get("default_creator_id"),
                     "default_comment_author_id": (request.data or {}).get("default_comment_author_id"),
                     "task_defaults": import_settings.get("task_defaults", {}),
                 },

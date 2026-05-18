@@ -490,6 +490,30 @@ class ImportMappingApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_task_session_with_headers(self, headers, data_rows, *, filename="tasks-custom.xlsx"):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.TASK,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets(
+                    [
+                        ("Tasks", [headers, *data_rows]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def create_uploaded_linked_company_contact_session_with_custom_rows(
         self,
         rows,
@@ -979,6 +1003,85 @@ class ImportMappingApiTest(TestCase):
                 },
             ],
         })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_auto_matches_task_headers_and_ignores_internal_task_fields(self, get_from_jwt_token):
+        def get_users(*, filter=None, select=None):
+            return FakeUsersRequest([])
+
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                tasks=SimpleNamespace(
+                    task=SimpleNamespace(
+                        getFields=lambda: FakeFieldsRequest(
+                            {
+                                "fields": {
+                                    "TITLE": {
+                                        "title": "Title",
+                                        "type": "string",
+                                        "required": True,
+                                    },
+                                    "RESPONSIBLE_ID": {
+                                        "title": "Responsible",
+                                        "type": "integer",
+                                        "required": True,
+                                    },
+                                    "isPinned": {
+                                        "title": "Is pinned",
+                                        "type": "boolean",
+                                    },
+                                }
+                            }
+                        )
+                    )
+                ),
+                user=SimpleNamespace(
+                    get=get_users,
+                ),
+            ),
+        )
+
+        session = self.create_uploaded_task_session_with_headers(
+            ["Task title", "Responsible"],
+            [["Подготовить КП", "59"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(
+            response.json()["item"]["candidate_mapping"],
+            {
+                "TITLE": {
+                    "source_header": "Task title",
+                    "column": "A",
+                    "target_field": "TITLE",
+                    "match_type": "fuzzy",
+                },
+                "RESPONSIBLE_ID": {
+                    "source_header": "Responsible",
+                    "column": "B",
+                    "target_field": "RESPONSIBLE_ID",
+                    "match_type": "exact",
+                },
+            },
+        )
+        field_ids = {
+            item["id"]
+            for item in response.json()["item"]["fields"]
+        }
+        self.assertNotIn("isPinned", field_ids)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_applies_saved_alias_rule_to_candidate_mapping(self, get_from_jwt_token):
@@ -1733,6 +1836,68 @@ class ImportMappingApiTest(TestCase):
         session.refresh_from_db()
         self.assertEqual(session.import_settings["task_defaults"], {
             "default_responsible_id": "59",
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_task_mapping_returns_default_creator_options_and_persists_selection(self, get_from_jwt_token):
+        def get_users(*, filter=None, select=None):
+            return FakeUsersRequest([
+                {"ID": 59, "NAME": "Alice", "LAST_NAME": "Owner", "EMAIL": "alice@example.com"},
+                {"ID": 73, "NAME": "Bob", "LAST_NAME": "Manager", "EMAIL": "bob@example.com"},
+            ])
+
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                user=SimpleNamespace(
+                    get=get_users,
+                )
+            ),
+        )
+
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.TASK,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="tasks.xlsx",
+            preview_data={
+                "headers": ["Task title"],
+                "columns": ["A"],
+            },
+        )
+
+        response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "TITLE": {
+                        "source_header": "Task title",
+                        "column": "A",
+                    },
+                },
+                "default_creator_id": "73",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["task_defaults"], {
+            "default_creator_id": "73",
+        })
+        self.assertEqual(response.json()["item"]["task_user_options"], [
+            {"value": "59", "label": "Alice Owner · alice@example.com · ID 59"},
+            {"value": "73", "label": "Bob Manager · bob@example.com · ID 73"},
+        ])
+
+        session.refresh_from_db()
+        self.assertEqual(session.import_settings["task_defaults"], {
+            "default_creator_id": "73",
         })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")

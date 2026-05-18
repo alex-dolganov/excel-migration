@@ -1,6 +1,8 @@
+import requests
+import urllib3
 from django.test import SimpleTestCase
 
-from importer.services.error_messages import format_import_error
+from importer.services.error_messages import BITRIX_UNREACHABLE_ERROR, format_import_error
 
 
 class ErrorMessagesTest(SimpleTestCase):
@@ -22,3 +24,14 @@ class ErrorMessagesTest(SimpleTestCase):
             ),
             'Неверное значение поля "Валюта"',
         )
+
+    def test_format_import_error_hides_portal_domain_for_dns_resolution_errors(self):
+        error = requests.exceptions.ConnectionError(
+            urllib3.exceptions.NameResolutionError(
+                "mp24.bitrix24.ru",
+                "/rest/crm.deal.fields.json",
+                OSError(-5, "No address associated with hostname"),
+            )
+        )
+
+        self.assertEqual(format_import_error(error), BITRIX_UNREACHABLE_ERROR)

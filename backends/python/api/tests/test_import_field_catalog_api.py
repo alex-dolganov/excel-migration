@@ -337,38 +337,276 @@ class ImportFieldCatalogApiTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["entity_type"], "task")
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
         self.assertEqual(
-            response.json()["items"][:3],
+            items_by_id["TITLE"],
+            {
+                "id": "TITLE",
+                "title": "Название задачи",
+                "type": "string",
+                "required": True,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+        )
+        self.assertEqual(
+            items_by_id["DESCRIPTION"],
+            {
+                "id": "DESCRIPTION",
+                "title": "Описание",
+                "type": "text",
+                "required": False,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+        )
+        self.assertEqual(
+            items_by_id["RESPONSIBLE_ID"],
+            {
+                "id": "RESPONSIBLE_ID",
+                "title": "Ответственный (ID)",
+                "type": "integer",
+                "required": True,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_task_fields_catalog_when_bitrix_wraps_fields_key(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                tasks=SimpleNamespace(
+                    task=SimpleNamespace(
+                        getFields=lambda: FakeFieldsRequest(
+                            {
+                                "fields": {
+                                    "TITLE": {
+                                        "title": "Название",
+                                        "type": "string",
+                                        "required": True,
+                                    },
+                                    "UF_AUTO_100500": {
+                                        "title": "UF_AUTO_100500",
+                                        "editFormLabel": {"ru": "Новое строковое поле"},
+                                        "type": "string",
+                                        "required": False,
+                                    },
+                                }
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "task"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+
+        self.assertEqual(items_by_id["TITLE"]["title"], "Название")
+        self.assertEqual(items_by_id["UF_AUTO_100500"]["title"], "Новое строковое поле")
+        self.assertEqual(items_by_id["UF_AUTO_100500"]["type"], "string")
+        self.assertEqual(items_by_id["UF_AUTO_100500"]["is_custom"], True)
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_merges_task_custom_fields_from_userfield_api_when_getfields_omits_them(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                tasks=SimpleNamespace(
+                    task=SimpleNamespace(
+                        getFields=lambda: FakeFieldsRequest(
+                            {
+                                "fields": {
+                                    "TITLE": {
+                                        "title": "Название",
+                                        "type": "string",
+                                        "required": True,
+                                    },
+                                    "DESCRIPTION": {
+                                        "title": "Описание",
+                                        "type": "string",
+                                    },
+                                }
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+        bitrix_api_request.side_effect = [
+            SimpleNamespace(
+                result=[
+                    {
+                        "ID": "1325",
+                        "FIELD_NAME": "UF_TASK_CLIENT_REQUEST",
+                        "USER_TYPE_ID": "string",
+                        "MULTIPLE": "N",
+                        "MANDATORY": "N",
+                    },
+                    {
+                        "ID": "1327",
+                        "FIELD_NAME": "UF_TASK_PIPELINE_STAGE",
+                        "USER_TYPE_ID": "enumeration",
+                        "MULTIPLE": "Y",
+                        "MANDATORY": "N",
+                    },
+                ]
+            ),
+            SimpleNamespace(
+                result={
+                    "ID": "1325",
+                    "FIELD_NAME": "UF_TASK_CLIENT_REQUEST",
+                    "USER_TYPE_ID": "string",
+                    "MULTIPLE": "N",
+                    "MANDATORY": "N",
+                    "EDIT_FORM_LABEL": {"ru": "Новое строковое поле"},
+                }
+            ),
+            SimpleNamespace(
+                result={
+                    "ID": "1327",
+                    "FIELD_NAME": "UF_TASK_PIPELINE_STAGE",
+                    "USER_TYPE_ID": "enumeration",
+                    "MULTIPLE": "Y",
+                    "MANDATORY": "N",
+                    "EDIT_FORM_LABEL": {"ru": "Этап задачи"},
+                    "SETTINGS": {
+                        "LIST": [
+                            {"ID": "32", "VALUE": "Новая"},
+                            {"ID": "33", "VALUE": "В работе"},
+                        ]
+                    },
+                }
+            ),
+        ]
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "task"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+
+        self.assertEqual(items_by_id["UF_TASK_CLIENT_REQUEST"]["title"], "Новое строковое поле")
+        self.assertEqual(items_by_id["UF_TASK_CLIENT_REQUEST"]["type"], "string")
+        self.assertEqual(items_by_id["UF_TASK_CLIENT_REQUEST"]["is_custom"], True)
+        self.assertEqual(items_by_id["UF_TASK_PIPELINE_STAGE"]["title"], "Этап задачи")
+        self.assertEqual(items_by_id["UF_TASK_PIPELINE_STAGE"]["type"], "enumeration")
+        self.assertEqual(
+            items_by_id["UF_TASK_PIPELINE_STAGE"]["items"],
+            [
+                {"id": "32", "title": "Новая"},
+                {"id": "33", "title": "В работе"},
+            ],
+        )
+        self.assertEqual(
+            [call.kwargs for call in bitrix_api_request.call_args_list],
             [
                 {
-                    "id": "TITLE",
-                    "title": "Название задачи",
-                    "type": "string",
-                    "required": True,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "task.item.userfield.getlist",
+                    "params": {"ORDER": {"SORT": "ASC"}},
                 },
                 {
-                    "id": "DESCRIPTION",
-                    "title": "Описание",
-                    "type": "text",
-                    "required": False,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "task.item.userfield.get",
+                    "params": {"ID": 1325},
                 },
                 {
-                    "id": "RESPONSIBLE_ID",
-                    "title": "Ответственный (ID)",
-                    "type": "integer",
-                    "required": True,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "task.item.userfield.get",
+                    "params": {"ID": 1327},
                 },
             ],
         )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_filters_out_internal_task_fields_from_bitrix_catalog(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                tasks=SimpleNamespace(
+                    task=SimpleNamespace(
+                        getFields=lambda: FakeFieldsRequest(
+                            {
+                                "fields": {
+                                    "TITLE": {
+                                        "title": "Title",
+                                        "type": "string",
+                                        "required": True,
+                                    },
+                                    "RESPONSIBLE_ID": {
+                                        "title": "Responsible",
+                                        "type": "integer",
+                                        "required": True,
+                                    },
+                                    "isPinned": {
+                                        "title": "Is pinned",
+                                        "type": "boolean",
+                                    },
+                                    "notViewed": {
+                                        "title": "Not viewed",
+                                        "type": "boolean",
+                                    },
+                                    "UF_TASK_CLIENT_REQUEST": {
+                                        "title": "UF_TASK_CLIENT_REQUEST",
+                                        "editFormLabel": {"ru": "Новое строковое поле"},
+                                        "type": "string",
+                                    },
+                                }
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "task"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+
+        self.assertIn("TITLE", items_by_id)
+        self.assertIn("RESPONSIBLE_ID", items_by_id)
+        self.assertIn("UF_TASK_CLIENT_REQUEST", items_by_id)
+        self.assertNotIn("isPinned", items_by_id)
+        self.assertNotIn("notViewed", items_by_id)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_returns_static_crm_activity_fields_catalog_with_communications_value(self, get_from_jwt_token):
@@ -403,6 +641,56 @@ class ImportFieldCatalogApiTest(TestCase):
         )
         self.assertEqual(communications_field["title"], "Телефон / Email (для звонков и писем)")
         self.assertFalse(communications_field["required"])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_normalizes_company_utm_field_titles_for_mapping_search(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "UTM_SOURCE": {
+                                    "title": "UTM_SOURCE",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UTM_MEDIUM": {
+                                    "title": "UTM_MEDIUM",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "company"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+        self.assertEqual(items_by_id["UTM_SOURCE"]["title"], "Сквозная аналитика: источник")
+        self.assertEqual(items_by_id["UTM_MEDIUM"]["title"], "Сквозная аналитика: тип трафика")
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_returns_static_crm_note_fields_catalog(self, get_from_jwt_token):

@@ -171,6 +171,7 @@ const preview = ref<Record<string, any> | null>(null)
 const mappingData = ref<Record<string, any> | null>(null)
 const mappingRows = ref<MappingRow[]>([])
 const taskDefaultResponsibleId = ref('')
+const taskDefaultCreatorId = ref('')
 const taskDefaultCommentAuthorId = ref('')
 const dedupStrategy = ref('create')
 const dedupCondition = ref<'any' | 'all'>('any')
@@ -304,6 +305,7 @@ const requiredFieldSummary = computed(() => buildRequiredFieldSummary({
   mappingRows: mappingRows.value,
   defaultFieldIds: [
     ...(taskDefaultResponsibleId.value ? ['RESPONSIBLE_ID'] : []),
+    ...(taskDefaultCreatorId.value ? ['CREATED_BY'] : []),
     ...(taskDefaultCommentAuthorId.value ? ['AUTHOR_ID'] : []),
   ],
   ignoreFieldIds: entityType.value === 'contact' ? ['SECOND_NAME'] : [],
@@ -515,13 +517,29 @@ const sessionJobMode = computed(() => String(session.value?.summary?.job?.mode |
 const importJobState = computed(() => String(session.value?.summary?.job?.state || '').trim())
 const showsSessionProgress = computed(() => (
   ['run', 'retry'].includes(String(busyAction.value || '').trim())
-  || (busyAction.value === 'dry-run' && sessionJobMode.value === 'dry_run')
 ))
 const sessionProgressTitle = computed(() => (
-  busyAction.value === 'dry-run'
-    ? 'Проверка дублей и тестовый импорт'
+  busyAction.value === 'retry'
+    ? 'Повтор импорта'
     : 'Выполнение импорта'
 ))
+const showsDedupProgress = computed(() => (
+  ['dedup', 'dedup-skip', 'validation'].includes(String(busyAction.value || '').trim())
+))
+const dedupProgressTitle = computed(() => {
+  if (busyAction.value === 'dedup') {
+    return 'Сохраняем правила дублей'
+  }
+
+  return 'Проверяем дубли и готовим следующий шаг'
+})
+const dedupProgressDescription = computed(() => {
+  if (busyAction.value === 'dedup') {
+    return 'Сохраняем текущие правила, чтобы следующий запуск использовал актуальные настройки.'
+  }
+
+  return 'На больших файлах проверка может занять время. После завершения сразу откроется шаг проверки.'
+})
 const footerStatusLabel = computed(() => {
   if (cancelRequested.value) {
     return 'Останавливаем импорт'
@@ -549,6 +567,10 @@ const footerStatusLabel = computed(() => {
 
   if (busyAction.value === 'dedup') {
     return 'Сохраняем правила дублей'
+  }
+
+  if (busyAction.value === 'dedup-skip') {
+    return 'Пропускаем шаг дублей и проверяем данные'
   }
 
   if (busyAction.value === 'validation') {
@@ -744,6 +766,7 @@ const taskDefaultUserOptions = computed(() => (
   Array.isArray(mappingData.value?.task_user_options) ? mappingData.value.task_user_options : []
 ))
 const showsTaskDefaultResponsible = computed(() => entityType.value === 'task')
+const showsTaskDefaultCreator = computed(() => entityType.value === 'task')
 const showsTaskCommentDefaultAuthor = computed(() => entityType.value === 'task_comment')
 const templateItems = computed(() => importTemplates.value.map((template) => ({
   value: template.id,
@@ -1250,6 +1273,7 @@ function syncMappingRows() {
     mappingRows.value = []
     importAliasRules.value = []
     taskDefaultResponsibleId.value = ''
+    taskDefaultCreatorId.value = ''
     taskDefaultCommentAuthorId.value = ''
     dedupStrategy.value = 'create'
     dedupCondition.value = 'any'
@@ -1267,6 +1291,7 @@ function syncMappingRows() {
   })
   importAliasRules.value = Array.isArray(mappingData.value.alias_rules) ? mappingData.value.alias_rules : []
   taskDefaultResponsibleId.value = String(mappingData.value?.task_defaults?.default_responsible_id || '')
+  taskDefaultCreatorId.value = String(mappingData.value?.task_defaults?.default_creator_id || '')
   taskDefaultCommentAuthorId.value = String(mappingData.value?.task_defaults?.default_comment_author_id || '')
   syncDedupSettings()
 }
@@ -2135,6 +2160,7 @@ async function saveMapping() {
       }),
       {
         default_responsible_id: taskDefaultResponsibleId.value,
+        default_creator_id: taskDefaultCreatorId.value,
         default_comment_author_id: taskDefaultCommentAuthorId.value,
       },
     )
@@ -2188,6 +2214,7 @@ async function persistDedupSettings() {
     }),
     {
       default_responsible_id: taskDefaultResponsibleId.value,
+      default_creator_id: taskDefaultCreatorId.value,
       default_comment_author_id: taskDefaultCommentAuthorId.value,
     },
   )
@@ -2220,8 +2247,7 @@ async function skipDedupStep() {
 
   try {
     await persistDedupSettings()
-    busyAction.value = ''
-    await runValidation()
+    await executeValidation({ persistDedup: false, resetStatus: false, busyState: 'dedup-skip' })
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -2290,20 +2316,33 @@ async function applyTemplate() {
   }
 }
 
-async function runValidation() {
+async function executeValidation({
+  persistDedup = true,
+  resetStatus = true,
+  busyState = 'validation',
+}: {
+  persistDedup?: boolean
+  resetStatus?: boolean
+  busyState?: string
+} = {}) {
   if (!session.value?.id) {
-    return
+    return null
   }
 
-  resetMessages()
+  if (resetStatus) {
+    resetMessages()
+  }
+
   if (unmappedValueSummary.value.hasUnmappedValues) {
     setError('Сначала сопоставьте все значения статусов и списков.')
-    return
+    return null
   }
-  busyAction.value = 'validation'
+  busyAction.value = busyState
 
   try {
-    await persistDedupSettingsIfNeeded()
+    if (persistDedup) {
+      await persistDedupSettingsIfNeeded()
+    }
     const response = await apiStore.validateImportSession(String(session.value.id))
     validationData.value = response.item
     dryRunData.value = null
@@ -2315,10 +2354,19 @@ async function runValidation() {
         ? 'Проверка завершена. Исправьте строки с ошибками перед следующим этапом.'
         : 'Проверка завершена. Критичных ошибок не найдено.',
     )
+    return response.item
   } catch (error) {
-    setError(error instanceof Error ? error.message : String(error))
+    throw error
   } finally {
     busyAction.value = ''
+  }
+}
+
+async function runValidation() {
+  try {
+    await executeValidation()
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
   }
 }
 
@@ -3578,6 +3626,31 @@ onMounted(loadHistory)
             </section>
 
             <section
+              v-if="showsTaskDefaultCreator"
+              class="mb-5 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
+            >
+              <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Постановщик по умолчанию</div>
+              <div class="mb-3 text-sm text-[#5f7285]">
+                Если в файле нет колонки `CREATED_BY` или в строке значение пустое, для задачи будет использован выбранный постановщик Bitrix24.
+              </div>
+              <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr),auto]">
+                <B24Select
+                  :model-value="taskDefaultCreatorId"
+                  class="w-full"
+                  size="lg"
+                  placeholder="Выберите постановщика по умолчанию"
+                  :items="taskDefaultUserOptions"
+                  @update:model-value="taskDefaultCreatorId = String($event || '')"
+                />
+                <div class="rounded-[14px] border border-white/70 bg-white/85 px-4 py-3 text-sm text-[#5f7285]">
+                  {{ taskDefaultCreatorId
+                    ? 'Постановщик по умолчанию выбран и может заменить пустое значение в строке.'
+                    : 'Если не хотите маппить CREATED_BY из файла, выберите постановщика здесь.' }}
+                </div>
+              </div>
+            </section>
+
+            <section
               v-if="showsTaskCommentDefaultAuthor"
               class="mb-5 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
             >
@@ -4063,6 +4136,24 @@ onMounted(loadHistory)
                     :disabled="!canRunValidation"
                     @click="runValidation"
                   />
+                </div>
+              </div>
+
+              <div
+                v-if="showsDedupProgress"
+                class="mb-5 rounded-[18px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-4"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="text-sm font-semibold text-[#2e6bd9]">{{ dedupProgressTitle }}</div>
+                    <div class="mt-1 text-sm text-[#5f7285]">{{ dedupProgressDescription }}</div>
+                  </div>
+                  <div class="shrink-0 rounded-full border border-[#d7e7ff] bg-white px-3 py-1 text-xs font-semibold text-[#2e6bd9]">
+                    {{ preview?.total_rows || session?.total_rows || 0 }} строк
+                  </div>
+                </div>
+                <div class="mt-3 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
+                  <div class="h-2 w-1/3 rounded-full bg-[#2e6bd9] animate-pulse" />
                 </div>
               </div>
 
@@ -4565,7 +4656,7 @@ onMounted(loadHistory)
                   loading-animation="loading"
                   :columns="validationTableColumns"
                   :data="validationIssueRows"
-                  empty="Ошибок не найдено. Можно запускать тестовый импорт."
+                  empty="Ошибок не найдено. Можно запускать импорт."
                 >
                   <template #message-cell="{ row }">
                     <div class="py-1">

@@ -4,6 +4,7 @@ from b24pysdk.error import BitrixRequestTimeout
 
 
 MISSING_BITRIX_RECORD_ID_ERROR = "Bitrix24 не подтвердил создание записи: ID не получен."
+BITRIX_UNREACHABLE_ERROR = "Не удалось связаться с Bitrix24. Проверьте доступность портала и повторите импорт."
 
 
 def _format_timeout_seconds(value) -> str:
@@ -54,7 +55,28 @@ def format_import_error(error) -> str:
         return "Bitrix24 не ответил вовремя. Повторите импорт."
 
     message = _extract_error_message(error)
+    normalized_message = message.lower()
     if "Read timed out" in message:
         return "Bitrix24 не ответил вовремя. Повторите импорт."
+    if any(marker in normalized_message for marker in (
+        "failed to resolve",
+        "nameresolutionerror",
+        "no address associated with hostname",
+        "temporary failure in name resolution",
+        "name or service not known",
+    )):
+        return BITRIX_UNREACHABLE_ERROR
 
     return message or "Без описания"
+
+
+def safe_format_import_error(error) -> str:
+    try:
+        return format_import_error(error)
+    except Exception:
+        try:
+            message = _extract_error_message(error)
+        except Exception:
+            message = ""
+
+        return str(message or "").strip() or "Без описания"
