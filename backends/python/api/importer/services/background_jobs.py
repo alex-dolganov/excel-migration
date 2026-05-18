@@ -3,7 +3,7 @@ import os
 from main.models import Bitrix24Account
 
 from importer.models import ImportSession
-from importer.services.error_messages import format_import_error
+from importer.services.error_messages import safe_format_import_error
 
 
 def is_import_queue_enabled() -> bool:
@@ -50,6 +50,17 @@ def enqueue_import_session_run(session: ImportSession, account) -> str:
     return str(getattr(task, "id", ""))
 
 
+def enqueue_import_session_dry_run(session: ImportSession, account) -> str:
+    from importer.tasks import dry_run_import_session_task
+
+    task = dry_run_import_session_task.delay(str(session.id), str(getattr(account, "id", "")))
+    session.status = ImportSession.Status.RUNNING
+    session.last_error = ""
+    _update_session_job_state(session, mode="dry_run", state="queued", task_id=str(getattr(task, "id", "")))
+    session.save(update_fields=["status", "summary", "last_error", "updated_at"])
+    return str(getattr(task, "id", ""))
+
+
 def enqueue_import_session_retry(session: ImportSession, account) -> str:
     from importer.tasks import retry_import_session_task
 
@@ -81,7 +92,7 @@ def execute_import_session_run_background(*, session_id: str, account_id: str):
     try:
         result = execute_import_session_run_now(session=session, account=account)
     except Exception as error:
-        error_message = format_import_error(error)
+        error_message = safe_format_import_error(error)
         session.refresh_from_db()
         session.status = ImportSession.Status.FAILED
         session.last_error = error_message
@@ -94,6 +105,33 @@ def execute_import_session_run_background(*, session_id: str, account_id: str):
         mode="run",
         state="cancelled" if session.status == ImportSession.Status.CANCELLED else "completed",
     )
+    session.save(update_fields=["summary", "updated_at"])
+    return result
+
+
+def execute_import_session_dry_run_background(*, session_id: str, account_id: str):
+    from importer.views import execute_import_session_dry_run_now
+
+    session, account = _load_background_context(session_id, account_id)
+    if session.status == ImportSession.Status.CANCELLED:
+        _update_session_job_state(session, mode="dry_run", state="cancelled")
+        session.save(update_fields=["summary", "updated_at"])
+        return {"session_id": str(session.id), "status": session.status}
+
+    _update_session_job_state(session, mode="dry_run", state="running")
+    session.save(update_fields=["summary", "updated_at"])
+    try:
+        result = execute_import_session_dry_run_now(session=session, account=account)
+    except Exception as error:
+        error_message = safe_format_import_error(error)
+        session.refresh_from_db()
+        session.status = ImportSession.Status.FAILED
+        session.last_error = error_message
+        _update_session_job_state(session, mode="dry_run", state="failed", error=error_message)
+        session.save(update_fields=["status", "last_error", "summary", "updated_at"])
+        raise
+    session.refresh_from_db()
+    _update_session_job_state(session, mode="dry_run", state="completed")
     session.save(update_fields=["summary", "updated_at"])
     return result
 
@@ -112,7 +150,7 @@ def execute_import_session_retry_background(*, session_id: str, account_id: str)
     try:
         result = execute_import_session_retry_now(session=session, account=account)
     except Exception as error:
-        error_message = format_import_error(error)
+        error_message = safe_format_import_error(error)
         session.refresh_from_db()
         session.status = ImportSession.Status.FAILED
         session.last_error = error_message

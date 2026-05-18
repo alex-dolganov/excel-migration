@@ -34,7 +34,9 @@ import {
   buildImportRunSummaryFromSessionSnapshot,
   buildImportRunStatusFilters,
   buildImportRunRetryState,
+  buildDryRunSummaryFromSessionSnapshot,
   buildLinkedImportRunSummary,
+  shouldWaitForDryRunExecutionSnapshot,
   shouldWaitForImportExecutionSnapshot,
   filterImportRunRows,
   resolveImportRunFilterId,
@@ -1977,6 +1979,44 @@ test('builds import run summary from top-level session counters when import_run 
   })
 })
 
+test('builds dry run summary from session snapshot when background dry run completes', () => {
+  assert.deepEqual(buildDryRunSummaryFromSessionSnapshot({
+    id: 'session-dry-run-1',
+    status: 'validated',
+    summary: {
+      dry_run: {
+        checked_rows: 2,
+        ready_rows: 2,
+        ready_create_rows: 1,
+        ready_update_rows: 1,
+        skipped_rows: 0,
+        pending_decision_rows: 0,
+        results: [
+          { row_number: 2, status: 'ready', fields: { TITLE: 'Alice' } },
+          { row_number: 3, status: 'ready_update', record_id: 915, fields: { TITLE: 'Bob' } },
+        ],
+      },
+      job: {
+        mode: 'dry_run',
+        state: 'completed',
+      },
+    },
+  }), {
+    session_id: 'session-dry-run-1',
+    status: 'validated',
+    checked_rows: 2,
+    ready_rows: 2,
+    ready_create_rows: 1,
+    ready_update_rows: 1,
+    skipped_rows: 0,
+    pending_decision_rows: 0,
+    results: [
+      { row_number: 2, status: 'ready', fields: { TITLE: 'Alice' } },
+      { row_number: 3, status: 'ready_update', record_id: 915, fields: { TITLE: 'Bob' } },
+    ],
+  })
+})
+
 test('keeps waiting for queued import snapshot while status is still running even if counters are already filled', () => {
   assert.equal(shouldWaitForImportExecutionSnapshot({
     id: 'session-running-1',
@@ -2019,6 +2059,47 @@ test('keeps waiting for queued import snapshot while status is still running eve
     successful_rows: 1,
     failed_rows: 0,
     summary: {},
+  }), false)
+})
+
+test('keeps waiting for queued dry run snapshot while background check is active', () => {
+  assert.equal(shouldWaitForDryRunExecutionSnapshot({
+    id: 'session-dry-run-queued',
+    status: 'running',
+    processed_rows: 200,
+    summary: {
+      job: {
+        mode: 'dry_run',
+        state: 'queued',
+      },
+    },
+  }), true)
+
+  assert.equal(shouldWaitForDryRunExecutionSnapshot({
+    id: 'session-dry-run-running',
+    status: 'running',
+    processed_rows: 500,
+    summary: {
+      job: {
+        mode: 'dry_run',
+        state: 'running',
+      },
+    },
+  }), true)
+
+  assert.equal(shouldWaitForDryRunExecutionSnapshot({
+    id: 'session-dry-run-completed',
+    status: 'validated',
+    summary: {
+      dry_run: {
+        checked_rows: 10,
+        ready_rows: 9,
+      },
+      job: {
+        mode: 'dry_run',
+        state: 'completed',
+      },
+    },
   }), false)
 })
 
@@ -2442,6 +2523,45 @@ test('mapping step describes new preflight blockers and blocks import button on 
   assert.equal(importerWorkbenchSource.includes('&& !hasBlockingPreflightIssues.value'), true)
 })
 
+test('importer workbench collapses long messages and resolves field names in preflight issues', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const expandedTextBlocks = ref<Record<string, boolean>>({})'), true)
+  assert.equal(importerWorkbenchSource.includes('function resolveImporterFieldLabel(fieldId: string, fieldTitle = \'\')'), true)
+  assert.equal(importerWorkbenchSource.includes('function buildPreflightIssueMeta(issue: Record<string, any>)'), true)
+  assert.equal(importerWorkbenchSource.includes('function toggleTextBlock(key: string)'), true)
+  assert.equal(importerWorkbenchSource.includes('buildPreflightIssueMeta(issue)'), true)
+  assert.equal(importerWorkbenchSource.includes('Показать полностью'), true)
+  assert.equal(importerWorkbenchSource.includes('Скрыть'), true)
+})
+
+test('dedup step can be skipped without enabling duplicate checks', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('async function skipDedupStep()'), true)
+  assert.equal(importerWorkbenchSource.includes("dedupStrategy.value = 'create'"), true)
+  assert.equal(importerWorkbenchSource.includes("dedupFields.value = []"), true)
+  assert.equal(importerWorkbenchSource.includes('await runValidation()'), true)
+  assert.equal(importerWorkbenchSource.includes('label="Пропустить шаг"'), true)
+})
+
+test('validation and execution persist pending dedup changes automatically', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const hasPendingDedupChanges = computed(() => JSON.stringify({'), true)
+  assert.equal(importerWorkbenchSource.includes('async function persistDedupSettingsIfNeeded()'), true)
+  assert.equal(importerWorkbenchSource.includes('await persistDedupSettingsIfNeeded()'), true)
+})
+
 test('preview step renders row limit hint before validation starts', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
@@ -2494,4 +2614,31 @@ test('long background import keeps running status instead of fake timeout error'
   assert.equal(importerWorkbenchSource.includes('const maxAttempts = 600'), true)
   assert.equal(importerWorkbenchSource.includes('Импорт продолжает выполняться в фоне.'), true)
   assert.equal(importerWorkbenchSource.includes('Фоновый импорт не завершился за ожидаемое время.'), false)
+})
+
+test('background dry run is polled separately and shows progress on step 6', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const sessionJobMode = computed(() => String(session.value?.summary?.job?.mode || \'\').trim())'), true)
+  assert.equal(importerWorkbenchSource.includes('async function waitForDryRunExecutionResult(sessionId: string)'), true)
+  assert.equal(importerWorkbenchSource.includes('async function resolveDryRunExecutionResult(sessionId: string, responseItem: Record<string, any> | null | undefined)'), true)
+  assert.equal(importerWorkbenchSource.includes("busyAction.value === 'dry-run'"), true)
+  assert.equal(importerWorkbenchSource.includes('Проверка дублей и тестовый импорт'), true)
+})
+
+test('final import results render 20 rows per page with compact bottom pagination', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const importRunPage = ref(1)'), true)
+  assert.equal(importerWorkbenchSource.includes('const importRunPageCount = computed(() =>'), true)
+  assert.equal(importerWorkbenchSource.includes('const paginatedImportRunRows = computed<ImportRunRow[]>(() =>'), true)
+  assert.equal(importerWorkbenchSource.includes('function buildVisibleImportRunPageItems()'), true)
+  assert.equal(importerWorkbenchSource.includes('Страница {{ importRunPage }} из {{ importRunPageCount }}'), true)
+  assert.equal(importerWorkbenchSource.includes(':data="paginatedImportRunRows"'), true)
 })

@@ -29,6 +29,7 @@ from .services.b24_fields import (
     normalize_smart_process_entity_config,
 )
 from .services.background_jobs import (
+    enqueue_import_session_dry_run,
     enqueue_import_session_retry,
     enqueue_import_session_run,
     is_import_queue_enabled,
@@ -2116,6 +2117,104 @@ def import_session_validate(request: AuthorizedRequest, session_id):
     )
 
 
+def execute_import_session_dry_run_now(session: ImportSession, account) -> dict:
+    preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
+    columns = preview_data.get("columns")
+    selected_sheet_name = preview_data.get("selected_sheet_name") or session.source_sheet_name
+    if not isinstance(columns, list) or not columns or not selected_sheet_name:
+        raise ValueError("Preview data is required before dry run")
+
+    import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
+    saved_mapping = import_settings.get("mapping", {})
+    if not isinstance(saved_mapping, dict) or not saved_mapping:
+        raise ValueError("Saved mapping is required before dry run")
+    task_default_field_values = build_task_default_field_values(
+        session.entity_type,
+        normalize_task_defaults(import_settings.get("task_defaults", {})),
+    )
+    saved_dedup = normalize_entity_dedup_settings(session.entity_type, import_settings.get("dedup", {}))
+
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    validation_summary = summary.get("validation")
+    if not isinstance(validation_summary, dict):
+        raise ValueError("Validation is required before dry run")
+
+    fields = fetch_session_entity_fields(account, session)
+    _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+    total_rows = sum(1 for row_number in row_numbers if row_number >= session.data_start_row)
+    session.summary = {
+        **summary,
+        "dry_run": None,
+    }
+    session.status = ImportSession.Status.RUNNING
+    session.total_rows = total_rows
+    session.last_error = ""
+    session.processed_rows = 0
+    session.successful_rows = 0
+    session.failed_rows = 0
+    session.save(
+        update_fields=[
+            "summary",
+            "status",
+            "total_rows",
+            "last_error",
+            "processed_rows",
+            "successful_rows",
+            "failed_rows",
+            "updated_at",
+        ]
+    )
+
+    def _save_progress(*, checked_rows, ready_rows, skipped_rows, pending_decision_rows):
+        session.processed_rows = checked_rows
+        session.successful_rows = ready_rows
+        session.failed_rows = skipped_rows
+        session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
+
+    dry_run_result = execute_dry_run(
+        account=account,
+        entity_type=session.entity_type,
+        rows=rows,
+        row_numbers=row_numbers,
+        columns=columns,
+        data_start_row=session.data_start_row,
+        mapping=saved_mapping,
+        validation_summary=validation_summary,
+        fields=fields,
+        dedup_settings=saved_dedup,
+        default_field_values=task_default_field_values,
+        progress_callback=_save_progress,
+    )
+
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    session.summary = {
+        **summary,
+        "dry_run": dry_run_result,
+    }
+    session.status = ImportSession.Status.VALIDATED
+    session.processed_rows = dry_run_result["checked_rows"]
+    session.successful_rows = dry_run_result["ready_rows"]
+    session.failed_rows = dry_run_result["skipped_rows"]
+    session.last_error = ""
+    session.save(
+        update_fields=[
+            "summary",
+            "status",
+            "processed_rows",
+            "successful_rows",
+            "failed_rows",
+            "last_error",
+            "updated_at",
+        ]
+    )
+
+    return {
+        "session_id": str(session.id),
+        "status": session.status,
+        **dry_run_result,
+    }
+
+
 @xframe_options_exempt
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -2131,6 +2230,8 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
         return JsonResponse({"error": "Import session not found"}, status=404)
     if not can_run_session(account, session):
         return permission_denied_response()
+    if has_active_import_job(session):
+        return JsonResponse({"error": "Import session is already queued or running"}, status=409)
 
     preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
     columns = preview_data.get("columns")
@@ -2142,12 +2243,8 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
     saved_mapping = import_settings.get("mapping", {})
     if not isinstance(saved_mapping, dict) or not saved_mapping:
         return JsonResponse({"error": "Saved mapping is required before dry run"}, status=400)
-    task_default_field_values = build_task_default_field_values(
-        session.entity_type,
-        normalize_task_defaults(import_settings.get("task_defaults", {})),
-    )
     try:
-        saved_dedup = normalize_entity_dedup_settings(session.entity_type, import_settings.get("dedup", {}))
+        normalize_entity_dedup_settings(session.entity_type, import_settings.get("dedup", {}))
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
@@ -2156,39 +2253,53 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
     if not isinstance(validation_summary, dict):
         return JsonResponse({"error": "Validation is required before dry run"}, status=400)
 
-    try:
-        fields = fetch_session_entity_fields(account, session)
-        _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
-        dry_run_result = execute_dry_run(
-            account=account,
-            entity_type=session.entity_type,
-            rows=rows,
-            row_numbers=row_numbers,
-            columns=columns,
-            data_start_row=session.data_start_row,
-            mapping=saved_mapping,
-            validation_summary=validation_summary,
-            fields=fields,
-            dedup_settings=saved_dedup,
-            default_field_values=task_default_field_values,
-        )
-    except Exception as error:
-        return JsonResponse({"error": str(error)}, status=400)
+    if is_import_queue_enabled():
+        if getattr(account, "id", None) is None:
+            return JsonResponse({"error": "Queue execution requires a persisted Bitrix24 account"}, status=400)
 
-    session.summary = {
-        **summary,
-        "dry_run": dry_run_result,
-    }
-    session.last_error = ""
-    session.save(update_fields=["summary", "last_error", "updated_at"])
+        total_rows = sum(
+            1
+            for row_number in extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)[2]
+            if row_number >= session.data_start_row
+        )
+        session.summary = {
+            **summary,
+            "dry_run": None,
+        }
+        session.status = ImportSession.Status.RUNNING
+        session.total_rows = total_rows
+        session.last_error = ""
+        session.processed_rows = 0
+        session.successful_rows = 0
+        session.failed_rows = 0
+        session.save(
+            update_fields=[
+                "summary",
+                "status",
+                "total_rows",
+                "last_error",
+                "processed_rows",
+                "successful_rows",
+                "failed_rows",
+                "updated_at",
+            ]
+        )
+        try:
+            enqueue_import_session_dry_run(session, account)
+        except KombuOperationalError as error:
+            logging.warning("Import queue is unavailable, falling back to synchronous dry run: %s", error)
+        else:
+            session.refresh_from_db()
+            return JsonResponse({"item": serialize_session_response_item(session)}, status=202)
+
+    try:
+        dry_run_item = execute_import_session_dry_run_now(session=session, account=account)
+    except Exception as error:
+        return JsonResponse({"error": safe_format_import_error(error)}, status=400)
 
     return JsonResponse(
         {
-            "item": {
-                "session_id": str(session.id),
-                "status": session.status,
-                **dry_run_result,
-            }
+            "item": dry_run_item
         }
     )
 

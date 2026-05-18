@@ -1,6 +1,8 @@
+import os
 import re
 import time
 
+from b24pysdk.error import BitrixRequestTimeout
 from b24pysdk.bitrix_api.requests import BitrixAPIBatchRequest, BitrixAPIRequest
 
 from .validation import (
@@ -51,10 +53,25 @@ _DEDUP_FIELD_RE = re.compile(r'^[A-Z][A-Z0-9_]*$')    # any valid Bitrix24 field
 BITRIX_MULTIFIELD_IDS = {"PHONE", "EMAIL", "WEB", "IM"}
 TASK_CHILD_ENTITY_TYPES = {"task_comment", "task_checklist_item"}
 
-BITRIX_ROW_DELAY = 0.5
-BITRIX_BATCH_DELAY = 0.5
+
+def _read_non_negative_float_env(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.getenv(name, default)))
+    except (TypeError, ValueError):
+        return max(0.0, float(default))
+
+
+def _read_positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, default)))
+    except (TypeError, ValueError):
+        return max(1, int(default))
+
+
+BITRIX_ROW_DELAY = _read_non_negative_float_env("BITRIX_ROW_DELAY", 0.0)
+BITRIX_BATCH_DELAY = _read_non_negative_float_env("BITRIX_BATCH_DELAY", 0.5)
 BATCH_SIZE = 50
-PROGRESS_SAVE_INTERVAL = 10
+PROGRESS_SAVE_INTERVAL = _read_positive_int_env("IMPORT_PROGRESS_SAVE_INTERVAL", 100)
 _RATE_LIMIT_KEYWORDS = frozenset(["query_limit_exceeded", "too many requests", "rate limit", "overloaded", "429"])
 _RATE_LIMIT_RETRY_WAITS = [5, 15, 30]
 
@@ -137,6 +154,14 @@ def _is_rate_limit_error(error) -> bool:
     return any(kw in str(error).lower() for kw in _RATE_LIMIT_KEYWORDS)
 
 
+def _is_timeout_error(error) -> bool:
+    if isinstance(error, BitrixRequestTimeout):
+        return True
+
+    normalized_error = str(error).lower()
+    return "timed out" in normalized_error or "timeout" in normalized_error
+
+
 def _bitrix_retry(fn):
     for attempt, wait in enumerate([0] + _RATE_LIMIT_RETRY_WAITS):
         if wait:
@@ -146,6 +171,73 @@ def _bitrix_retry(fn):
         except Exception as error:
             if attempt >= len(_RATE_LIMIT_RETRY_WAITS) or not _is_rate_limit_error(error):
                 raise
+
+
+def _flush_crm_batch_with_fallback(account, entity_type: str, pending_batch: list) -> tuple:
+    try:
+        return _bitrix_retry(lambda: _flush_crm_batch(account, entity_type, pending_batch))
+    except Exception as error:
+        if len(pending_batch) <= 1 or not _is_timeout_error(error):
+            raise
+
+    middle_index = max(1, len(pending_batch) // 2)
+    left_results, left_created, left_failed, left_ids = _flush_crm_batch_with_fallback(
+        account,
+        entity_type,
+        pending_batch[:middle_index],
+    )
+    right_results, right_created, right_failed, right_ids = _flush_crm_batch_with_fallback(
+        account,
+        entity_type,
+        pending_batch[middle_index:],
+    )
+
+    return (
+        [*left_results, *right_results],
+        left_created + right_created,
+        left_failed + right_failed,
+        [*left_ids, *right_ids],
+    )
+
+
+def _sleep_if_configured(delay: float) -> None:
+    if delay > 0:
+        time.sleep(delay)
+
+
+def _report_progress(progress_callback, *, checked_rows: int, created_rows: int, updated_rows: int, failed_rows: int) -> None:
+    if not callable(progress_callback):
+        return
+    if checked_rows <= 0 or checked_rows % PROGRESS_SAVE_INTERVAL != 0:
+        return
+
+    progress_callback(
+        checked_rows=checked_rows,
+        created_rows=created_rows,
+        updated_rows=updated_rows,
+        failed_rows=failed_rows,
+    )
+
+
+def _report_dry_run_progress(
+    progress_callback,
+    *,
+    checked_rows: int,
+    ready_rows: int,
+    skipped_rows: int,
+    pending_decision_rows: int,
+) -> None:
+    if not callable(progress_callback):
+        return
+    if checked_rows <= 0 or checked_rows % PROGRESS_SAVE_INTERVAL != 0:
+        return
+
+    progress_callback(
+        checked_rows=checked_rows,
+        ready_rows=ready_rows,
+        skipped_rows=skipped_rows,
+        pending_decision_rows=pending_decision_rows,
+    )
 
 
 def build_field_index(fields: list[dict]) -> dict[str, dict]:
@@ -915,6 +1007,65 @@ def find_existing_record(account, entity_type: str, row_payload: dict, dedup_set
     return None
 
 
+def build_dedup_lookup_cache_key(entity_type: str, row_payload: dict, dedup_settings: dict):
+    if not isinstance(row_payload, dict) or not isinstance(dedup_settings, dict):
+        return None
+
+    normalized_entity_type = str(entity_type or "").strip().lower()
+    strategy = str(dedup_settings.get("strategy") or "create").strip().lower()
+    condition = str(dedup_settings.get("condition") or "any").strip().lower()
+    fields = tuple(str(field_name or "").strip() for field_name in dedup_settings.get("fields", []))
+
+    if normalized_entity_type == "user":
+        return (
+            normalized_entity_type,
+            strategy,
+            condition,
+            fields,
+            ("EMAIL", extract_dedup_lookup_value(row_payload.get("EMAIL"))),
+        )
+
+    if normalized_entity_type == "department":
+        return (
+            normalized_entity_type,
+            strategy,
+            condition,
+            fields,
+            ("NAME", extract_dedup_lookup_value(row_payload.get("NAME"))),
+        )
+
+    if fields == ("ID",):
+        return (
+            normalized_entity_type,
+            strategy,
+            condition,
+            fields,
+            ("ID", extract_dedup_lookup_value(row_payload.get("ID"))),
+        )
+
+    lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, dedup_settings)
+    return (
+        normalized_entity_type,
+        strategy,
+        condition,
+        fields,
+        tuple(sorted(lookup_filter.items())),
+        tuple(matched_fields),
+        tuple(missing_fields),
+    )
+
+
+def find_existing_record_cached(account, entity_type: str, row_payload: dict, dedup_settings: dict, *, cache=None):
+    cache_key = build_dedup_lookup_cache_key(entity_type, row_payload, dedup_settings)
+    if not isinstance(cache, dict) or cache_key is None:
+        return find_existing_record(account, entity_type, row_payload, dedup_settings)
+
+    if cache_key not in cache:
+        cache[cache_key] = find_existing_record(account, entity_type, row_payload, dedup_settings)
+
+    return cache[cache_key]
+
+
 def filter_dedup_settings_for_payload(dedup_settings: dict, row_payload: dict) -> dict:
     payload_keys = {str(field_id) for field_id in (row_payload or {}).keys()}
     return {
@@ -975,9 +1126,11 @@ def resolve_linked_record_action_with_decision(
     row_payload: dict,
     dedup_settings: dict,
     row_decision: str = "",
+    find_existing_record_fn=None,
 ) -> dict:
     filtered_dedup_settings = filter_dedup_settings_for_payload(dedup_settings, row_payload)
-    existing_record_match = find_existing_record(account, entity_type, row_payload, filtered_dedup_settings)
+    lookup_fn = find_existing_record_fn if callable(find_existing_record_fn) else find_existing_record
+    existing_record_match = lookup_fn(account, entity_type, row_payload, filtered_dedup_settings)
     existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
 
     if existing_record_id is None:
@@ -1535,9 +1688,11 @@ def execute_linked_dry_run(
     fields: list[dict],
     dedup_settings: dict,
     default_field_values: dict | None = None,
+    progress_callback=None,
 ) -> dict:
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
     user_resolver = BitrixUserResolver(account)
+    dedup_lookup_cache: dict[tuple, dict | None] = {}
     checked_rows = 0
     ready_rows = 0
     ready_create_rows = 0
@@ -1546,6 +1701,15 @@ def execute_linked_dry_run(
     pending_decision_rows = 0
     results = []
     child_entity_type = get_linked_company_child_entity_type(entity_type)
+
+    def _find_existing_linked_record(account, linked_entity_type: str, row_payload: dict, linked_dedup_settings: dict):
+        return find_existing_record_cached(
+            account,
+            linked_entity_type,
+            row_payload,
+            linked_dedup_settings,
+            cache=dedup_lookup_cache,
+        )
 
     for row_index, row_number in enumerate(row_numbers):
         if row_number < data_start_row:
@@ -1566,6 +1730,13 @@ def execute_linked_dry_run(
                     "error": "Row has validation issues",
                 }
             )
+            _report_dry_run_progress(
+                progress_callback,
+                checked_rows=checked_rows,
+                ready_rows=ready_rows,
+                skipped_rows=skipped_rows,
+                pending_decision_rows=pending_decision_rows,
+            )
             continue
 
         linked_payload = build_linked_row_payload(
@@ -1585,6 +1756,7 @@ def execute_linked_dry_run(
             linked_payload.get("company", {}),
             dedup_settings.get("company", {}),
             "",
+            find_existing_record_fn=_find_existing_linked_record,
         ) if linked_payload.get("company") else {"mode": "skip_payload", "record_id": None, "meta": {}}
 
         child_action = resolve_linked_record_action_with_decision(
@@ -1593,6 +1765,7 @@ def execute_linked_dry_run(
             linked_payload.get(child_entity_type, {}),
             dedup_settings.get(child_entity_type, {}),
             "",
+            find_existing_record_fn=_find_existing_linked_record,
         ) if linked_payload.get(child_entity_type) else {"mode": "skip_payload", "record_id": None, "meta": {}}
 
         linked_actions = {
@@ -1610,6 +1783,13 @@ def execute_linked_dry_run(
                     "fields": build_linked_result_fields(linked_payload, entity_type=entity_type),
                     **duplicate_decision_summary,
                 }
+            )
+            _report_dry_run_progress(
+                progress_callback,
+                checked_rows=checked_rows,
+                ready_rows=ready_rows,
+                skipped_rows=skipped_rows,
+                pending_decision_rows=pending_decision_rows,
             )
             continue
 
@@ -1637,6 +1817,13 @@ def execute_linked_dry_run(
         if duplicate_decision_summary.get("linked"):
             result_item["linked"] = duplicate_decision_summary["linked"]
         results.append(result_item)
+        _report_dry_run_progress(
+            progress_callback,
+            checked_rows=checked_rows,
+            ready_rows=ready_rows,
+            skipped_rows=skipped_rows,
+            pending_decision_rows=pending_decision_rows,
+        )
 
     return {
         "checked_rows": checked_rows,
@@ -1713,15 +1900,14 @@ def execute_linked_import(
             break
 
         checked_rows += 1
-        time.sleep(BITRIX_ROW_DELAY)
-
-        if callable(progress_callback) and checked_rows % PROGRESS_SAVE_INTERVAL == 0:
-            progress_callback(
-                checked_rows=checked_rows,
-                created_rows=created_rows,
-                updated_rows=updated_rows,
-                failed_rows=failed_rows,
-            )
+        _sleep_if_configured(BITRIX_ROW_DELAY)
+        _report_progress(
+            progress_callback,
+            checked_rows=checked_rows,
+            created_rows=created_rows,
+            updated_rows=updated_rows,
+            failed_rows=failed_rows,
+        )
 
         if row_number in invalid_row_numbers:
             skipped_rows += 1
@@ -1943,6 +2129,7 @@ def execute_dry_run(
     fields: list[dict],
     dedup_settings=None,
     default_field_values: dict | None = None,
+    progress_callback=None,
 ) -> dict:
     if is_linked_import_entity_type(entity_type):
         return execute_linked_dry_run(
@@ -1957,11 +2144,13 @@ def execute_dry_run(
             fields=fields,
             dedup_settings=normalize_linked_dedup_settings(dedup_settings, entity_type=entity_type),
             default_field_values=default_field_values,
+            progress_callback=progress_callback,
         )
 
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
     normalized_dedup_settings = normalize_dedup_settings(dedup_settings)
     user_resolver = BitrixUserResolver(account)
+    dedup_lookup_cache: dict[tuple, dict | None] = {}
     checked_rows = 0
     ready_rows = 0
     ready_create_rows = 0
@@ -1989,6 +2178,13 @@ def execute_dry_run(
                     "error": "Row has validation issues",
                 }
             )
+            _report_dry_run_progress(
+                progress_callback,
+                checked_rows=checked_rows,
+                ready_rows=ready_rows,
+                skipped_rows=skipped_rows,
+                pending_decision_rows=pending_decision_rows,
+            )
             continue
 
         time.sleep(BITRIX_ROW_DELAY)
@@ -2002,7 +2198,13 @@ def execute_dry_run(
             default_field_values=default_field_values,
         )
         existing_record_match = _bitrix_retry(
-            lambda: find_existing_record(account, entity_type, row_payload, normalized_dedup_settings)
+            lambda: find_existing_record_cached(
+                account,
+                entity_type,
+                row_payload,
+                normalized_dedup_settings,
+                cache=dedup_lookup_cache,
+            )
         )
         existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
         duplicate_match_fields = existing_record_match.get("duplicate_match_fields", []) if isinstance(existing_record_match, dict) else []
@@ -2024,6 +2226,13 @@ def execute_dry_run(
                     "error": "Duplicate matched existing record",
                 }
             )
+            _report_dry_run_progress(
+                progress_callback,
+                checked_rows=checked_rows,
+                ready_rows=ready_rows,
+                skipped_rows=skipped_rows,
+                pending_decision_rows=pending_decision_rows,
+            )
             continue
 
         if existing_record_id is not None and normalized_dedup_settings["strategy"] == "ask":
@@ -2036,6 +2245,13 @@ def execute_dry_run(
                     **dedup_result_meta,
                     "fields": row_payload,
                 }
+            )
+            _report_dry_run_progress(
+                progress_callback,
+                checked_rows=checked_rows,
+                ready_rows=ready_rows,
+                skipped_rows=skipped_rows,
+                pending_decision_rows=pending_decision_rows,
             )
             continue
 
@@ -2051,6 +2267,13 @@ def execute_dry_run(
                     "fields": row_payload,
                 }
             )
+            _report_dry_run_progress(
+                progress_callback,
+                checked_rows=checked_rows,
+                ready_rows=ready_rows,
+                skipped_rows=skipped_rows,
+                pending_decision_rows=pending_decision_rows,
+            )
             continue
 
         ready_create_rows += 1
@@ -2061,6 +2284,13 @@ def execute_dry_run(
                 **dedup_result_meta,
                 "fields": row_payload,
             }
+        )
+        _report_dry_run_progress(
+            progress_callback,
+            checked_rows=checked_rows,
+            ready_rows=ready_rows,
+            skipped_rows=skipped_rows,
+            pending_decision_rows=pending_decision_rows,
         )
 
     return {
@@ -2138,10 +2368,12 @@ def execute_import(
         nonlocal created_rows, failed_rows
         if not pending_batch:
             return
-        time.sleep(BITRIX_BATCH_DELAY)
+        _sleep_if_configured(BITRIX_BATCH_DELAY)
         try:
-            batch_results, batch_created, batch_failed, batch_ids = _bitrix_retry(
-                lambda: _flush_crm_batch(account, entity_type, list(pending_batch))
+            batch_results, batch_created, batch_failed, batch_ids = _flush_crm_batch_with_fallback(
+                account,
+                entity_type,
+                list(pending_batch),
             )
         except Exception as error:
             for prow_number, pending_row_payload in pending_batch:
@@ -2199,15 +2431,15 @@ def execute_import(
 
         checked_rows += 1
         if not use_batch:
-            time.sleep(BITRIX_ROW_DELAY)
+            _sleep_if_configured(BITRIX_ROW_DELAY)
 
-        if callable(progress_callback) and checked_rows % PROGRESS_SAVE_INTERVAL == 0:
-            progress_callback(
-                checked_rows=checked_rows,
-                created_rows=created_rows,
-                updated_rows=updated_rows,
-                failed_rows=failed_rows,
-            )
+        _report_progress(
+            progress_callback,
+            checked_rows=checked_rows,
+            created_rows=created_rows,
+            updated_rows=updated_rows,
+            failed_rows=failed_rows,
+        )
 
         if row_number in invalid_row_numbers:
             skipped_rows += 1

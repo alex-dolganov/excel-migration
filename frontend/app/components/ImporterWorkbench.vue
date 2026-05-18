@@ -15,6 +15,7 @@ import {
   buildFieldGuidanceHints,
   buildFieldTypeLabel,
   getImportModeMeta,
+  buildDryRunSummaryFromSessionSnapshot,
   buildImportRunProblemGroups,
   buildImportRunRows,
   buildImportRunSummaryFromSessionSnapshot,
@@ -22,6 +23,7 @@ import {
   buildImportRunStatusFilters,
   buildImportRunRetryState,
   isLinkedImportEntityType,
+  shouldWaitForDryRunExecutionSnapshot,
   shouldWaitForImportExecutionSnapshot,
   buildMappingFieldItems,
   buildMappingPayload,
@@ -158,6 +160,7 @@ const MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
 const MAX_IMPORT_FILE_SIZE_LABEL = '50 МБ'
 const PER_ROW_DEDUP_DECISION_VALUES = new Set(['create', 'update', 'skip'])
 const DRY_RUN_RESULTS_PAGE_SIZE = 20
+const COLLAPSIBLE_TEXT_LIMIT = 220
 
 const importMode = ref('')
 const entityType = ref('')
@@ -188,11 +191,13 @@ const currentStep = ref(1)
 const activeImportRunFilter = ref('all')
 const activeDryRunDedupRiskOnly = ref(false)
 const dryRunPage = ref(1)
+const importRunPage = ref(1)
 const linkedSummaryPage = ref(1)
 const busyAction = ref('')
 const cancelRequested = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
+const expandedTextBlocks = ref<Record<string, boolean>>({})
 const recentSessions = ref<Record<string, any>[]>([])
 const currentView = ref<'wizard' | 'history' | 'bulkAttach'>('wizard')
 
@@ -278,6 +283,11 @@ const fieldOptionsIndex = computed(() => new Map(
     .filter((field: Record<string, any>) => String(field?.id || '').trim().length > 0)
     .map((field: Record<string, any>) => [String(field.id || ''), field]),
 ))
+const normalizedFieldOptionsIndex = computed(() => new Map(
+  fieldOptions.value
+    .filter((field: Record<string, any>) => String(field?.id || '').trim().length > 0)
+    .map((field: Record<string, any>) => [String(field.id || '').trim().toUpperCase(), field]),
+))
 const previewRows = computed(() => Array.isArray(preview.value?.preview_rows) ? preview.value.preview_rows : [])
 const previewColumnsSource = computed(() => Array.isArray(preview.value?.columns) ? preview.value.columns : [])
 const previewTotalRows = computed(() => Number(preview.value?.total_rows || session.value?.total_rows || 0))
@@ -311,7 +321,7 @@ const effectiveDedupFields = computed(() => {
 })
 const simpleDedupFieldLabels = computed(() => (
   effectiveDedupFields.value
-    .map((fieldId) => formatImporterFieldLabel(fieldId))
+    .map((fieldId) => resolveImporterFieldLabel(fieldId))
     .filter(Boolean)
 ))
 const requiredFieldMissingIds = computed(() => new Set(
@@ -415,6 +425,27 @@ const canApplyTemplate = computed(() => (
   && Boolean(mappingData.value)
   && !busyAction.value
 ))
+const currentDedupSettingsPayload = computed(() => buildDedupPayload({
+  strategy: dedupStrategy.value,
+  fields: effectiveDedupFields.value,
+  condition: dedupCondition.value,
+}))
+const savedDedupSettingsPayload = computed(() => buildDedupPayload(mappingData.value?.saved_dedup || {}))
+const hasPendingDedupChanges = computed(() => JSON.stringify({
+  strategy: String(currentDedupSettingsPayload.value.strategy || ''),
+  condition: String(currentDedupSettingsPayload.value.condition || ''),
+  fields: [...(Array.isArray(currentDedupSettingsPayload.value.fields) ? currentDedupSettingsPayload.value.fields : [])]
+    .map((field) => String(field || '').trim())
+    .filter(Boolean)
+    .sort(),
+}) !== JSON.stringify({
+  strategy: String(savedDedupSettingsPayload.value.strategy || ''),
+  condition: String(savedDedupSettingsPayload.value.condition || ''),
+  fields: [...(Array.isArray(savedDedupSettingsPayload.value.fields) ? savedDedupSettingsPayload.value.fields : [])]
+    .map((field) => String(field || '').trim())
+    .filter(Boolean)
+    .sort(),
+}))
 const canRunValidation = computed(() => (
   importerPermissionState.value.canRunSessions
   && Boolean(session.value?.id)
@@ -480,7 +511,17 @@ const maxAvailableStep = computed(() => {
   return 1
 })
 const progressPercent = computed(() => Math.round((currentStep.value / 7) * 100))
+const sessionJobMode = computed(() => String(session.value?.summary?.job?.mode || '').trim())
 const importJobState = computed(() => String(session.value?.summary?.job?.state || '').trim())
+const showsSessionProgress = computed(() => (
+  ['run', 'retry'].includes(String(busyAction.value || '').trim())
+  || (busyAction.value === 'dry-run' && sessionJobMode.value === 'dry_run')
+))
+const sessionProgressTitle = computed(() => (
+  busyAction.value === 'dry-run'
+    ? 'Проверка дублей и тестовый импорт'
+    : 'Выполнение импорта'
+))
 const footerStatusLabel = computed(() => {
   if (cancelRequested.value) {
     return 'Останавливаем импорт'
@@ -515,6 +556,12 @@ const footerStatusLabel = computed(() => {
   }
 
   if (busyAction.value === 'dry-run') {
+    if (sessionJobMode.value === 'dry_run' && importJobState.value === 'queued') {
+      return 'Тестовый импорт поставлен в очередь'
+    }
+    if (sessionJobMode.value === 'dry_run' && importJobState.value === 'running') {
+      return 'Тестовый импорт выполняется в фоне'
+    }
     return 'Готовим тестовый импорт'
   }
 
@@ -860,6 +907,24 @@ const importRunStatusFilters = computed<ImportRunFilterItem[]>(() => (
 const importRunProblemGroups = computed<ImportRunProblemGroup[]>(() => buildImportRunProblemGroups(importRunData.value))
 const filteredImportRunRows = computed<ImportRunRow[]>(() => (
   filterImportRunRows(importRunRows.value, activeImportRunFilter.value)
+))
+const importRunPageCount = computed(() => (
+  Math.max(1, Math.ceil(filteredImportRunRows.value.length / DRY_RUN_RESULTS_PAGE_SIZE))
+))
+const paginatedImportRunRows = computed<ImportRunRow[]>(() => {
+  const page = Math.min(importRunPage.value, importRunPageCount.value)
+  const startIndex = (page - 1) * DRY_RUN_RESULTS_PAGE_SIZE
+  return filteredImportRunRows.value.slice(startIndex, startIndex + DRY_RUN_RESULTS_PAGE_SIZE)
+})
+const importRunPageRangeStart = computed(() => (
+  filteredImportRunRows.value.length
+    ? ((Math.min(importRunPage.value, importRunPageCount.value) - 1) * DRY_RUN_RESULTS_PAGE_SIZE) + 1
+    : 0
+))
+const importRunPageRangeEnd = computed(() => (
+  filteredImportRunRows.value.length
+    ? Math.min(importRunPageRangeStart.value + DRY_RUN_RESULTS_PAGE_SIZE - 1, filteredImportRunRows.value.length)
+    : 0
 ))
 const isLinkedEntityImport = computed(() => isLinkedImportEntityType(entityType.value))
 const stepSixStatusLabel = computed(() => {
@@ -1244,6 +1309,25 @@ function buildPreflightSeverityLabel(severity: string) {
   return String(severity || '').trim().toLowerCase() === 'error' ? 'Ошибка' : 'Предупреждение'
 }
 
+function resolveImporterFieldLabel(fieldId: string, fieldTitle = '') {
+  const normalizedFieldId = String(fieldId || '').trim()
+  if (!normalizedFieldId) {
+    return ''
+  }
+
+  const resolvedField = normalizedFieldOptionsIndex.value.get(normalizedFieldId.toUpperCase())
+  const resolvedTitle = String(resolvedField?.title || fieldTitle || '').trim()
+  return formatImporterFieldLabel(normalizedFieldId, resolvedTitle)
+}
+
+function buildPreflightIssueMeta(issue: Record<string, any>) {
+  const fieldLabel = resolveImporterFieldLabel(
+    String(issue?.field_id || ''),
+    String(issue?.field_title || ''),
+  )
+  return fieldLabel || String(issue?.code || '')
+}
+
 function buildPreflightIssueDescription(issue: Record<string, any>) {
   const code = String(issue?.code || '').trim()
   const fieldId = String(issue?.field_id || '').trim()
@@ -1258,7 +1342,7 @@ function buildPreflightIssueDescription(issue: Record<string, any>) {
     : []
 
   if (code === 'required_field_unmapped') {
-    return `Не сопоставлено обязательное поле ${formatImporterFieldLabel(fieldId)}.`
+    return `Не сопоставлено обязательное поле ${resolveImporterFieldLabel(fieldId)}.`
   }
   if (code === 'dedup_field_unmapped') {
     const entityLabelMap: Record<string, string> = {
@@ -1268,17 +1352,17 @@ function buildPreflightIssueDescription(issue: Record<string, any>) {
       lead: 'лида',
     }
     const entityLabel = entity ? ` для ${entityLabelMap[entity] || entity}` : ''
-    return `Не выбрано поле поиска дублей${entityLabel}: ${formatImporterFieldLabel(fieldId)}.`
+    return `Не выбрано поле поиска дублей${entityLabel}: ${resolveImporterFieldLabel(fieldId)}.`
   }
   if (code === 'field_values_unmapped') {
     const valuesLabel = values.length ? ` Значения: ${values.join(', ')}.` : ''
     const countLabel = valueCount > 0 ? ` Не сопоставлено значений: ${valueCount}.` : ''
-    return `Не заполнено соответствие значений для поля ${formatImporterFieldLabel(fieldId)}.${countLabel}${valuesLabel}`
+    return `Не заполнено соответствие значений для поля ${resolveImporterFieldLabel(fieldId)}.${countLabel}${valuesLabel}`
   }
   if (code === 'field_options_unavailable') {
     const valuesLabel = values.length ? ` Значения из файла: ${values.join(', ')}.` : ''
     const countLabel = valueCount > 0 ? ` Найдено значений: ${valueCount}.` : ''
-    return `Для поля ${formatImporterFieldLabel(fieldId)} не загрузились варианты Bitrix24.${countLabel}${valuesLabel}`
+    return `Для поля ${resolveImporterFieldLabel(fieldId)} не загрузились варианты Bitrix24.${countLabel}${valuesLabel}`
   }
   if (code === 'crm_activity_communications_missing') {
     const activityTypeLabels: Record<string, string> = {
@@ -1289,13 +1373,54 @@ function buildPreflightIssueDescription(issue: Record<string, any>) {
       ? activityTypes.map((item) => activityTypeLabels[item] || item).join(', ')
       : 'звонков и писем'
     const rowCountLabel = rowCount > 0 ? ` Строк: ${rowCount}.` : ''
-    return `Для ${activityLabel} не заполнено поле ${formatImporterFieldLabel(fieldId)}.${rowCountLabel}`
+    return `Для ${activityLabel} не заполнено поле ${resolveImporterFieldLabel(fieldId)}.${rowCountLabel}`
   }
   if (code === 'linked_company_identity_missing') {
     const companyRowLabel = rowCount > 0 ? ` Повторяющихся строк: ${rowCount}.` : ''
     return `В связанных данных компании повторяются по названию без явного идентификатора. Добавьте COMPANY__XML_ID или настройте дедупликацию компании.${companyRowLabel}`
   }
   return code || 'Проблема предварительной проверки.'
+}
+
+function makeCollapsibleKey(section: string, key: string | number) {
+  return `${String(section || '').trim()}:${String(key || '').trim()}`
+}
+
+function normalizeCollapsibleText(value: unknown) {
+  return String(value ?? '').trim()
+}
+
+function isTextCollapsible(value: unknown, limit = COLLAPSIBLE_TEXT_LIMIT) {
+  return normalizeCollapsibleText(value).length > limit
+}
+
+function buildCollapsedText(value: unknown, limit = COLLAPSIBLE_TEXT_LIMIT) {
+  const text = normalizeCollapsibleText(value)
+  if (!isTextCollapsible(text, limit)) {
+    return text
+  }
+
+  return `${text.slice(0, limit).trimEnd()}…`
+}
+
+function isTextBlockExpanded(key: string) {
+  return Boolean(expandedTextBlocks.value[key])
+}
+
+function toggleTextBlock(key: string) {
+  expandedTextBlocks.value = {
+    ...expandedTextBlocks.value,
+    [key]: !expandedTextBlocks.value[key],
+  }
+}
+
+function getTextBlockDisplayValue(key: string, value: unknown) {
+  const text = normalizeCollapsibleText(value)
+  if (!isTextCollapsible(text)) {
+    return text
+  }
+
+  return isTextBlockExpanded(key) ? text : buildCollapsedText(text)
 }
 
 watch(dedupStrategy, (value) => {
@@ -1404,6 +1529,18 @@ watch(() => filteredDryRunRows.value.length, () => {
   dryRunPage.value = Math.min(dryRunPage.value, dryRunPageCount.value)
 })
 
+watch(importRunData, () => {
+  importRunPage.value = 1
+})
+
+watch(activeImportRunFilter, () => {
+  importRunPage.value = 1
+})
+
+watch(() => filteredImportRunRows.value.length, () => {
+  importRunPage.value = Math.min(importRunPage.value, importRunPageCount.value)
+})
+
 function setLinkedSummaryPage(page: number) {
   linkedSummaryPage.value = Math.min(
     Math.max(1, Number(page || 1)),
@@ -1457,6 +1594,48 @@ function buildVisibleDryRunPageItems(): Array<number | 'start-ellipsis' | 'end-e
   return items
 }
 
+function setImportRunPage(page: number) {
+  importRunPage.value = Math.min(
+    Math.max(1, Number(page || 1)),
+    Math.max(1, Number(importRunPageCount.value || 1)),
+  )
+}
+
+function buildVisibleImportRunPageItems(): Array<number | 'start-ellipsis' | 'end-ellipsis'> {
+  const totalPages = importRunPageCount.value
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1)
+  }
+
+  const currentPage = Math.min(importRunPage.value, totalPages)
+  const lastPage = totalPages
+  let startPage = Math.max(2, currentPage - 1)
+  let endPage = Math.min(lastPage - 1, currentPage + 1)
+
+  if (currentPage <= 4) {
+    endPage = 4
+  } else if (currentPage >= lastPage - 3) {
+    startPage = lastPage - 3
+  }
+
+  const items: Array<number | 'start-ellipsis' | 'end-ellipsis'> = [1]
+
+  if (startPage > 2) {
+    items.push('start-ellipsis')
+  }
+
+  for (let page = startPage; page <= endPage; page += 1) {
+    items.push(page)
+  }
+
+  if (endPage < lastPage - 1) {
+    items.push('end-ellipsis')
+  }
+
+  items.push(lastPage)
+  return items
+}
+
 function buildVisibleLinkedSummaryItems(section: LinkedImportSummarySection): LinkedImportSummaryItem[] {
   const page = Math.min(linkedSummaryPage.value, Math.max(1, section.pageCount || 1))
   const startIndex = (page - 1) * section.pageSize
@@ -1465,7 +1644,7 @@ function buildVisibleLinkedSummaryItems(section: LinkedImportSummarySection): Li
 
 function formatDedupFieldList(fields: unknown): string {
   const normalizedFields = Array.isArray(fields)
-    ? fields.map((field) => formatImporterFieldLabel(String(field || '').trim())).filter(Boolean)
+    ? fields.map((field) => resolveImporterFieldLabel(String(field || '').trim())).filter(Boolean)
     : []
   return normalizedFields.length ? normalizedFields.join(', ') : '—'
 }
@@ -1985,24 +2164,64 @@ async function saveDedupSettings() {
   busyAction.value = 'dedup'
 
   try {
-    const response = await apiStore.saveImportMapping(
-      String(session.value.id),
-      buildMappingPayload(mappingRows.value),
-      buildDedupPayload({
-        strategy: dedupStrategy.value,
-        fields: effectiveDedupFields.value,
-        condition: dedupCondition.value,
-      }),
-      {
-        default_responsible_id: taskDefaultResponsibleId.value,
-        default_comment_author_id: taskDefaultCommentAuthorId.value,
-      },
-    )
-    mappingData.value = response.item
-    dryRunData.value = null
-    importRunData.value = null
-    syncMappingRows()
+    await persistDedupSettings()
     setSuccess('Правила обработки дублей сохранены.')
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
+  } finally {
+    busyAction.value = ''
+  }
+}
+
+async function persistDedupSettings() {
+  if (!session.value?.id) {
+    return null
+  }
+
+  const response = await apiStore.saveImportMapping(
+    String(session.value.id),
+    buildMappingPayload(mappingRows.value),
+    buildDedupPayload({
+      strategy: dedupStrategy.value,
+      fields: effectiveDedupFields.value,
+      condition: dedupCondition.value,
+    }),
+    {
+      default_responsible_id: taskDefaultResponsibleId.value,
+      default_comment_author_id: taskDefaultCommentAuthorId.value,
+    },
+  )
+  mappingData.value = response.item
+  validationData.value = null
+  dryRunData.value = null
+  importRunData.value = null
+  syncMappingRows()
+  return response.item
+}
+
+async function persistDedupSettingsIfNeeded() {
+  if (!hasPendingDedupChanges.value) {
+    return null
+  }
+
+  return await persistDedupSettings()
+}
+
+async function skipDedupStep() {
+  if (!session.value?.id || !isDedupApplicable.value) {
+    return
+  }
+
+  resetMessages()
+  dedupStrategy.value = 'create'
+  dedupFields.value = []
+  dedupCondition.value = 'any'
+  busyAction.value = 'dedup-skip'
+
+  try {
+    await persistDedupSettings()
+    busyAction.value = ''
+    await runValidation()
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -2084,6 +2303,7 @@ async function runValidation() {
   busyAction.value = 'validation'
 
   try {
+    await persistDedupSettingsIfNeeded()
     const response = await apiStore.validateImportSession(String(session.value.id))
     validationData.value = response.item
     dryRunData.value = null
@@ -2111,6 +2331,7 @@ async function runDryRun() {
   busyAction.value = 'dry-run'
 
   try {
+    await persistDedupSettingsIfNeeded()
     const dryRunResult = await executeDryRunRequest(String(session.value.id))
     setSuccess(
       requiresPerRowDedupDecision.value && Number(dryRunResult?.pending_decision_rows || 0) > 0
@@ -2135,6 +2356,9 @@ async function runImport() {
   cancelRequested.value = false
 
   try {
+    busyAction.value = 'run'
+    await persistDedupSettingsIfNeeded()
+
     if (isDirectCrmEntityImport.value && dedupStrategy.value === 'create' && !dryRunData.value) {
       busyAction.value = 'dry-run'
       await executeDryRunRequest(String(session.value.id))
@@ -2184,11 +2408,13 @@ async function runImport() {
 
 async function executeDryRunRequest(sessionId: string) {
   const response = await apiStore.dryRunImportSession(sessionId)
-  dryRunData.value = response.item
+  dryRunData.value = null
   activeDryRunDedupRiskOnly.value = false
   importRunData.value = null
   currentStep.value = 6
-  return response.item
+  const dryRunResult = await resolveDryRunExecutionResult(sessionId, response.item)
+  dryRunData.value = dryRunResult
+  return dryRunResult
 }
 
 async function confirmMassCreateImport() {
@@ -2341,6 +2567,46 @@ function buildImportRunFromSnapshot(snapshot: Record<string, any> | null | undef
   return buildImportRunSummaryFromSessionSnapshot(snapshot)
 }
 
+function buildDryRunFromSnapshot(snapshot: Record<string, any> | null | undefined) {
+  return buildDryRunSummaryFromSessionSnapshot(snapshot)
+}
+
+async function waitForDryRunExecutionResult(sessionId: string) {
+  const maxAttempts = 600
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const response = await apiStore.getImportSession(sessionId)
+    const snapshot = response.item
+    syncSessionSnapshot(snapshot)
+
+    const resolvedDryRun = buildDryRunFromSnapshot(snapshot)
+    if (resolvedDryRun && !shouldWaitForDryRunExecutionSnapshot(snapshot)) {
+      return resolvedDryRun
+    }
+
+    const currentStatus = String(snapshot?.status || '')
+    if (currentStatus === 'failed') {
+      throw new Error(String(snapshot?.last_error || 'Тестовый импорт завершился с ошибкой в фоновом worker.'))
+    }
+
+    if (!shouldWaitForDryRunExecutionSnapshot(snapshot)) {
+      throw new Error('Тестовый импорт завершился без итогового отчета.')
+    }
+
+    await sleepAction(1500)
+  }
+
+  const response = await apiStore.getImportSession(sessionId)
+  const snapshot = response.item
+  syncSessionSnapshot(snapshot)
+  const resolvedDryRun = buildDryRunFromSnapshot(snapshot)
+  if (resolvedDryRun) {
+    return resolvedDryRun
+  }
+
+  throw new Error('Тестовый импорт запущен, но не удалось получить его текущее состояние.')
+}
+
 async function waitForImportExecutionResult(sessionId: string) {
   const maxAttempts = 600
 
@@ -2375,6 +2641,23 @@ async function waitForImportExecutionResult(sessionId: string) {
   }
 
   throw new Error('Импорт запущен, но не удалось получить его текущее состояние.')
+}
+
+async function resolveDryRunExecutionResult(sessionId: string, responseItem: Record<string, any> | null | undefined) {
+  if (responseItem && typeof responseItem === 'object' && Array.isArray(responseItem.results)) {
+    syncSessionSnapshot({
+      id: sessionId,
+      status: responseItem.status,
+      summary: { dry_run: responseItem },
+    })
+    await loadHistory()
+    return responseItem
+  }
+
+  syncSessionSnapshot(responseItem)
+  const resolvedDryRun = await waitForDryRunExecutionResult(sessionId)
+  await loadHistory()
+  return resolvedDryRun
 }
 
 async function resolveImportExecutionResult(sessionId: string, responseItem: Record<string, any> | null | undefined) {
@@ -2656,9 +2939,17 @@ onMounted(loadHistory)
                 >
                   {{ headerNotice.label }}
                 </span>
-                <span class="text-[#667b8f]">
-                  {{ headerNotice.message }}
+                <span class="max-w-full whitespace-pre-wrap break-words text-[#667b8f]">
+                  {{ getTextBlockDisplayValue(makeCollapsibleKey('header-notice', headerNotice.label), headerNotice.message) }}
                 </span>
+                <button
+                  v-if="isTextCollapsible(headerNotice.message)"
+                  type="button"
+                  class="text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
+                  @click="toggleTextBlock(makeCollapsibleKey('header-notice', headerNotice.label))"
+                >
+                  {{ isTextBlockExpanded(makeCollapsibleKey('header-notice', headerNotice.label)) ? 'Скрыть' : 'Показать полностью' }}
+                </button>
               </div>
             </div>
 
@@ -3391,11 +3682,19 @@ onMounted(loadHistory)
                       >
                         {{ buildPreflightSeverityLabel(String(issue.severity || '')) }}
                       </span>
-                      <span class="text-xs text-[#8ea0b2]">{{ String(issue.code || '') }}</span>
+                      <span class="text-xs text-[#8ea0b2]">{{ buildPreflightIssueMeta(issue) }}</span>
                     </div>
-                    <div class="text-sm text-[#314256]">
-                      {{ buildPreflightIssueDescription(issue) }}
+                    <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
+                      {{ getTextBlockDisplayValue(makeCollapsibleKey('preflight-issue', `${String(issue.code || 'issue')}:${issueIndex}`), buildPreflightIssueDescription(issue)) }}
                     </div>
+                    <button
+                      v-if="isTextCollapsible(buildPreflightIssueDescription(issue))"
+                      type="button"
+                      class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
+                      @click="toggleTextBlock(makeCollapsibleKey('preflight-issue', `${String(issue.code || 'issue')}:${issueIndex}`))"
+                    >
+                      {{ isTextBlockExpanded(makeCollapsibleKey('preflight-issue', `${String(issue.code || 'issue')}:${issueIndex}`)) ? 'Скрыть' : 'Показать полностью' }}
+                    </button>
                   </div>
                 </div>
                 <div v-else class="rounded-[14px] border border-[#dcefe1] bg-white/85 px-4 py-3 text-sm text-[#2d7a4b]">
@@ -3740,6 +4039,15 @@ onMounted(loadHistory)
                 <div class="flex flex-wrap gap-3">
                   <B24Button
                     v-if="isDedupApplicable"
+                    label="Пропустить шаг"
+                    color="air-tertiary"
+                    size="lg"
+                    :loading="busyAction === 'dedup-skip'"
+                    :disabled="['dedup', 'dedup-skip', 'validation'].includes(String(busyAction || ''))"
+                    @click="skipDedupStep"
+                  />
+                  <B24Button
+                    v-if="isDedupApplicable"
                     label="Сохранить правила"
                     color="air-secondary-accent-2"
                     size="lg"
@@ -3972,11 +4280,11 @@ onMounted(loadHistory)
               </div>
 
               <div
-                v-if="['run', 'retry'].includes(String(busyAction || ''))"
+                v-if="showsSessionProgress"
                 class="mb-4 rounded-[18px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-4"
               >
                 <div class="mb-2 flex items-center justify-between text-sm">
-                  <span class="font-semibold text-[#2e6bd9]">Выполнение импорта</span>
+                  <span class="font-semibold text-[#2e6bd9]">{{ sessionProgressTitle }}</span>
                   <span class="text-[#6f8194]">
                     {{ session?.processed_rows ?? 0 }} из {{ session?.total_rows ?? '...' }} строк
                   </span>
@@ -3989,8 +4297,8 @@ onMounted(loadHistory)
                 </div>
                 <div class="flex flex-wrap gap-4 text-sm text-[#5f7285]">
                   <span>Обработано: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
-                  <span>Успешно: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
-                  <span>Ошибки: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
+                  <span>{{ busyAction === 'dry-run' ? 'К записи' : 'Успешно' }}: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
+                  <span>{{ busyAction === 'dry-run' ? 'Пропущено' : 'Ошибки' }}: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
                 </div>
               </div>
 
@@ -4027,15 +4335,47 @@ onMounted(loadHistory)
                   <div>
                     <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">Неполный поиск дублей</div>
                     <div class="mt-1 text-sm font-semibold">{{ dryRunDedupWeakeningNotice.title }}</div>
-                    <div class="mt-1 text-sm text-[#9c6a2a]">{{ dryRunDedupWeakeningNotice.description }}</div>
+                    <div class="mt-1 whitespace-pre-wrap break-words text-sm text-[#9c6a2a]">
+                      {{ getTextBlockDisplayValue(makeCollapsibleKey('dry-run-dedup', 'description'), dryRunDedupWeakeningNotice.description) }}
+                    </div>
+                    <button
+                      v-if="isTextCollapsible(dryRunDedupWeakeningNotice.description)"
+                      type="button"
+                      class="mt-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
+                      @click="toggleTextBlock(makeCollapsibleKey('dry-run-dedup', 'description'))"
+                    >
+                      {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-dedup', 'description')) ? 'Скрыть' : 'Показать полностью' }}
+                    </button>
                   </div>
                   <div class="rounded-full border border-[#f3c995] bg-white px-3 py-1 text-sm font-semibold text-[#a96017]">
                     {{ dryRunDedupWeakeningNotice.count }}
                   </div>
                 </div>
                 <div class="mt-3 grid gap-2 text-sm text-[#8f5b18] md:grid-cols-2">
-                  <div>Поля не заполнены: {{ dryRunDedupWeakeningNotice.fieldsLabel }}</div>
-                  <div>Строки риска: {{ dryRunDedupWeakeningNotice.rowsLabel }}</div>
+                  <div class="min-w-0">
+                    <span>Поля не заполнены: </span>
+                    <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('dry-run-dedup', 'fields'), dryRunDedupWeakeningNotice.fieldsLabel) }}</span>
+                    <button
+                      v-if="isTextCollapsible(dryRunDedupWeakeningNotice.fieldsLabel)"
+                      type="button"
+                      class="ml-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
+                      @click="toggleTextBlock(makeCollapsibleKey('dry-run-dedup', 'fields'))"
+                    >
+                      {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-dedup', 'fields')) ? 'Скрыть' : 'Показать полностью' }}
+                    </button>
+                  </div>
+                  <div class="min-w-0">
+                    <span>Строки риска: </span>
+                    <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('dry-run-dedup', 'rows'), dryRunDedupWeakeningNotice.rowsLabel) }}</span>
+                    <button
+                      v-if="isTextCollapsible(dryRunDedupWeakeningNotice.rowsLabel)"
+                      type="button"
+                      class="ml-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
+                      @click="toggleTextBlock(makeCollapsibleKey('dry-run-dedup', 'rows'))"
+                    >
+                      {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-dedup', 'rows')) ? 'Скрыть' : 'Показать полностью' }}
+                    </button>
+                  </div>
                 </div>
                 <div class="mt-3">
                   <button
@@ -4150,7 +4490,23 @@ onMounted(loadHistory)
                   :empty="activeDryRunDedupRiskOnly
                     ? 'Строки с риском неполного поиска дублей не найдены.'
                     : 'После тестового импорта здесь появится предварительный отчет по строкам.'"
-                />
+                >
+                  <template #details-cell="{ row }">
+                    <div class="py-1">
+                      <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
+                        {{ getTextBlockDisplayValue(makeCollapsibleKey('dry-run-row', row.original.key), row.original.details) }}
+                      </div>
+                      <button
+                        v-if="isTextCollapsible(row.original.details)"
+                        type="button"
+                        class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
+                        @click="toggleTextBlock(makeCollapsibleKey('dry-run-row', row.original.key))"
+                      >
+                        {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                      </button>
+                    </div>
+                  </template>
+                </B24Table>
                 <div
                   v-if="dryRunData && dryRunPageCount > 1"
                   class="border-t border-[#e8eef5] bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-4 py-4"
@@ -4210,7 +4566,38 @@ onMounted(loadHistory)
                   :columns="validationTableColumns"
                   :data="validationIssueRows"
                   empty="Ошибок не найдено. Можно запускать тестовый импорт."
-                />
+                >
+                  <template #message-cell="{ row }">
+                    <div class="py-1">
+                      <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
+                        {{ getTextBlockDisplayValue(makeCollapsibleKey('validation-message', row.original.key), row.original.message) }}
+                      </div>
+                      <button
+                        v-if="isTextCollapsible(row.original.message)"
+                        type="button"
+                        class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
+                        @click="toggleTextBlock(makeCollapsibleKey('validation-message', row.original.key))"
+                      >
+                        {{ isTextBlockExpanded(makeCollapsibleKey('validation-message', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                      </button>
+                    </div>
+                  </template>
+                  <template #value-cell="{ row }">
+                    <div class="py-1">
+                      <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
+                        {{ getTextBlockDisplayValue(makeCollapsibleKey('validation-value', row.original.key), row.original.value) }}
+                      </div>
+                      <button
+                        v-if="isTextCollapsible(row.original.value)"
+                        type="button"
+                        class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
+                        @click="toggleTextBlock(makeCollapsibleKey('validation-value', row.original.key))"
+                      >
+                        {{ isTextBlockExpanded(makeCollapsibleKey('validation-value', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                      </button>
+                    </div>
+                  </template>
+                </B24Table>
               </div>
             </section>
           </section>
@@ -4403,8 +4790,29 @@ onMounted(loadHistory)
                     <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">{{ group.label }}</div>
                     <div class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[#8c5c24]">{{ group.count }}</div>
                   </div>
-                  <div class="mt-2 text-sm font-medium text-[#314256]">{{ group.reason }}</div>
-                  <div class="mt-3 text-xs text-[#8a6c4a]">Строки: {{ group.rowNumbers.join(', ') }}</div>
+                  <div class="mt-2 whitespace-pre-wrap break-words text-sm font-medium text-[#314256]">
+                    {{ getTextBlockDisplayValue(makeCollapsibleKey('import-group-reason', group.key), group.reason) }}
+                  </div>
+                  <button
+                    v-if="isTextCollapsible(group.reason)"
+                    type="button"
+                    class="mt-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
+                    @click="toggleTextBlock(makeCollapsibleKey('import-group-reason', group.key))"
+                  >
+                    {{ isTextBlockExpanded(makeCollapsibleKey('import-group-reason', group.key)) ? 'Скрыть' : 'Показать полностью' }}
+                  </button>
+                  <div class="mt-3 text-xs text-[#8a6c4a]">
+                    <span>Строки: </span>
+                    <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('import-group-rows', group.key), group.rowNumbers.join(', ')) }}</span>
+                    <button
+                      v-if="isTextCollapsible(group.rowNumbers.join(', '))"
+                      type="button"
+                      class="ml-2 text-[11px] font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
+                      @click="toggleTextBlock(makeCollapsibleKey('import-group-rows', group.key))"
+                    >
+                      {{ isTextBlockExpanded(makeCollapsibleKey('import-group-rows', group.key)) ? 'Скрыть' : 'Показать полностью' }}
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -4431,15 +4839,47 @@ onMounted(loadHistory)
                   <div>
                     <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">Неполный поиск дублей</div>
                     <div class="mt-1 text-sm font-semibold">{{ importRunDedupWeakeningNotice.title }}</div>
-                    <div class="mt-1 text-sm text-[#9c6a2a]">{{ importRunDedupWeakeningNotice.description }}</div>
+                    <div class="mt-1 whitespace-pre-wrap break-words text-sm text-[#9c6a2a]">
+                      {{ getTextBlockDisplayValue(makeCollapsibleKey('import-dedup', 'description'), importRunDedupWeakeningNotice.description) }}
+                    </div>
+                    <button
+                      v-if="isTextCollapsible(importRunDedupWeakeningNotice.description)"
+                      type="button"
+                      class="mt-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
+                      @click="toggleTextBlock(makeCollapsibleKey('import-dedup', 'description'))"
+                    >
+                      {{ isTextBlockExpanded(makeCollapsibleKey('import-dedup', 'description')) ? 'Скрыть' : 'Показать полностью' }}
+                    </button>
                   </div>
                   <div class="rounded-full border border-[#f3c995] bg-white px-3 py-1 text-sm font-semibold text-[#a96017]">
                     {{ importRunDedupWeakeningNotice.count }}
                   </div>
                 </div>
                 <div class="mt-3 grid gap-2 text-sm text-[#8f5b18] md:grid-cols-2">
-                  <div>Поля не заполнены: {{ importRunDedupWeakeningNotice.fieldsLabel }}</div>
-                  <div>Строки риска: {{ importRunDedupWeakeningNotice.rowsLabel }}</div>
+                  <div class="min-w-0">
+                    <span>Поля не заполнены: </span>
+                    <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('import-dedup', 'fields'), importRunDedupWeakeningNotice.fieldsLabel) }}</span>
+                    <button
+                      v-if="isTextCollapsible(importRunDedupWeakeningNotice.fieldsLabel)"
+                      type="button"
+                      class="ml-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
+                      @click="toggleTextBlock(makeCollapsibleKey('import-dedup', 'fields'))"
+                    >
+                      {{ isTextBlockExpanded(makeCollapsibleKey('import-dedup', 'fields')) ? 'Скрыть' : 'Показать полностью' }}
+                    </button>
+                  </div>
+                  <div class="min-w-0">
+                    <span>Строки риска: </span>
+                    <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('import-dedup', 'rows'), importRunDedupWeakeningNotice.rowsLabel) }}</span>
+                    <button
+                      v-if="isTextCollapsible(importRunDedupWeakeningNotice.rowsLabel)"
+                      type="button"
+                      class="ml-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
+                      @click="toggleTextBlock(makeCollapsibleKey('import-dedup', 'rows'))"
+                    >
+                      {{ isTextBlockExpanded(makeCollapsibleKey('import-dedup', 'rows')) ? 'Скрыть' : 'Показать полностью' }}
+                    </button>
+                  </div>
                 </div>
                 <div class="mt-3">
                   <button
@@ -4459,11 +4899,77 @@ onMounted(loadHistory)
                   loading-color="air-primary"
                   loading-animation="loading"
                   :columns="importRunTableColumns"
-                  :data="filteredImportRunRows"
+                  :data="paginatedImportRunRows"
                   :empty="activeImportRunFilter === 'all'
                     ? 'После запуска импорта здесь появится итог по строкам.'
                     : 'Для выбранного фильтра строк не найдено.'"
-                />
+                >
+                  <template #details-cell="{ row }">
+                    <div class="py-1">
+                      <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
+                        {{ getTextBlockDisplayValue(makeCollapsibleKey('import-run-row', row.original.key), row.original.details) }}
+                      </div>
+                      <button
+                        v-if="isTextCollapsible(row.original.details)"
+                        type="button"
+                        class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
+                        @click="toggleTextBlock(makeCollapsibleKey('import-run-row', row.original.key))"
+                      >
+                        {{ isTextBlockExpanded(makeCollapsibleKey('import-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                      </button>
+                    </div>
+                  </template>
+                </B24Table>
+                <div
+                  v-if="importRunData && importRunPageCount > 1"
+                  class="border-t border-[#e8eef5] bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-4 py-4"
+                >
+                  <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div class="text-sm text-[#5f7285]">
+                      Показаны строки <span class="font-semibold text-[#314256]">{{ importRunPageRangeStart }}-{{ importRunPageRangeEnd }}</span>
+                      из <span class="font-semibold text-[#314256]">{{ filteredImportRunRows.length }}</span>.
+                    </div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                      Страница {{ importRunPage }} из {{ importRunPageCount }}
+                    </div>
+                  </div>
+
+                  <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#d9e2ec] bg-white px-3 py-2 text-sm font-medium text-[#516478] transition hover:border-[#b8cae1] hover:text-[#2e6bd9] disabled:cursor-not-allowed disabled:opacity-45"
+                      :disabled="importRunPage <= 1"
+                      @click="setImportRunPage(importRunPage - 1)"
+                    >
+                      Назад
+                    </button>
+
+                    <button
+                      v-for="pageItem in buildVisibleImportRunPageItems()"
+                      :key="String(pageItem)"
+                      type="button"
+                      class="min-w-10 rounded-full border px-3 py-2 text-sm font-semibold transition"
+                      :class="pageItem === importRunPage
+                        ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
+                        : pageItem === 'start-ellipsis' || pageItem === 'end-ellipsis'
+                          ? 'cursor-default border-transparent bg-transparent text-[#9aa9b8]'
+                          : 'border-[#d9e2ec] bg-white text-[#516478] hover:border-[#b8cae1] hover:text-[#2e6bd9]'"
+                      :disabled="pageItem === 'start-ellipsis' || pageItem === 'end-ellipsis'"
+                      @click="typeof pageItem === 'number' && setImportRunPage(pageItem)"
+                    >
+                      {{ pageItem === 'start-ellipsis' || pageItem === 'end-ellipsis' ? '…' : pageItem }}
+                    </button>
+
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#d9e2ec] bg-white px-3 py-2 text-sm font-medium text-[#516478] transition hover:border-[#b8cae1] hover:text-[#2e6bd9] disabled:cursor-not-allowed disabled:opacity-45"
+                      :disabled="importRunPage >= importRunPageCount"
+                      @click="setImportRunPage(importRunPage + 1)"
+                    >
+                      Далее
+                    </button>
+                  </div>
+                </div>
               </div>
             </section>
           </section>

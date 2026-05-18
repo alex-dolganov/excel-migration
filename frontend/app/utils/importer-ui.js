@@ -2,6 +2,47 @@ export const EMPTY_MAPPING_SELECT_VALUE = '__skip_import__'
 export const SUPPORTED_DEDUP_FIELDS = ['EMAIL', 'PHONE', 'TITLE']  // legacy list kept for reference
 const _DEDUP_FIELD_RE = /^[A-Z][A-Z0-9_]*$/
 export const SUPPORTED_DEDUP_STRATEGIES = ['create', 'skip', 'update', 'ask']
+const IMPORT_MODE_OPTIONS = [
+  {
+    value: 'simple',
+    label: 'Простой импорт',
+    description: 'Только файл, сущность, простое сопоставление полей и запуск импорта.',
+  },
+  {
+    value: 'advanced',
+    label: 'Расширенный импорт',
+    description: 'Полный сценарий с шаблонами, правилами сопоставления и расширенной настройкой дублей.',
+  },
+]
+const IMPORT_MODE_META = {
+  simple: {
+    value: 'simple',
+    label: 'Простой импорт',
+    description: 'Только файл, сущность, простое сопоставление полей и запуск импорта.',
+    hidesAdvancedTools: true,
+    allowsPerRowDedupDecisions: false,
+  },
+  advanced: {
+    value: 'advanced',
+    label: 'Расширенный импорт',
+    description: 'Полный сценарий с шаблонами, правилами сопоставления и расширенной настройкой дублей.',
+    hidesAdvancedTools: false,
+    allowsPerRowDedupDecisions: true,
+  },
+}
+const SIMPLE_MODE_DEDUP_UNSUPPORTED_TYPES = new Set([
+  'task',
+  'task_comment',
+  'task_checklist_item',
+  'task_attachment',
+  'crm_files_lead',
+  'crm_files_contact',
+  'crm_files_company',
+  'crm_files_deal',
+  'crm_activity',
+  'crm_note',
+  'smart_process',
+])
 export const ASSIGNABLE_IMPORTER_ROLES = ['operator', 'viewer']
 export const IMPORTER_PERMISSION_CODES = [
   'roles.manage',
@@ -277,6 +318,42 @@ export const LINKED_IMPORT_SCENARIOS = {
       exampleColumns: ['COMPANY__TITLE', 'COMPANY__PHONE', 'DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__CURRENCY_ID', 'DEAL__STAGE_ID'],
     },
   },
+}
+
+export function buildImportModeOptions() {
+  return IMPORT_MODE_OPTIONS.map((item) => ({ ...item }))
+}
+
+export function getImportModeMeta(mode) {
+  const normalizedMode = String(mode || '').trim().toLowerCase()
+  const selectedMode = Object.hasOwn(IMPORT_MODE_META, normalizedMode) ? normalizedMode : 'advanced'
+  return { ...IMPORT_MODE_META[selectedMode] }
+}
+
+export function buildSimpleDedupPreset({ entityType, mappingRows } = {}) {
+  const normalizedEntityType = String(entityType || '').trim().toLowerCase()
+  if (!normalizedEntityType || SIMPLE_MODE_DEDUP_UNSUPPORTED_TYPES.has(normalizedEntityType)) {
+    return {
+      strategy: 'create',
+      condition: 'any',
+      fields: [],
+      available: false,
+    }
+  }
+
+  const mappedFields = Array.from(new Set(
+    (Array.isArray(mappingRows) ? mappingRows : [])
+      .map((row) => String(row?.targetFieldId || '').trim().toUpperCase())
+      .filter(Boolean),
+  ))
+  const recommendedFields = SUPPORTED_DEDUP_FIELDS.filter((fieldId) => mappedFields.includes(fieldId))
+
+  return {
+    strategy: recommendedFields.length ? 'update' : 'create',
+    condition: 'any',
+    fields: recommendedFields,
+    available: recommendedFields.length > 0,
+  }
 }
 
 const LINKED_ENTITY_FIELD_PREFIXES = {
@@ -1669,6 +1746,31 @@ export function shouldWaitForImportExecutionSnapshot(snapshot) {
   const status = String(snapshot?.status || '').trim().toLowerCase()
 
   return ['draft', 'uploaded', 'validated', 'ready', 'running'].includes(status)
+}
+
+export function shouldWaitForDryRunExecutionSnapshot(snapshot) {
+  const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
+  const job = summary?.job && typeof summary.job === 'object' ? summary.job : {}
+  const jobMode = String(job?.mode || '').trim().toLowerCase()
+  const jobState = String(job?.state || '').trim().toLowerCase()
+
+  return jobMode === 'dry_run' && ['queued', 'running'].includes(jobState)
+}
+
+export function buildDryRunSummaryFromSessionSnapshot(snapshot) {
+  const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
+  const rawDryRun = summary?.dry_run
+  const dryRun = rawDryRun && typeof rawDryRun === 'object' ? rawDryRun : null
+
+  if (!dryRun) {
+    return null
+  }
+
+  return {
+    session_id: String(snapshot?.session_id || snapshot?.id || ''),
+    status: String(snapshot?.status || ''),
+    ...dryRun,
+  }
 }
 
 export function buildImportRunSummaryFromSessionSnapshot(snapshot) {

@@ -91,12 +91,15 @@ def build_sheet_xml(rows):
 class ImportDryRunApiTest(TestCase):
     def setUp(self):
         super().setUp()
+        self.queue_env_override = patch.dict("os.environ", {"ENABLE_RABBITMQ": "0"}, clear=False)
+        self.queue_env_override.start()
         self.media_root = tempfile.mkdtemp()
         self.media_override = override_settings(MEDIA_ROOT=self.media_root)
         self.media_override.enable()
 
     def tearDown(self):
         self.media_override.disable()
+        self.queue_env_override.stop()
         shutil.rmtree(self.media_root, ignore_errors=True)
         super().tearDown()
 
@@ -120,6 +123,7 @@ class ImportDryRunApiTest(TestCase):
             return FakeListRequest(duplicates_by_filter.get(normalized_filter, []))
 
         account = SimpleNamespace(
+            id="account-member-1-test.bitrix24.ru",
             member_id="member-1",
             domain_url="test.bitrix24.ru",
             b24_user_id=7,
@@ -389,6 +393,7 @@ class ImportDryRunApiTest(TestCase):
             "dedup": {
                 "strategy": "update",
                 "fields": ["EMAIL", "PHONE"],
+                "condition": "all",
             },
         }
         session.save(update_fields=["import_settings", "updated_at"])
@@ -501,3 +506,42 @@ class ImportDryRunApiTest(TestCase):
                 "select": ["ID"],
             }
         ])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch.dict("os.environ", {"ENABLE_RABBITMQ": "0"}, clear=False)
+    def test_dry_run_reuses_duplicate_lookup_for_identical_rows(self, get_from_jwt_token):
+        account = self.create_account(
+            duplicates_by_filter={
+                (("PHONE", "+123456789"),): [{"ID": 915}],
+            }
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session_with_rows(
+            [
+                ["Lead title", "Phone"],
+                ["Alice", "+123456789"],
+                ["Alice copy", "+123456789"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+        session.refresh_from_db()
+        session.import_settings = {
+            **session.import_settings,
+            "dedup": {
+                "strategy": "update",
+                "fields": ["PHONE"],
+            },
+        }
+        session.save(update_fields=["import_settings", "updated_at"])
+
+        response = self.client.post(
+            reverse("importer:session-dry-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["ready_rows"], 2)
+        self.assertEqual(account.list_calls, [{"filter": {"PHONE": "+123456789"}, "select": ["ID"]}])

@@ -1672,6 +1672,37 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(response.json()["item"]["successful_rows"], 0)
         self.assertEqual(response.json()["item"]["failed_rows"], 0)
 
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch("importer.views.enqueue_import_session_dry_run")
+    @patch.dict("os.environ", {"ENABLE_RABBITMQ": "1", "CELERY_BROKER_URL": "amqp://guest:guest@rabbitmq:5672//"}, clear=False)
+    def test_dry_run_enqueues_background_job_when_queue_enabled(self, enqueue_import_session_dry_run, get_from_jwt_token):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session(
+            [
+                ["Lead title", "Email", "Phone"],
+                ["Alice", "alice@example.com", "+123456789"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+
+        response = self.run_session_dry_run(session)
+
+        self.assertEqual(response.status_code, 202, response.content)
+        enqueue_import_session_dry_run.assert_called_once()
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ImportSession.Status.RUNNING)
+        self.assertEqual(response.json()["item"]["status"], ImportSession.Status.RUNNING)
+        self.assertEqual(response.json()["item"]["session_id"], str(session.id))
+        self.assertEqual(session.processed_rows, 0)
+        self.assertEqual(session.successful_rows, 0)
+        self.assertEqual(session.failed_rows, 0)
+        self.assertEqual(response.json()["item"]["processed_rows"], 0)
+        self.assertEqual(response.json()["item"]["successful_rows"], 0)
+        self.assertEqual(response.json()["item"]["failed_rows"], 0)
+
     @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     @patch("importer.views.enqueue_import_session_run", side_effect=KombuOperationalError("[Errno -5] No address associated with hostname"))
