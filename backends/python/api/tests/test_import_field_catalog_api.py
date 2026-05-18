@@ -81,6 +81,55 @@ class ImportFieldCatalogApiTest(TestCase):
         )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_prefers_bitrix_userfield_labels_over_uf_crm_code(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "UF_CRM_CUSTOM_PROMO": {
+                                    "title": "UF_CRM_CUSTOM_PROMO",
+                                    "formLabel": "UF_CRM_CUSTOM_PROMO",
+                                    "editFormLabel": "Промо-материалы",
+                                    "listColumnLabel": "Промо-материалы",
+                                    "type": "file",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "deal"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["items"],
+            [
+                {
+                    "id": "UF_CRM_CUSTOM_PROMO",
+                    "title": "Промо-материалы",
+                    "type": "file",
+                    "required": False,
+                    "multiple": True,
+                    "is_custom": True,
+                    "items": [],
+                },
+            ],
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_returns_contact_name_fields_as_non_required_in_normalized_catalog(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(
             member_id="member-1",
@@ -157,7 +206,122 @@ class ImportFieldCatalogApiTest(TestCase):
         )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_returns_static_task_fields_catalog(self, get_from_jwt_token):
+    def test_returns_task_fields_catalog_with_custom_fields_from_bitrix(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                tasks=SimpleNamespace(
+                    task=SimpleNamespace(
+                        getFields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название задачи",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "DEADLINE": {
+                                    "title": "Крайний срок",
+                                    "type": "datetime",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_AUTO_155439530230": {
+                                    "title": "UF_AUTO_155439530230",
+                                    "formLabel": "UF_AUTO_155439530230",
+                                    "editFormLabel": "Код проекта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_AUTO_155439530231": {
+                                    "title": "Стадия задачи",
+                                    "type": "enumeration",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                    "items": {
+                                        "32": "Новая",
+                                        "33": "В работе",
+                                    },
+                                },
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "task"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["entity_type"], "task")
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+
+        self.assertIn("DESCRIPTION", items_by_id)
+        self.assertIn("RESPONSIBLE_ID", items_by_id)
+        self.assertEqual(
+            items_by_id["TITLE"],
+            {
+                "id": "TITLE",
+                "title": "Название задачи",
+                "type": "string",
+                "required": True,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+        )
+        self.assertEqual(
+            items_by_id["DEADLINE"],
+            {
+                "id": "DEADLINE",
+                "title": "Крайний срок",
+                "type": "datetime",
+                "required": False,
+                "multiple": False,
+                "is_custom": False,
+                "items": [],
+            },
+        )
+        self.assertEqual(
+            items_by_id["UF_AUTO_155439530230"],
+            {
+                "id": "UF_AUTO_155439530230",
+                "title": "Код проекта",
+                "type": "string",
+                "required": False,
+                "multiple": False,
+                "is_custom": True,
+                "items": [],
+            },
+        )
+        self.assertEqual(
+            items_by_id["UF_AUTO_155439530231"],
+            {
+                "id": "UF_AUTO_155439530231",
+                "title": "Стадия задачи",
+                "type": "enumeration",
+                "required": False,
+                "multiple": True,
+                "is_custom": True,
+                "items": [
+                    {"id": "32", "title": "Новая"},
+                    {"id": "33", "title": "В работе"},
+                ],
+            },
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_task_fields_catalog_falls_back_to_static_fields_when_bitrix_loader_is_unavailable(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(
             member_id="member-1",
             domain_url="test.bitrix24.ru",
@@ -174,7 +338,7 @@ class ImportFieldCatalogApiTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["entity_type"], "task")
         self.assertEqual(
-            response.json()["items"],
+            response.json()["items"][:3],
             [
                 {
                     "id": "TITLE",
@@ -199,105 +363,6 @@ class ImportFieldCatalogApiTest(TestCase):
                     "title": "Ответственный (ID)",
                     "type": "integer",
                     "required": True,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "ACCOMPLICES",
-                    "title": "Соисполнители (ID)",
-                    "type": "integer",
-                    "required": False,
-                    "multiple": True,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "AUDITORS",
-                    "title": "Наблюдатели (ID)",
-                    "type": "integer",
-                    "required": False,
-                    "multiple": True,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "CREATED_BY",
-                    "title": "Постановщик (ID)",
-                    "type": "integer",
-                    "required": False,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "GROUP_ID",
-                    "title": "Рабочая группа (ID)",
-                    "type": "integer",
-                    "required": False,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "PRIORITY",
-                    "title": "Приоритет",
-                    "type": "integer",
-                    "required": False,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "TAGS",
-                    "title": "Теги",
-                    "type": "string",
-                    "required": False,
-                    "multiple": True,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "DEADLINE",
-                    "title": "Крайний срок",
-                    "type": "datetime",
-                    "required": False,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "START_DATE_PLAN",
-                    "title": "Плановая дата начала",
-                    "type": "datetime",
-                    "required": False,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "END_DATE_PLAN",
-                    "title": "Плановая дата завершения",
-                    "type": "datetime",
-                    "required": False,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "XML_ID",
-                    "title": "Внешний ID",
-                    "type": "string",
-                    "required": False,
-                    "multiple": False,
-                    "is_custom": False,
-                    "items": [],
-                },
-                {
-                    "id": "PARENT_ID",
-                    "title": "ID родительской задачи",
-                    "type": "integer",
-                    "required": False,
                     "multiple": False,
                     "is_custom": False,
                     "items": [],
@@ -886,6 +951,112 @@ class ImportFieldCatalogApiTest(TestCase):
                     "bitrix_token": get_from_jwt_token.return_value,
                     "api_method": "crm.status.list",
                     "params": {"filter": {"ENTITY_ID": "DEAL_TYPE"}},
+                },
+            ],
+        )
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_deal_category_and_currency_items_for_enum_filters(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "CATEGORY_ID": {
+                                    "title": "Воронка",
+                                    "type": "crm_category",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": [],
+                                },
+                                "CURRENCY_ID": {
+                                    "title": "Валюта",
+                                    "type": "crm_currency",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": [],
+                                },
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+
+        def build_lookup_response(*args, **kwargs):
+            api_method = kwargs["api_method"]
+            if api_method == "crm.category.list":
+                return SimpleNamespace(
+                    result={
+                        "categories": [
+                            {"ID": 0, "NAME": "Общая"},
+                            {"ID": 7, "NAME": "Повторные продажи"},
+                        ]
+                    }
+                )
+
+            if api_method == "crm.currency.list":
+                return SimpleNamespace(
+                    result={
+                        "result": [
+                            {"CURRENCY": "RUB", "FULL_NAME": "Российский рубль"},
+                            {"CURRENCY": "USD", "FULL_NAME": "Доллар США"},
+                        ]
+                    }
+                )
+
+            raise AssertionError(f"Unexpected Bitrix API method: {api_method}")
+
+        bitrix_api_request.side_effect = build_lookup_response
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "deal"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+        self.assertEqual(
+            items_by_id["CATEGORY_ID"]["items"],
+            [
+                {"id": "0", "title": "Общая"},
+                {"id": "7", "title": "Повторные продажи"},
+            ],
+        )
+        self.assertEqual(
+            items_by_id["CURRENCY_ID"]["items"],
+            [
+                {"id": "RUB", "title": "Российский рубль"},
+                {"id": "USD", "title": "Доллар США"},
+            ],
+        )
+        self.assertCountEqual(
+            [call.kwargs for call in bitrix_api_request.call_args_list],
+            [
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.category.list",
+                    "params": {"entityTypeId": 2},
+                },
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.currency.list",
+                    "params": {},
                 },
             ],
         )

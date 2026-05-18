@@ -1,6 +1,8 @@
 from typing import Any
 from b24pysdk.bitrix_api.requests import BitrixAPIRequest
 
+from .task_resolution import invoke_with_fallbacks
+
 
 TASK_FIELDS = [
     {
@@ -605,7 +607,6 @@ CRM_NOTE_FIELDS = [
 
 
 STATIC_FIELD_CATALOGS = {
-    "task": TASK_FIELDS,
     "task_comment": TASK_COMMENT_FIELDS,
     "task_checklist_item": TASK_CHECKLIST_ITEM_FIELDS,
     "task_attachment": TASK_ATTACHMENT_FIELDS,
@@ -738,6 +739,74 @@ def normalize_field_items(items: Any) -> list[dict]:
     return []
 
 
+def _extract_field_label_value(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, dict):
+        for key in ("ru", "RU", "ru_RU", "ru-RU", "value", "VALUE", "label", "LABEL", "title", "TITLE", "name", "NAME"):
+            nested_value = value.get(key)
+            if nested_value in (None, ""):
+                continue
+            normalized_value = str(nested_value).strip()
+            if normalized_value:
+                return normalized_value
+
+        for nested_value in value.values():
+            if nested_value in (None, ""):
+                continue
+            normalized_value = str(nested_value).strip()
+            if normalized_value:
+                return normalized_value
+
+        return ""
+
+    return str(value).strip()
+
+
+def _resolve_bitrix_field_title(field_id: str, field_meta: dict[str, Any]) -> str:
+    normalized_field_id = str(field_id or "").strip()
+    machine_names = {
+        normalized_field_id.upper(),
+        str(field_meta.get("upperName") or "").strip().upper(),
+    }
+    label_keys = (
+        "title",
+        "formLabel",
+        "editFormLabel",
+        "listColumnLabel",
+        "filterLabel",
+        "label",
+        "name",
+        "form_label",
+        "edit_form_label",
+        "list_column_label",
+        "filter_label",
+        "EDIT_FORM_LABEL",
+        "LIST_COLUMN_LABEL",
+        "FILTER_LABEL",
+        "LABEL",
+        "NAME",
+    )
+
+    fallback_title = ""
+    for key in label_keys:
+        label_value = _extract_field_label_value(field_meta.get(key))
+        if not label_value:
+            continue
+
+        if not fallback_title:
+            fallback_title = label_value
+
+        if label_value.upper() not in machine_names:
+            return label_value
+
+    return fallback_title or normalized_field_id
+
+
 def normalize_fields_result(fields_result: dict[str, Any], entity_type: str = "") -> list[dict]:
     normalized_fields = []
     for field_id, meta in fields_result.items():
@@ -757,11 +826,12 @@ def normalize_fields_result(fields_result: dict[str, Any], entity_type: str = ""
             field_id.startswith("UF_CRM_")
             or upper_name.startswith("UF_CRM_")
             or field_id.startswith("ufCrm")
+            or (entity_type == "task" and str(field_id or "").upper().startswith("UF_"))
         )
         normalized_fields.append(
             {
                 "id": field_id,
-                "title": str(field_meta.get("title") or field_meta.get("formLabel") or field_id),
+                "title": _resolve_bitrix_field_title(field_id, field_meta),
                 "type": str(field_meta.get("type") or field_meta.get("TYPE") or "string"),
                 "required": is_required,
                 "multiple": normalize_bitrix_bool(field_meta.get("isMultiple", field_meta.get("multiple"))),
@@ -1060,12 +1130,49 @@ def fetch_standard_crm_status_items(account, entity_ids: tuple[str, ...]) -> lis
     return normalized_items
 
 
+def fetch_standard_crm_categories(account, entity_type_id: int) -> list[dict]:
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="crm.category.list",
+        params={"entityTypeId": entity_type_id},
+    )
+    result = unwrap_bitrix_result(response)
+    if isinstance(result, dict):
+        items = result.get("categories") or result.get("items") or result.get("result") or []
+    else:
+        items = result
+
+    return _normalize_bitrix_named_items(items, ("ID", "id"), ("NAME", "name", "title"))
+
+
+def fetch_crm_currency_items(account) -> list[dict]:
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="crm.currency.list",
+        params={},
+    )
+    result = unwrap_bitrix_result(response)
+    if isinstance(result, dict):
+        items = result.get("currencies") or result.get("items") or result.get("result") or []
+    else:
+        items = result
+
+    return _normalize_bitrix_named_items(
+        items,
+        ("CURRENCY", "currency", "ID", "id"),
+        ("FULL_NAME", "full_name", "NAME", "name", "title"),
+    )
+
+
 def enrich_standard_crm_status_fields(account, entity_type: str, fields: list[dict]) -> list[dict]:
     status_entity_ids_by_field = STANDARD_CRM_STATUS_ENTITY_IDS.get(str(entity_type or "").strip(), {})
+    category_entity_type_id = 2 if str(entity_type or "").strip() == "deal" else 0
     if not status_entity_ids_by_field:
-        return fields
+        status_entity_ids_by_field = {}
 
     cached_items: dict[tuple[str, ...], list[dict]] = {}
+    category_items: list[dict] | None = None
+    currency_items: list[dict] | None = None
     enriched_fields = []
 
     for field in fields:
@@ -1074,7 +1181,23 @@ def enrich_standard_crm_status_fields(account, entity_type: str, fields: list[di
         field_id = str(field.get("id") or "").strip().upper()
         status_entity_ids = status_entity_ids_by_field.get(field_id)
 
-        if field_items or field_type != "crm_status" or not status_entity_ids:
+        if field_items:
+            enriched_fields.append(field)
+            continue
+
+        if field_id == "CATEGORY_ID" and category_entity_type_id > 0:
+            if category_items is None:
+                category_items = fetch_standard_crm_categories(account, category_entity_type_id)
+            enriched_fields.append({**field, "items": category_items})
+            continue
+
+        if field_id == "CURRENCY_ID":
+            if currency_items is None:
+                currency_items = fetch_crm_currency_items(account)
+            enriched_fields.append({**field, "items": currency_items})
+            continue
+
+        if field_type != "crm_status" or not status_entity_ids:
             enriched_fields.append(field)
             continue
 
@@ -1134,6 +1257,50 @@ def enrich_smart_process_fields(
 
 
 def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = None) -> list[dict]:
+    if entity_type == "task":
+        task_fields_result = None
+        task_client = getattr(getattr(account, "client", None), "tasks", None)
+        task_scope = getattr(task_client, "task", None) or getattr(task_client, "tasks", None)
+
+        task_field_loaders = []
+        if task_scope is not None:
+            get_fields = getattr(task_scope, "getFields", None)
+            if callable(get_fields):
+                task_field_loaders.append(lambda: get_fields())
+
+            get_fields_lower = getattr(task_scope, "getfields", None)
+            if callable(get_fields_lower):
+                task_field_loaders.append(lambda: get_fields_lower())
+
+        task_field_loaders.append(
+            lambda: BitrixAPIRequest(
+                bitrix_token=account,
+                api_method="tasks.task.getFields",
+                params={},
+            )
+        )
+
+        try:
+            task_fields_result = unwrap_bitrix_result(invoke_with_fallbacks(task_field_loaders))
+        except Exception:
+            task_fields_result = None
+
+        if isinstance(task_fields_result, dict):
+            normalized_task_fields = normalize_fields_result(task_fields_result, entity_type=entity_type)
+            normalized_task_fields_by_id = {
+                str(field.get("id") or "").strip(): field
+                for field in normalized_task_fields
+                if str(field.get("id") or "").strip()
+            }
+            for static_field in TASK_FIELDS:
+                normalized_task_fields_by_id.setdefault(str(static_field["id"]), dict(static_field))
+            return sorted(
+                normalized_task_fields_by_id.values(),
+                key=lambda item: (item["is_custom"], item["title"], item["id"]),
+            )
+
+        return [dict(field) for field in TASK_FIELDS]
+
     static_catalog = STATIC_FIELD_CATALOGS.get(entity_type)
     if static_catalog is not None:
         return [dict(field) for field in static_catalog]
