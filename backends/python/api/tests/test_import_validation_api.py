@@ -56,6 +56,72 @@ def build_xlsx_with_sheets(sheet_payloads):
     return buffer.getvalue()
 
 
+def build_xlsx_with_styled_numeric_dates(rows):
+    workbook_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Leads" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>
+"""
+    workbook_rels_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>
+"""
+    styles_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="1">
+    <numFmt numFmtId="164" formatCode="dd.mm.yyyy"/>
+  </numFmts>
+  <fonts count="1"><font><sz val="11"/></font></fonts>
+  <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+  <borders count="1"><border/></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+  </cellXfs>
+</styleSheet>
+"""
+
+    row_xml = []
+    for row_index, row in enumerate(rows, start=1):
+        cells_xml = []
+        for column_index, cell in enumerate(row, start=1):
+            column_letter = chr(64 + column_index)
+            cell_ref = f"{column_letter}{row_index}"
+            if isinstance(cell, dict):
+                cell_value = escape(str(cell.get("value", "")))
+                cell_style = str(cell.get("style") or "")
+                style_attr = f' s="{cell_style}"' if cell_style else ""
+                cells_xml.append(f'<c r="{cell_ref}"{style_attr}><v>{cell_value}</v></c>')
+            else:
+                escaped_value = escape(str(cell))
+                cells_xml.append(
+                    f'<c r="{cell_ref}" t="inlineStr"><is><t>{escaped_value}</t></is></c>'
+                )
+        row_xml.append(f'<row r="{row_index}">{"".join(cells_xml)}</row>')
+
+    sheet_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    {rows}
+  </sheetData>
+</worksheet>
+""".format(rows="".join(row_xml))
+
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("xl/workbook.xml", workbook_xml)
+        archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        archive.writestr("xl/styles.xml", styles_xml)
+
+    return buffer.getvalue()
+
+
 def build_sheet_xml(rows):
     row_xml = []
     for row_index, row in enumerate(rows, start=1):
@@ -206,6 +272,31 @@ class ImportValidationApiTest(TestCase):
                                 ["", "broken-email", "12", "32.13.2026"],
                             ],
                         ),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_session_with_styled_excel_dates(self):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.LEAD,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="leads-styled-dates.xlsx",
+        )
+        session.stored_file.save(
+            "leads-styled-dates.xlsx",
+            SimpleUploadedFile(
+                "leads-styled-dates.xlsx",
+                build_xlsx_with_styled_numeric_dates(
+                    [
+                        ["Lead title", "Email", "Phone", "Birthdate"],
+                        ["Alice", "alice@example.com", "+123456789", {"value": 46249, "style": 1}],
                     ]
                 ),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -548,6 +639,26 @@ class ImportValidationApiTest(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Saved mapping is required before validation")
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_validation_accepts_styled_numeric_excel_dates_end_to_end(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_session_with_styled_excel_dates()
+        self.save_mapping(session)
+
+        response = self.client.post(
+            reverse("importer:session-validate", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["checked_rows"], 1)
+        self.assertEqual(response.json()["item"]["valid_rows"], 1)
+        self.assertEqual(response.json()["item"]["invalid_rows"], 0)
+        self.assertEqual(response.json()["item"]["issue_count"], 0)
 
     @patch("importer.views.MAX_IMPORT_ROWS", 1)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")

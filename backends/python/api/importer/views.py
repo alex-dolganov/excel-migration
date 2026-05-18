@@ -40,6 +40,7 @@ from .services.example_templates import (
     build_smart_process_example_template_xlsx,
 )
 from .services.error_messages import safe_format_import_error
+from .services.excel_values import normalize_xlsx_cell_value, parse_xlsx_date_style_formats
 from .services.import_execution import execute_dry_run, execute_import, normalize_entity_dedup_settings
 from .services.mapping import (
     build_candidate_mapping_bundle,
@@ -685,6 +686,7 @@ def read_xlsx_archive(session: ImportSession):
                 workbook_xml = archive.read("xl/workbook.xml")
                 workbook_rels_xml = archive.read("xl/_rels/workbook.xml.rels")
                 shared_strings_xml = archive.read("xl/sharedStrings.xml") if "xl/sharedStrings.xml" in archive.namelist() else None
+                styles_xml = archive.read("xl/styles.xml") if "xl/styles.xml" in archive.namelist() else None
                 worksheet_files = {
                     file_name: archive.read(file_name)
                     for file_name in archive.namelist()
@@ -721,7 +723,7 @@ def read_xlsx_archive(session: ImportSession):
     if not sheets:
         raise ValueError("Workbook does not contain sheets")
 
-    return sheets, worksheet_files, shared_strings_xml
+    return sheets, worksheet_files, shared_strings_xml, styles_xml
 
 
 def parse_shared_strings(shared_strings_xml: bytes | None) -> list[str]:
@@ -761,7 +763,7 @@ def extract_sheet_names(session: ImportSession):
     if session.source_format != ImportSession.SourceFormat.XLSX:
         raise ValueError("Unsupported source format")
 
-    sheets, _worksheet_files, _shared_strings_xml = read_xlsx_archive(session)
+    sheets, _worksheet_files, _shared_strings_xml, _styles_xml = read_xlsx_archive(session)
     sheet_names = [sheet["name"] for sheet in sheets]
     if not sheet_names:
         raise ValueError("Workbook does not contain sheets")
@@ -769,7 +771,12 @@ def extract_sheet_names(session: ImportSession):
     return sheet_names
 
 
-def extract_rows_from_xlsx_sheet(sheet_xml: bytes, shared_strings: list[str] | None = None, preview_limit: int | None = 20):
+def extract_rows_from_xlsx_sheet(
+    sheet_xml: bytes,
+    shared_strings: list[str] | None = None,
+    date_style_formats: dict[int, str] | None = None,
+    preview_limit: int | None = 20,
+):
     try:
         root = ElementTree.fromstring(sheet_xml)
     except ElementTree.ParseError as error:
@@ -785,17 +792,29 @@ def extract_rows_from_xlsx_sheet(sheet_xml: bytes, shared_strings: list[str] | N
             if column_index <= 0:
                 continue
 
+            cell_type = str(cell.attrib.get("t") or "")
+            try:
+                style_index = int(cell.attrib.get("s")) if cell.attrib.get("s") is not None else None
+            except (TypeError, ValueError):
+                style_index = None
+
             inline_string = cell.find("main:is/main:t", XLSX_MAIN_NS)
             if inline_string is not None and inline_string.text is not None:
                 value = inline_string.text
             else:
                 value_node = cell.find("main:v", XLSX_MAIN_NS)
                 value = value_node.text if value_node is not None and value_node.text is not None else ""
-                if cell.attrib.get("t") == "s":
+                if cell_type == "s":
                     try:
                         value = (shared_strings or [])[int(value)]
                     except (IndexError, TypeError, ValueError):
                         value = ""
+                else:
+                    value = normalize_xlsx_cell_value(
+                        value,
+                        cell_type=cell_type,
+                        style_format=(date_style_formats or {}).get(style_index or -1, ""),
+                    )
 
             values_by_column[column_index] = value
             max_column_index = max(max_column_index, column_index)
@@ -969,7 +988,7 @@ def extract_preview_rows(session: ImportSession, selected_sheet_name: str, previ
     if session.source_format != ImportSession.SourceFormat.XLSX:
         raise ValueError("Unsupported source format")
 
-    sheets, worksheet_files, shared_strings_xml = read_xlsx_archive(session)
+    sheets, worksheet_files, shared_strings_xml, styles_xml = read_xlsx_archive(session)
     selected_sheet = next((sheet for sheet in sheets if sheet["name"] == selected_sheet_name), None)
     if selected_sheet is None:
         raise ValueError("Selected sheet does not exist")
@@ -979,7 +998,13 @@ def extract_preview_rows(session: ImportSession, selected_sheet_name: str, previ
         raise ValueError("Unable to read workbook preview")
 
     shared_strings = parse_shared_strings(shared_strings_xml)
-    _columns, rows, row_numbers = extract_rows_from_xlsx_sheet(sheet_xml, shared_strings=shared_strings, preview_limit=preview_limit)
+    date_style_formats = parse_xlsx_date_style_formats(styles_xml)
+    _columns, rows, row_numbers = extract_rows_from_xlsx_sheet(
+        sheet_xml,
+        shared_strings=shared_strings,
+        date_style_formats=date_style_formats,
+        preview_limit=preview_limit,
+    )
     rows, _detected_delimiter = split_single_cell_rows_by_delimiter(rows)
     return build_columns_from_rows(rows), rows, row_numbers
 
@@ -2850,6 +2875,7 @@ def import_roles(request: AuthorizedRequest):
 @auth_required
 def crm_filter_preview(request: AuthorizedRequest):
     from .services.bulk_attach import fetch_crm_entities_page, SUPPORTED_ENTITY_TYPES, _extract_entity_title
+    sample_limit = 5
 
     account = request.bitrix24_account
     if not has_permission(account, "sessions.create"):
@@ -2875,7 +2901,7 @@ def crm_filter_preview(request: AuthorizedRequest):
         return JsonResponse({"error": str(error)}, status=500)
 
     sample = []
-    for item in page["items"][:10]:
+    for item in page["items"][:sample_limit]:
         if isinstance(item, dict):
             raw_id = item.get("ID") or item.get("id")
             sample.append({

@@ -173,6 +173,56 @@ class ImportValidationServiceTest(SimpleTestCase):
 
         self.assertIsNone(issue)
 
+    def test_validate_field_value_accepts_excel_serial_date_numbers(self):
+        issue = validate_field_value(
+            field={"id": "START_DATE_PLAN", "title": "Дата начала", "type": "date", "required": False},
+            value="46249",
+            row_number=2,
+            column="G",
+            source_header="Дата начала",
+            target_field="START_DATE_PLAN",
+        )
+
+        self.assertIsNone(issue)
+
+    def test_validate_field_value_accepts_excel_serial_datetime_numbers(self):
+        issue = validate_field_value(
+            field={"id": "DEADLINE", "title": "Срок", "type": "datetime", "required": False},
+            value="46249.75",
+            row_number=2,
+            column="H",
+            source_header="Срок",
+            target_field="DEADLINE",
+        )
+
+        self.assertIsNone(issue)
+
+    def test_validate_field_value_accepts_common_excel_like_date_string_formats(self):
+        for source_value in ["2026.12.31", "31-12-2026", "2026-12-31T00:00:00"]:
+            with self.subTest(source_value=source_value):
+                issue = validate_field_value(
+                    field={"id": "BIRTHDATE", "title": "Дата", "type": "date", "required": False},
+                    value=source_value,
+                    row_number=2,
+                    column="D",
+                    source_header="Дата",
+                    target_field="BIRTHDATE",
+                )
+
+                self.assertIsNone(issue)
+
+    def test_validate_field_value_accepts_iso_datetime_with_timezone(self):
+        issue = validate_field_value(
+            field={"id": "DEADLINE", "title": "Срок", "type": "datetime", "required": False},
+            value="2026-12-31T18:45:00+03:00",
+            row_number=2,
+            column="E",
+            source_header="Срок",
+            target_field="DEADLINE",
+        )
+
+        self.assertIsNone(issue)
+
     def test_validate_field_value_accepts_currency_alias_and_rejects_free_text(self):
         accepted_issue = validate_field_value(
             field={"id": "CURRENCY_ID", "title": "Валюта", "type": "string", "required": False},

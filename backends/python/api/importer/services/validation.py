@@ -1,6 +1,7 @@
 import re
 from datetime import datetime
 
+from .excel_values import parse_excel_serial_datetime_value, parse_iso_datetime_value
 from .task_resolution import BitrixTaskResolver, is_task_reference_field
 from .user_resolution import BitrixUserResolver, is_task_user_reference_field
 from .value_normalization import (
@@ -20,9 +21,12 @@ BOOLEAN_FALSE_VALUES = {"0", "false", "no", "n", "нет"}
 DATE_FORMATS = (
     "%Y-%m-%d",
     "%Y/%m/%d",
+    "%Y.%m.%d",
     "%d.%m.%Y",
     "%d/%m/%Y",
+    "%d-%m-%Y",
     "%m/%d/%Y",
+    "%m-%d-%Y",
 )
 DATETIME_FORMATS = (
     "%Y-%m-%dT%H:%M:%S",
@@ -31,12 +35,20 @@ DATETIME_FORMATS = (
     "%Y-%m-%d %H:%M",
     "%Y/%m/%d %H:%M:%S",
     "%Y/%m/%d %H:%M",
+    "%Y.%m.%d %H:%M:%S",
+    "%Y.%m.%d %H:%M",
+    "%Y-%m-%d %H.%M.%S",
+    "%Y-%m-%d %H.%M",
     "%d.%m.%Y %H:%M:%S",
     "%d.%m.%Y %H:%M",
     "%d/%m/%Y %H:%M:%S",
     "%d/%m/%Y %H:%M",
+    "%d-%m-%Y %H:%M:%S",
+    "%d-%m-%Y %H:%M",
     "%m/%d/%Y %H:%M:%S",
     "%m/%d/%Y %H:%M",
+    "%m-%d-%Y %H:%M:%S",
+    "%m-%d-%Y %H:%M",
 )
 BITRIX_MULTIFIELD_VALIDATORS = {
     "PHONE": "phone",
@@ -106,6 +118,22 @@ def parse_date_value(value: str):
         except ValueError:
             continue
 
+    try:
+        return parse_iso_datetime_value(normalized_value)
+    except ValueError:
+        pass
+
+    for datetime_format in DATETIME_FORMATS:
+        try:
+            return datetime.strptime(normalized_value, datetime_format)
+        except ValueError:
+            continue
+
+    try:
+        return parse_excel_serial_datetime_value(normalized_value)
+    except ValueError:
+        pass
+
     raise ValueError("Invalid date value")
 
 
@@ -120,7 +148,23 @@ def parse_datetime_value(value: str):
         except ValueError:
             continue
 
-    return parse_date_value(normalized_value)
+    try:
+        return parse_iso_datetime_value(normalized_value)
+    except ValueError:
+        pass
+
+    try:
+        return parse_excel_serial_datetime_value(normalized_value)
+    except ValueError:
+        pass
+
+    for date_format in DATE_FORMATS:
+        try:
+            return datetime.strptime(normalized_value, date_format)
+        except ValueError:
+            continue
+
+    raise ValueError("Invalid datetime value")
 
 
 def parse_integer_value(value: str) -> int:
