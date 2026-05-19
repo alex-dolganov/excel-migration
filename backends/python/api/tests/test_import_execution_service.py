@@ -2,9 +2,11 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from importer.services.import_execution import (
+    bind_contact_company,
+    bind_deal_contact,
     build_linked_result_fields,
     build_linked_row_payload,
     build_row_payload,
@@ -20,7 +22,56 @@ class FakeUsersRequest:
         self.result = result
 
 
+class ResultProbe:
+    def __init__(self, value=True):
+        self.value = value
+        self.touched = False
+
+    @property
+    def result(self):
+        self.touched = True
+        return self.value
+
+
 class ImportExecutionServiceTest(SimpleTestCase):
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    def test_bind_deal_contact_executes_request(self, bitrix_api_request):
+        probe = ResultProbe()
+        bitrix_api_request.return_value = probe
+
+        bind_deal_contact(SimpleNamespace(), deal_id=801, contact_id=701)
+
+        self.assertTrue(probe.touched)
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=ANY,
+            api_method="crm.deal.contact.add",
+            params={
+                "id": 801,
+                "fields": {
+                    "CONTACT_ID": 701,
+                },
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    def test_bind_contact_company_executes_request(self, bitrix_api_request):
+        probe = ResultProbe()
+        bitrix_api_request.return_value = probe
+
+        bind_contact_company(SimpleNamespace(), contact_id=701, company_id=901)
+
+        self.assertTrue(probe.touched)
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=ANY,
+            api_method="crm.contact.company.add",
+            params={
+                "id": 701,
+                "fields": {
+                    "COMPANY_ID": 901,
+                },
+            },
+        )
+
     @patch("importer.services.import_execution.BitrixUserResolver")
     @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
     @patch("importer.services.import_execution.find_existing_record", return_value={})
@@ -132,6 +183,144 @@ class ImportExecutionServiceTest(SimpleTestCase):
 
         sleep.assert_not_called()
 
+    @patch("importer.services.import_execution.BitrixUserResolver")
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    @patch("importer.services.import_execution.resolve_linked_record_action_with_decision")
+    @patch("importer.services.import_execution.create_entity_record", side_effect=[801, 701])
+    @patch("importer.services.import_execution.build_linked_row_payload")
+    def test_execute_linked_deal_contact_import_binds_contact_to_deal_via_binding_api(
+        self,
+        build_linked_row_payload_mock,
+        _create_entity_record,
+        resolve_linked_record_action_with_decision,
+        bitrix_api_request,
+        _user_resolver,
+    ):
+        account = SimpleNamespace(client=SimpleNamespace())
+        build_linked_row_payload_mock.return_value = {
+            "deal": {"TITLE": "Редизайн сайта"},
+            "contact": {"NAME": "Алиса"},
+        }
+        resolve_linked_record_action_with_decision.side_effect = [
+            {"mode": "create", "record_id": None, "meta": {}},
+            {"mode": "create", "record_id": None, "meta": {}},
+        ]
+        bitrix_api_request.return_value = SimpleNamespace(result=True)
+
+        result = execute_linked_import(
+            account=account,
+            entity_type="linked_deal_contact",
+            rows=[["Редизайн сайта", "Алиса"]],
+            row_numbers=[2],
+            columns=["A", "B"],
+            data_start_row=2,
+            mapping={},
+            validation_summary={"issues": []},
+            fields=[],
+            dedup_settings={
+                "deal": {"strategy": "create", "fields": [], "condition": "any"},
+                "contact": {"strategy": "create", "fields": [], "condition": "any"},
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixUserResolver")
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    @patch("importer.services.import_execution.resolve_linked_record_action_with_decision")
+    @patch("importer.services.import_execution.create_entity_record", side_effect=[701, 901])
+    @patch("importer.services.import_execution.build_linked_row_payload")
+    def test_execute_linked_contact_company_import_binds_company_to_contact_via_binding_api(
+        self,
+        build_linked_row_payload_mock,
+        _create_entity_record,
+        resolve_linked_record_action_with_decision,
+        bitrix_api_request,
+        _user_resolver,
+    ):
+        account = SimpleNamespace(client=SimpleNamespace())
+        build_linked_row_payload_mock.return_value = {
+            "contact": {"NAME": "Алиса"},
+            "company": {"TITLE": "ООО Альфа"},
+        }
+        resolve_linked_record_action_with_decision.side_effect = [
+            {"mode": "create", "record_id": None, "meta": {}},
+            {"mode": "create", "record_id": None, "meta": {}},
+        ]
+        bitrix_api_request.return_value = SimpleNamespace(result=True)
+
+        result = execute_linked_import(
+            account=account,
+            entity_type="linked_contact_company",
+            rows=[["Алиса", "ООО Альфа"]],
+            row_numbers=[2],
+            columns=["A", "B"],
+            data_start_row=2,
+            mapping={},
+            validation_summary={"issues": []},
+            fields=[],
+            dedup_settings={
+                "contact": {"strategy": "create", "fields": [], "condition": "any"},
+                "company": {"strategy": "create", "fields": [], "condition": "any"},
+            },
+        )
+
+        self.assertEqual(result["created_ids"], [901])
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="crm.contact.company.add",
+            params={
+                "id": 701,
+                "fields": {
+                    "COMPANY_ID": 901,
+                },
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixUserResolver")
+    @patch("importer.services.import_execution.update_entity_record")
+    @patch("importer.services.import_execution.resolve_linked_record_action_with_decision")
+    @patch("importer.services.import_execution.create_entity_record", side_effect=[801, 901])
+    @patch("importer.services.import_execution.build_linked_row_payload")
+    def test_execute_linked_deal_company_import_updates_parent_deal_with_company_id(
+        self,
+        build_linked_row_payload_mock,
+        _create_entity_record,
+        resolve_linked_record_action_with_decision,
+        update_entity_record,
+        _user_resolver,
+    ):
+        build_linked_row_payload_mock.return_value = {
+            "deal": {"TITLE": "Редизайн сайта"},
+            "company": {"TITLE": "ООО Альфа"},
+        }
+        resolve_linked_record_action_with_decision.side_effect = [
+            {"mode": "create", "record_id": None, "meta": {}},
+            {"mode": "create", "record_id": None, "meta": {}},
+        ]
+
+        result = execute_linked_import(
+            account=SimpleNamespace(client=SimpleNamespace()),
+            entity_type="linked_deal_company",
+            rows=[["Редизайн сайта", "ООО Альфа"]],
+            row_numbers=[2],
+            columns=["A", "B"],
+            data_start_row=2,
+            mapping={},
+            validation_summary={"issues": []},
+            fields=[],
+            dedup_settings={
+                "deal": {"strategy": "create", "fields": [], "condition": "any"},
+                "company": {"strategy": "create", "fields": [], "condition": "any"},
+            },
+        )
+
+        self.assertEqual(result["created_ids"], [901])
+        update_entity_record.assert_called_once_with(
+            ANY,
+            "deal",
+            801,
+            {"COMPANY_ID": 901},
+        )
+
     def test_build_linked_row_payload_splits_company_and_contact_fields(self):
         payload = build_linked_row_payload(
             row=["ООО Альфа", "+78005550101", "Алиса", "Иванова", "alice@example.ru"],
@@ -178,6 +367,69 @@ class ImportExecutionServiceTest(SimpleTestCase):
                     "NAME": "Алиса",
                     "LAST_NAME": "Иванова",
                     "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                },
+            },
+        )
+
+    def test_build_linked_row_payload_splits_contact_and_deal_fields(self):
+        payload = build_linked_row_payload(
+            row=["Алиса", "Иванова", "alice@example.ru", "Сайт", "Редизайн сайта", "150000", "Партнеры"],
+            columns=["A", "B", "C", "D", "E", "F", "G"],
+            mapping={
+                "CONTACT__NAME": {
+                    "column": "A",
+                    "source_header": "Имя контакта",
+                },
+                "CONTACT__LAST_NAME": {
+                    "column": "B",
+                    "source_header": "Фамилия контакта",
+                },
+                "CONTACT__EMAIL": {
+                    "column": "C",
+                    "source_header": "Email контакта",
+                },
+                "CONTACT__UF_CRM_CONTACT_SOURCE": {
+                    "column": "D",
+                    "source_header": "Источник контакта",
+                },
+                "DEAL__TITLE": {
+                    "column": "E",
+                    "source_header": "Название сделки",
+                },
+                "DEAL__OPPORTUNITY": {
+                    "column": "F",
+                    "source_header": "Сумма",
+                },
+                "DEAL__UF_CRM_DEAL_CHANNEL": {
+                    "column": "G",
+                    "source_header": "Канал сделки",
+                },
+            },
+            fields=[
+                {"id": "CONTACT__NAME", "type": "string", "multiple": False, "linked_entity": "contact", "linked_source_id": "NAME"},
+                {"id": "CONTACT__LAST_NAME", "type": "string", "multiple": False, "linked_entity": "contact", "linked_source_id": "LAST_NAME"},
+                {"id": "CONTACT__EMAIL", "type": "email", "multiple": True, "linked_entity": "contact", "linked_source_id": "EMAIL"},
+                {"id": "CONTACT__UF_CRM_CONTACT_SOURCE", "type": "string", "multiple": False, "linked_entity": "contact", "linked_source_id": "UF_CRM_CONTACT_SOURCE"},
+                {"id": "DEAL__TITLE", "type": "string", "multiple": False, "linked_entity": "deal", "linked_source_id": "TITLE"},
+                {"id": "DEAL__OPPORTUNITY", "type": "money", "multiple": False, "linked_entity": "deal", "linked_source_id": "OPPORTUNITY"},
+                {"id": "DEAL__UF_CRM_DEAL_CHANNEL", "type": "string", "multiple": False, "linked_entity": "deal", "linked_source_id": "UF_CRM_DEAL_CHANNEL"},
+            ],
+            entity_type="linked_contact_deal",
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "contact": {
+                    "NAME": "Алиса",
+                    "LAST_NAME": "Иванова",
+                    "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                    "UF_CRM_CONTACT_SOURCE": "Сайт",
+                },
+                "deal": {
+                    "TITLE": "Редизайн сайта",
+                    "OPPORTUNITY": 150000.0,
+                    "UF_CRM_DEAL_CHANNEL": "Партнеры",
                 },
             },
         )

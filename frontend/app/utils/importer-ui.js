@@ -63,6 +63,10 @@ export const SUPPORTED_IMPORT_ENTITIES = [
   { value: 'crm_note', label: 'Заметки CRM' },
   { value: 'linked_company_contact', label: 'Компания + Контакт' },
   { value: 'linked_company_deal', label: 'Компания + Сделка' },
+  { value: 'linked_contact_company', label: 'Контакт + Компания' },
+  { value: 'linked_contact_deal', label: 'Контакт + Сделка' },
+  { value: 'linked_deal_company', label: 'Сделка + Компания' },
+  { value: 'linked_deal_contact', label: 'Сделка + Контакт' },
   { value: 'task', label: 'Задачи' },
   { value: 'task_comment', label: 'Комментарии задач' },
   { value: 'task_checklist_item', label: 'Чек-листы задач' },
@@ -255,6 +259,8 @@ export const LINKED_IMPORT_SCENARIOS = {
     value: 'linked_company_contact',
     label: 'Компания + Контакт',
     family: 'linked',
+    primaryEntityType: 'company',
+    secondaryEntityType: 'contact',
     linkedEntities: [
       {
         id: 'company',
@@ -288,6 +294,8 @@ export const LINKED_IMPORT_SCENARIOS = {
     value: 'linked_company_deal',
     label: 'Компания + Сделка',
     family: 'linked',
+    primaryEntityType: 'company',
+    secondaryEntityType: 'deal',
     linkedEntities: [
       {
         id: 'company',
@@ -317,6 +325,146 @@ export const LINKED_IMPORT_SCENARIOS = {
       exampleColumns: ['COMPANY__TITLE', 'COMPANY__PHONE', 'DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__CURRENCY_ID', 'DEAL__STAGE_ID'],
     },
   },
+  linked_contact_company: {
+    value: 'linked_contact_company',
+    label: 'Контакт + Компания',
+    family: 'linked',
+    primaryEntityType: 'contact',
+    secondaryEntityType: 'company',
+    linkedEntities: [
+      {
+        id: 'contact',
+        label: 'Контакт',
+        sourceEntityType: 'contact',
+        prefix: 'CONTACT__',
+      },
+      {
+        id: 'company',
+        label: 'Компания',
+        sourceEntityType: 'company',
+        prefix: 'COMPANY__',
+      },
+    ],
+    title: 'Связанный импорт контакта и компании',
+    description: 'Каждая строка создаёт или обновляет контакт и компанию с автоматической привязкой.',
+    minimumFields: ['CONTACT__NAME или CONTACT__LAST_NAME', 'COMPANY__TITLE'],
+    destinationLabel: 'Сначала обрабатывает контакт, затем создаёт или обновляет компанию и связывает её с контактом.',
+    guide: {
+      title: 'Связанный импорт контакта и компании',
+      description: 'Одна строка Excel создаёт или обновляет контакт и связанную с ним компанию.',
+      highlights: [
+        'Контакт и компания загружаются из одной строки и связываются автоматически.',
+        'Для контакта используйте колонки с префиксом CONTACT__, для компании с префиксом COMPANY__.',
+        'Для нескольких компаний у одного контакта повторяйте строки с одним CONTACT__EXTERNAL_KEY.',
+      ],
+      exampleColumns: ['CONTACT__EXTERNAL_KEY', 'CONTACT__NAME', 'CONTACT__LAST_NAME', 'COMPANY__TITLE', 'COMPANY__PHONE', 'COMPANY__EMAIL'],
+    },
+  },
+  linked_contact_deal: {
+    value: 'linked_contact_deal',
+    label: 'Контакт + Сделка',
+    family: 'linked',
+    primaryEntityType: 'contact',
+    secondaryEntityType: 'deal',
+    linkedEntities: [
+      {
+        id: 'contact',
+        label: 'Контакт',
+        sourceEntityType: 'contact',
+        prefix: 'CONTACT__',
+      },
+      {
+        id: 'deal',
+        label: 'Сделка',
+        sourceEntityType: 'deal',
+        prefix: 'DEAL__',
+      },
+    ],
+    title: 'Связанный импорт контакта и сделки',
+    description: 'Каждая строка создаёт или обновляет контакт и связанную с ним сделку.',
+    minimumFields: ['CONTACT__NAME или CONTACT__LAST_NAME', 'DEAL__TITLE'],
+    destinationLabel: 'Сначала обрабатывает контакт, затем создаёт или обновляет сделку и связывает её с контактом.',
+    guide: {
+      title: 'Связанный импорт контакта и сделки',
+      description: 'Одна строка Excel создаёт или обновляет контакт и связанную с ним сделку.',
+      highlights: [
+        'Контакт и сделка загружаются из одной строки и связываются автоматически.',
+        'Для контакта используйте колонки с префиксом CONTACT__, для сделки с префиксом DEAL__.',
+        'Если для сделки нужны суммы и этапы, используйте DEAL__OPPORTUNITY, DEAL__CURRENCY_ID и DEAL__STAGE_ID.',
+      ],
+      exampleColumns: ['CONTACT__NAME', 'CONTACT__LAST_NAME', 'CONTACT__PHONE', 'DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__STAGE_ID'],
+    },
+  },
+  linked_deal_company: {
+    value: 'linked_deal_company',
+    label: 'Сделка + Компания',
+    family: 'linked',
+    primaryEntityType: 'deal',
+    secondaryEntityType: 'company',
+    linkedEntities: [
+      {
+        id: 'deal',
+        label: 'Сделка',
+        sourceEntityType: 'deal',
+        prefix: 'DEAL__',
+      },
+      {
+        id: 'company',
+        label: 'Компания',
+        sourceEntityType: 'company',
+        prefix: 'COMPANY__',
+      },
+    ],
+    title: 'Связанный импорт сделки и компании',
+    description: 'Каждая строка создаёт или обновляет сделку и связанную с ней компанию.',
+    minimumFields: ['DEAL__TITLE', 'COMPANY__TITLE'],
+    destinationLabel: 'Сначала обрабатывает сделку, затем создаёт или обновляет компанию и привязывает её к сделке.',
+    guide: {
+      title: 'Связанный импорт сделки и компании',
+      description: 'Одна строка Excel создаёт или обновляет сделку и связанную с ней компанию.',
+      highlights: [
+        'Сделка и компания загружаются из одной строки и связываются автоматически.',
+        'Для сделки используйте колонки с префиксом DEAL__, для компании с префиксом COMPANY__.',
+        'У одной сделки может быть только одна компания, поэтому в шаблоне достаточно данных самой сделки и компании.',
+      ],
+      exampleColumns: ['DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__CURRENCY_ID', 'DEAL__STAGE_ID', 'COMPANY__TITLE', 'COMPANY__PHONE', 'COMPANY__EMAIL'],
+    },
+  },
+  linked_deal_contact: {
+    value: 'linked_deal_contact',
+    label: 'Сделка + Контакт',
+    family: 'linked',
+    primaryEntityType: 'deal',
+    secondaryEntityType: 'contact',
+    linkedEntities: [
+      {
+        id: 'deal',
+        label: 'Сделка',
+        sourceEntityType: 'deal',
+        prefix: 'DEAL__',
+      },
+      {
+        id: 'contact',
+        label: 'Контакт',
+        sourceEntityType: 'contact',
+        prefix: 'CONTACT__',
+      },
+    ],
+    title: 'Связанный импорт сделки и контакта',
+    description: 'Каждая строка создаёт или обновляет сделку и привязывает к ней контакт.',
+    minimumFields: ['DEAL__TITLE', 'CONTACT__NAME или CONTACT__LAST_NAME'],
+    destinationLabel: 'Сначала обрабатывает сделку, затем создаёт или обновляет контакт и привязывает его к сделке.',
+    guide: {
+      title: 'Связанный импорт сделки и контакта',
+      description: 'Одна строка Excel создаёт или обновляет сделку и связанный с ней контакт.',
+      highlights: [
+        'Сделка и контакт загружаются из одной строки и связываются автоматически.',
+        'Для нескольких контактов к одной сделке повторяйте строки с одним DEAL__EXTERNAL_KEY.',
+        'Для сделки используйте колонки с префиксом DEAL__, для контакта с префиксом CONTACT__.',
+      ],
+      exampleColumns: ['DEAL__EXTERNAL_KEY', 'DEAL__TITLE', 'DEAL__OPPORTUNITY', 'CONTACT__NAME', 'CONTACT__LAST_NAME', 'CONTACT__EMAIL'],
+    },
+  },
 }
 
 export function buildImportModeOptions() {
@@ -343,6 +491,7 @@ export function buildSimpleDedupPreset({ entityType, mappingRows } = {}) {
   const mappedFields = Array.from(new Set(
     (Array.isArray(mappingRows) ? mappingRows : [])
       .map((row) => String(row?.targetFieldId || '').trim().toUpperCase())
+      .map((fieldId) => fieldId.includes('__') ? fieldId.split('__').pop() : fieldId)
       .filter(Boolean),
   ))
   const recommendedFields = SUPPORTED_DEDUP_FIELDS.filter((fieldId) => mappedFields.includes(fieldId))
@@ -383,7 +532,11 @@ const LINKED_ENTITY_DISPLAY_META = {
     emptyTitle: 'Без названия',
   },
 }
-const LINKED_ENTITY_DISPLAY_ORDER = ['company', 'contact', 'deal']
+const LINKED_ENTITY_OPTION_META = {
+  company: { value: 'company', label: 'Компания' },
+  contact: { value: 'contact', label: 'Контакт' },
+  deal: { value: 'deal', label: 'Сделка' },
+}
 
 export const FILE_ATTACH_IMPORT_SCENARIOS = {
   crm_files_lead: {
@@ -575,6 +728,63 @@ export function buildScenarioSelectionSummary(entityType) {
     description: 'Каждая строка создаёт или обновляет отдельную CRM-запись в выбранном разделе.',
     minimumFields: [],
     destinationLabel: 'Импортирует записи напрямую в выбранную CRM-сущность.',
+  }
+}
+
+export function buildLinkedPrimaryEntityOptions() {
+  return Array.from(new Set(
+    Object.values(LINKED_IMPORT_SCENARIOS)
+      .map((scenario) => String(scenario?.primaryEntityType || '').trim())
+      .filter(Boolean),
+  )).map((entityType) => ({
+    value: entityType,
+    label: LINKED_ENTITY_OPTION_META[entityType]?.label || entityType,
+  }))
+}
+
+export function buildLinkedSecondaryEntityOptions(primaryEntityType) {
+  const normalizedPrimaryEntityType = String(primaryEntityType || '').trim()
+  if (!normalizedPrimaryEntityType) {
+    return []
+  }
+
+  return Object.values(LINKED_IMPORT_SCENARIOS)
+    .filter((scenario) => String(scenario?.primaryEntityType || '').trim() === normalizedPrimaryEntityType)
+    .map((scenario) => String(scenario?.secondaryEntityType || '').trim())
+    .filter(Boolean)
+    .map((entityType) => ({
+      value: entityType,
+      label: LINKED_ENTITY_OPTION_META[entityType]?.label || entityType,
+    }))
+}
+
+export function resolveLinkedStrategyEntityType(primaryEntityType, secondaryEntityType) {
+  const normalizedPrimaryEntityType = String(primaryEntityType || '').trim()
+  const normalizedSecondaryEntityType = String(secondaryEntityType || '').trim()
+
+  if (!normalizedPrimaryEntityType || !normalizedSecondaryEntityType) {
+    return ''
+  }
+
+  const matchedScenario = Object.values(LINKED_IMPORT_SCENARIOS).find((scenario) => (
+    String(scenario?.primaryEntityType || '').trim() === normalizedPrimaryEntityType
+    && String(scenario?.secondaryEntityType || '').trim() === normalizedSecondaryEntityType
+  ))
+  return String(matchedScenario?.value || '').trim()
+}
+
+export function resolveLinkedStrategyPair(entityType) {
+  const scenario = LINKED_IMPORT_SCENARIOS[String(entityType || '').trim()]
+  if (!scenario) {
+    return {
+      primaryEntityType: '',
+      secondaryEntityType: '',
+    }
+  }
+
+  return {
+    primaryEntityType: String(scenario.primaryEntityType || '').trim(),
+    secondaryEntityType: String(scenario.secondaryEntityType || '').trim(),
   }
 }
 
@@ -1375,12 +1585,8 @@ function getLinkedRecordSectionIds(linkedRecords) {
     return []
   }
 
-  const knownIds = LINKED_ENTITY_DISPLAY_ORDER.filter((sectionId) => normalizeLinkedRecord(linkedRecords?.[sectionId]))
-  const extraIds = Object.keys(linkedRecords)
-    .filter((sectionId) => !LINKED_ENTITY_DISPLAY_ORDER.includes(sectionId))
+  return Object.keys(linkedRecords)
     .filter((sectionId) => normalizeLinkedRecord(linkedRecords?.[sectionId]))
-
-  return [...knownIds, ...extraIds]
 }
 
 function getLinkedEntityDisplayMeta(sectionId) {
@@ -2070,6 +2276,16 @@ export function buildSessionHistoryRows(sessions) {
     return `${day}.${month}.${year} ${hour}:${minute}`
   }
 
+  const buildActionLabel = (status) => {
+    const normalizedStatus = String(status || '').trim()
+
+    if (['draft', 'uploaded', 'validated', 'ready', 'running'].includes(normalizedStatus)) {
+      return 'Продолжить'
+    }
+
+    return 'Открыть'
+  }
+
   const buildCountersLabel = (session) => {
     const importRun = session?.summary && typeof session.summary === 'object' ? session.summary.import_run : null
     if (importRun && typeof importRun === 'object') {
@@ -2097,6 +2313,7 @@ export function buildSessionHistoryRows(sessions) {
       statusLabel: statusLabels[status] || status || '—',
       resultLabel: resultMeta.resultLabel,
       resultTone: resultMeta.resultTone,
+      actionLabel: buildActionLabel(status),
       counters: buildCountersLabel(session),
       updatedAt,
       updatedAtLabel: formatUpdatedAtLabel(updatedAt),
@@ -2114,10 +2331,6 @@ export function buildCollapsibleHistoryState(items, { expanded = false, collapse
     hiddenCount: canExpand ? safeItems.length - safeCollapsedCount : 0,
     canExpand,
   }
-}
-
-export function shouldRenderInlineWizardFooter(step) {
-  return [2, 3].includes(Number(step || 0))
 }
 
 export function getWizardAdvanceMode(step, maxAvailableStep) {

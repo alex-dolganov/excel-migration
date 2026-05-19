@@ -34,6 +34,8 @@ class ImportSessionsApiTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["items"]), 1)
         self.assertEqual(response.json()["items"][0]["summary"], {})
+        self.assertNotIn("preview_data", response.json()["items"][0])
+        self.assertNotIn("stored_file_name", response.json()["items"][0])
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_list_sessions_includes_import_run_summary_for_history_breakdown(self, get_from_jwt_token):
@@ -51,13 +53,22 @@ class ImportSessionsApiTest(TestCase):
             source_format=ImportSession.SourceFormat.XLSX,
             status=ImportSession.Status.COMPLETED,
             original_filename="contacts.xlsx",
+            preview_data={
+                "headers": ["Name", "Phone"],
+                "rows": [["Alice", "+79990000000"]],
+            },
             summary={
                 "import_run": {
                     "created_rows": 3,
                     "updated_rows": 2,
                     "skipped_rows": 1,
                     "failed_rows": 1,
+                    "results": [{"row_number": 2, "status": "created", "record_id": 101}],
                 },
+                "dry_run": {
+                    "results": [{"row_number": 2, "status": "created"}],
+                },
+                "job": {"state": "running", "worker_id": "worker-1"},
             },
         )
 
@@ -74,7 +85,11 @@ class ImportSessionsApiTest(TestCase):
                 "skipped_rows": 1,
                 "failed_rows": 1,
             },
+            "job": {
+                "state": "running",
+            },
         })
+        self.assertNotIn("preview_data", response.json()["items"][0])
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_get_session_returns_single_portal_session_snapshot(self, get_from_jwt_token):

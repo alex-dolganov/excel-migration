@@ -20,7 +20,6 @@ import {
   buildTaskScenarioQuickStart,
   buildRequiredFieldSummary,
   buildSessionHistoryRows,
-  shouldRenderInlineWizardFooter,
   canAdvanceWizard,
   getWizardAdvanceMode,
   getWizardNextLabel,
@@ -72,6 +71,9 @@ test('builds linked-aware scenario-first sections for crm and task imports', () 
         { value: 'contact', label: 'Контакты', family: 'crm' },
         { value: 'company', label: 'Компании', family: 'crm' },
         { value: 'deal', label: 'Сделки', family: 'crm' },
+        { value: 'smart_process', label: 'Смарт-процессы', family: 'crm' },
+        { value: 'crm_activity', label: 'Активности CRM', family: 'crm' },
+        { value: 'crm_note', label: 'Заметки CRM', family: 'crm' },
       ],
     },
     {
@@ -92,6 +94,19 @@ test('builds linked-aware scenario-first sections for crm and task imports', () 
       items: [
         { value: 'linked_company_contact', label: 'Компания + Контакт', family: 'linked' },
         { value: 'linked_company_deal', label: 'Компания + Сделка', family: 'linked' },
+        { value: 'linked_contact_company', label: 'Контакт + Компания', family: 'linked' },
+        { value: 'linked_contact_deal', label: 'Контакт + Сделка', family: 'linked' },
+        { value: 'linked_deal_company', label: 'Сделка + Компания', family: 'linked' },
+        { value: 'linked_deal_contact', label: 'Сделка + Контакт', family: 'linked' },
+      ],
+    },
+    {
+      id: 'hr',
+      title: 'Пользователи и отделы',
+      description: 'Импорт пользователей и организационной структуры.',
+      items: [
+        { value: 'user', label: 'Пользователи', family: 'hr' },
+        { value: 'department', label: 'Отделы', family: 'hr' },
       ],
     },
   ])
@@ -118,6 +133,18 @@ test('builds scenario selection summary for linked company deal import', () => {
     description: 'Каждая строка создаёт или обновляет компанию и связанную с ней сделку.',
     minimumFields: ['COMPANY__TITLE', 'DEAL__TITLE'],
     destinationLabel: 'Сначала обрабатывает компанию, затем создаёт или обновляет сделку и связывает её с компанией.',
+  })
+})
+
+test('builds scenario selection summary for linked contact deal import', () => {
+  assert.deepEqual(buildScenarioSelectionSummary('linked_contact_deal'), {
+    family: 'linked',
+    familyLabel: 'Связанный импорт',
+    selectedLabel: 'Контакт + Сделка',
+    title: 'Связанный импорт контакта и сделки',
+    description: 'Каждая строка создаёт или обновляет контакт и связанную с ним сделку.',
+    minimumFields: ['CONTACT__NAME или CONTACT__LAST_NAME', 'DEAL__TITLE'],
+    destinationLabel: 'Сначала обрабатывает контакт, затем создаёт или обновляет сделку и связывает её с контактом.',
   })
 })
 
@@ -155,6 +182,32 @@ test('builds scenario guide for linked company deal import', () => {
       'Если для сделки нужны суммы и этапы, используйте DEAL__OPPORTUNITY, DEAL__CURRENCY_ID и DEAL__STAGE_ID.',
     ],
     exampleColumns: ['COMPANY__TITLE', 'COMPANY__PHONE', 'DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__CURRENCY_ID', 'DEAL__STAGE_ID'],
+  })
+})
+
+test('builds scenario guide for linked contact deal import', () => {
+  assert.deepEqual(buildEntityScenarioGuide('linked_contact_deal'), {
+    title: 'Связанный импорт контакта и сделки',
+    description: 'Одна строка Excel создаёт или обновляет контакт и связанную с ним сделку.',
+    highlights: [
+      'Контакт и сделка загружаются из одной строки и связываются автоматически.',
+      'Для контакта используйте колонки с префиксом CONTACT__, для сделки с префиксом DEAL__.',
+      'Если для сделки нужны суммы и этапы, используйте DEAL__OPPORTUNITY, DEAL__CURRENCY_ID и DEAL__STAGE_ID.',
+    ],
+    exampleColumns: ['CONTACT__NAME', 'CONTACT__LAST_NAME', 'CONTACT__PHONE', 'DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__STAGE_ID'],
+  })
+})
+
+test('builds scenario guide for linked deal company import without external key example', () => {
+  assert.deepEqual(buildEntityScenarioGuide('linked_deal_company'), {
+    title: 'Связанный импорт сделки и компании',
+    description: 'Одна строка Excel создаёт или обновляет сделку и связанную с ней компанию.',
+    highlights: [
+      'Сделка и компания загружаются из одной строки и связываются автоматически.',
+      'Для сделки используйте колонки с префиксом DEAL__, для компании с префиксом COMPANY__.',
+      'У одной сделки может быть только одна компания, поэтому в шаблоне достаточно данных самой сделки и компании.',
+    ],
+    exampleColumns: ['DEAL__TITLE', 'DEAL__OPPORTUNITY', 'DEAL__CURRENCY_ID', 'DEAL__STAGE_ID', 'COMPANY__TITLE', 'COMPANY__PHONE', 'COMPANY__EMAIL'],
   })
 })
 
@@ -244,6 +297,12 @@ test('builds example template download meta for deal and task attachment', () =>
     title: 'Шаблон для «Компания + Сделка»',
     description: 'Скачайте пример Excel с заголовками и одной тестовой строкой под выбранный импорт.',
     filename: 'linked_company_deal-import-example.xlsx',
+  })
+
+  assert.deepEqual(buildExampleTemplateDownloadMeta('linked_contact_deal'), {
+    title: 'Шаблон для «Контакт + Сделка»',
+    description: 'Скачайте пример Excel с заголовками и одной тестовой строкой под выбранный импорт.',
+    filename: 'linked_contact_deal-import-example.xlsx',
   })
 })
 
@@ -704,8 +763,8 @@ test('builds mapping select items with type and custom field hints', () => {
 
   assert.deepEqual(items, [
     { value: EMPTY_MAPPING_SELECT_VALUE, label: 'Не импортировать' },
-    { value: 'TITLE', label: 'Lead title (TITLE) · Текст' },
-    { value: 'UF_CRM_TAGS', label: 'Tags (UF_CRM_TAGS) · Список · Кастомное · Множественное' },
+    { value: 'TITLE', label: 'Lead title (Текст)', description: 'TITLE' },
+    { value: 'UF_CRM_TAGS', label: 'Tags (Список)', description: 'UF_CRM_TAGS' },
   ])
 })
 
@@ -731,8 +790,8 @@ test('marks required mapping select items with star prefix and tag', () => {
 
   assert.deepEqual(items, [
     { value: EMPTY_MAPPING_SELECT_VALUE, label: 'Не импортировать' },
-    { value: 'POST_MESSAGE', label: '★ Comment text (POST_MESSAGE) · Текст · Обязательное' },
-    { value: 'TASK_ID', label: '★ Task ID (TASK_ID) · Число · Обязательное' },
+    { value: 'POST_MESSAGE', label: '★ Comment text (Текст)', description: 'POST_MESSAGE' },
+    { value: 'TASK_ID', label: '★ Task ID (Число)', description: 'TASK_ID' },
   ])
 })
 
@@ -1151,12 +1210,14 @@ test('builds dedup payload with supported strategy and normalized fields', () =>
 
   assert.deepEqual(payload, {
     strategy: 'update',
-    fields: ['PHONE', 'EMAIL'],
+    fields: ['phone', 'EMAIL', 'PHONE', 'UNKNOWN'],
+    condition: 'any',
   })
 
   assert.deepEqual(buildDedupPayload({ strategy: 'create', fields: ['PHONE'] }), {
     strategy: 'create',
     fields: [],
+    condition: 'any',
   })
 })
 
@@ -1613,6 +1674,77 @@ test('builds compact linked import summary for company and deal sections', () =>
   })
 })
 
+test('builds compact linked import summary for deal and contact sections in schema order', () => {
+  const summary = buildLinkedImportRunSummary({
+    results: [
+      {
+        row_number: 2,
+        status: 'created',
+        linked_records: {
+          deal: {
+            id: 401,
+            title: 'Сделка 1',
+            status: 'created',
+          },
+          contact: {
+            id: 701,
+            title: 'Алиса Иванова',
+            status: 'created',
+          },
+        },
+      },
+      {
+        row_number: 3,
+        status: 'updated',
+        linked_records: {
+          deal: {
+            id: 401,
+            title: 'Сделка 1',
+            status: 'existing',
+          },
+          contact: {
+            id: 702,
+            title: 'Борис Петров',
+            status: 'created',
+          },
+        },
+      },
+    ],
+  })
+
+  assert.deepEqual(summary, {
+    hasSummary: true,
+    sections: [
+      {
+        id: 'deal',
+        title: 'Сделки',
+        total: 2,
+        pageSize: 5,
+        pageCount: 1,
+        hasOverflow: false,
+        items: [
+          { key: 'deal:401:0', title: 'Сделка 1', recordId: '401', statusLabel: 'Создано' },
+          { key: 'deal:401:1', title: 'Сделка 1', recordId: '401', statusLabel: 'Найдено' },
+        ],
+      },
+      {
+        id: 'contact',
+        title: 'Контакты',
+        total: 2,
+        pageSize: 5,
+        pageCount: 1,
+        hasOverflow: false,
+        items: [
+          { key: 'contact:701:0', title: 'Алиса Иванова', recordId: '701', statusLabel: 'Создано' },
+          { key: 'contact:702:1', title: 'Борис Петров', recordId: '702', statusLabel: 'Создано' },
+        ],
+      },
+    ],
+    hasOverflow: false,
+    overflowMessage: '',
+  })
+})
+
 test('builds retry state only for failed and validation-skipped import rows', () => {
   const retryState = buildImportRunRetryState({
     results: [
@@ -1687,6 +1819,7 @@ test('builds grouped problem summary and status filters for import report', () =
   assert.deepEqual(buildImportRunStatusFilters(importRunData), [
     { id: 'all', label: 'Все', count: 7 },
     { id: 'problem', label: 'Проблемные', count: 4 },
+    { id: 'dedup_risk', label: 'Риск дублей', count: 0 },
     { id: 'created', label: 'Создано', count: 1 },
     { id: 'updated', label: 'Обновлено', count: 1 },
     { id: 'failed', label: 'Ошибки', count: 1 },
@@ -1789,14 +1922,14 @@ test('builds dry run rows for preview before import execution', () => {
       rowNumber: 3,
       status: 'ready_update',
       statusLabel: 'Готово к обновлению',
-      details: 'TITLE: Bob · EMAIL: bob@example.com · Совпадение: EMAIL',
+      details: 'TITLE: Bob · EMAIL: bob@example.com · Совпадение: Email',
     },
     {
       key: '4:skipped_duplicate',
       rowNumber: 4,
       status: 'skipped_duplicate',
       statusLabel: 'Дубль пропущен',
-      details: 'Duplicate matched existing record · Совпадение: EMAIL, PHONE',
+      details: 'Duplicate matched existing record · Совпадение: Email, Телефон',
     },
     {
       key: '5:skipped',
@@ -1829,7 +1962,7 @@ test('builds dedup weakening warning in dry run rows', () => {
       rowNumber: 2,
       status: 'ready',
       statusLabel: 'Готово',
-      details: 'TITLE: Alice · EMAIL: alice@example.com · Неполный поиск дублей: PHONE',
+      details: 'TITLE: Alice · EMAIL: alice@example.com · Неполный поиск дублей: Телефон',
     },
   ])
 })
@@ -1931,6 +2064,7 @@ test('builds recent session rows for import history panel', () => {
       statusLabel: 'Завершено',
       resultLabel: 'Успех',
       resultTone: 'success',
+      actionLabel: 'Открыть',
       counters: 'Созд. 6 · Обн. 2 · Проп. 1 · Ош. 1',
       updatedAt: '2026-05-05T18:00:00+00:00',
       updatedAtLabel: '05.05.2026 18:00',
@@ -1943,11 +2077,28 @@ test('builds recent session rows for import history panel', () => {
       statusLabel: 'Завершено',
       resultLabel: 'Успех',
       resultTone: 'success',
+      actionLabel: 'Открыть',
       counters: '3 / 0',
       updatedAt: '2026-05-05T18:10:00+00:00',
       updatedAtLabel: '05.05.2026 18:10',
     },
   ])
+})
+
+test('builds continue action for unfinished history sessions', () => {
+  const rows = buildSessionHistoryRows([
+    {
+      id: 'session-running',
+      original_filename: 'deals.xlsx',
+      entity_type: 'deal',
+      status: 'running',
+      successful_rows: 10,
+      failed_rows: 0,
+      updated_at: '2026-05-05T18:20:00+00:00',
+    },
+  ])
+
+  assert.equal(rows[0].actionLabel, 'Продолжить')
 })
 
 test('builds import run summary from session snapshot when aggregate counters are missing', () => {
@@ -2164,11 +2315,27 @@ test('builds collapsed state for recent import history panel', () => {
   })
 })
 
-test('renders inline wizard footer on structure and preview steps', () => {
-  assert.equal(shouldRenderInlineWizardFooter(1), false)
-  assert.equal(shouldRenderInlineWizardFooter(2), true)
-  assert.equal(shouldRenderInlineWizardFooter(3), true)
-  assert.equal(shouldRenderInlineWizardFooter(4), false)
+test('importer workbench keeps wizard navigation only in top step action bars', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const importerUiUtilsSource = readFileSync(
+    new URL('../app/utils/importer-ui.js', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('showInlineWizardFooter'), false)
+  assert.equal(importerWorkbenchSource.includes('footerStatusLabel'), false)
+  assert.equal(importerWorkbenchSource.includes('progressPercent'), false)
+  assert.equal(importerUiUtilsSource.includes('shouldRenderInlineWizardFooter'), false)
+  assert.equal(importerWorkbenchSource.includes('label="Применить и продолжить"'), true)
+  assert.equal(importerWorkbenchSource.includes('label="Сохранить соответствие"'), true)
+  assert.equal(importerWorkbenchSource.includes('v-if="!hasPendingMappingChanges"'), true)
+  assert.equal(
+    importerWorkbenchSource.includes('Сохраните соответствие и выбранные значения по умолчанию, чтобы перейти к следующему шагу.'),
+    true,
+  )
 })
 
 test('builds finish action state for the last wizard step', () => {
@@ -2434,16 +2601,19 @@ test('step 1 keeps crm and task selectors mutually exclusive', () => {
   assert.equal(importerWorkbenchSource.includes("selectedCrmEntityType.value = ''"), true)
 })
 
-test('step 1 supports linked import selector and keeps it mutually exclusive with crm and task', () => {
+test('step 1 supports dependent linked import selectors and keeps them mutually exclusive with crm and task', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
     'utf8',
   )
 
-  assert.equal(importerWorkbenchSource.includes("const selectedLinkedEntityType = ref('')"), true)
-  assert.equal(importerWorkbenchSource.includes("selectedLinkedEntityType.value = ''"), true)
-  assert.equal(importerWorkbenchSource.includes("updateScenarioEntityType('linked'"), true)
-  assert.equal(importerWorkbenchSource.includes('Компания + Контакт'), true)
+  assert.equal(importerWorkbenchSource.includes("const selectedLinkedPrimaryEntityType = ref('')"), true)
+  assert.equal(importerWorkbenchSource.includes("const selectedLinkedSecondaryEntityType = ref('')"), true)
+  assert.equal(importerWorkbenchSource.includes("selectedLinkedPrimaryEntityType.value = ''"), true)
+  assert.equal(importerWorkbenchSource.includes("selectedLinkedSecondaryEntityType.value = ''"), true)
+  assert.equal(importerWorkbenchSource.includes('resolveLinkedStrategyEntityType'), true)
+  assert.equal(importerWorkbenchSource.includes('Выберите основную сущность'), true)
+  assert.equal(importerWorkbenchSource.includes('Выберите связанную сущность'), true)
 })
 
 test('final step renders compact linked import summary with paging and csv fallback note', () => {
@@ -2489,6 +2659,34 @@ test('history panel no longer renders collapsed-state helper text', () => {
     importerWorkbenchSource.includes('По умолчанию показываются только последние 2 запуска, чтобы панель не вытягивала экран.'),
     false,
   )
+})
+
+test('history panel can reopen a saved import session in the wizard', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes("const restoringHistorySessionId = ref('')"), true)
+  assert.equal(importerWorkbenchSource.includes('async function resumeHistorySession(sessionId: string)'), true)
+  assert.equal(importerWorkbenchSource.includes('const response = await apiStore.getImportSession(sessionId)'), true)
+  assert.equal(importerWorkbenchSource.includes('await refreshMapping()'), true)
+  assert.equal(importerWorkbenchSource.includes('row.actionLabel'), true)
+  assert.equal(importerWorkbenchSource.includes('@click="resumeHistorySession(row.key)"'), true)
+})
+
+test('history panel shows explicit load error instead of silently rendering empty state', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes("const historyLoadError = ref('')"), true)
+  assert.equal(importerWorkbenchSource.includes("historyLoadError.value = ''"), true)
+  assert.equal(importerWorkbenchSource.includes("historyLoadError.value = error instanceof Error ? error.message : 'Не удалось загрузить историю импортов.'"), true)
+  assert.equal(importerWorkbenchSource.includes('Не удалось загрузить историю'), true)
+  assert.equal(importerWorkbenchSource.includes("v-if=\"historyLoadError && historyRows.length === 0\""), true)
+  assert.equal(importerWorkbenchSource.includes('// silently ignore history load failures'), false)
 })
 
 test('sidebar no longer includes context fact label for task scenarios', () => {
@@ -2599,12 +2797,63 @@ test('dedup step can be skipped without enabling duplicate checks', () => {
   assert.equal(importerWorkbenchSource.includes('async function skipDedupStep()'), true)
   assert.equal(importerWorkbenchSource.includes("dedupStrategy.value = 'create'"), true)
   assert.equal(importerWorkbenchSource.includes("dedupFields.value = []"), true)
+  assert.equal(importerWorkbenchSource.includes("currentStep.value = 6"), true)
   assert.equal(importerWorkbenchSource.includes('async function executeValidation({'), true)
   assert.equal(importerWorkbenchSource.includes('persistDedup = true'), true)
   assert.equal(importerWorkbenchSource.includes("busyState = 'validation'"), true)
-  assert.equal(importerWorkbenchSource.includes("persistDedup: false"), true)
-  assert.equal(importerWorkbenchSource.includes("busyState: 'dedup-skip'"), true)
+  assert.equal(importerWorkbenchSource.includes("await executeValidation({ persistDedup: false, resetStatus: false, busyState: 'dedup-skip' })"), false)
   assert.equal(importerWorkbenchSource.includes('label="Пропустить шаг"'), true)
+})
+
+test('skip dedup step disables automatic dry run only for explicit top-right skip action', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const skippedDedupStep = ref(false)'), true)
+  assert.equal(importerWorkbenchSource.includes('skippedDedupStep.value = true'), true)
+  assert.equal(
+    importerWorkbenchSource.includes("if (isDirectCrmEntityImport.value && dedupStrategy.value === 'create' && !dryRunData.value && !skippedDedupStep.value)"),
+    true,
+  )
+})
+
+test('skip dedup step keeps test import and import buttons enabled on step 6', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(
+    importerWorkbenchSource.includes("&& (Boolean(validationData.value) || skippedDedupStep.value)"),
+    true,
+  )
+})
+
+test('skip dedup step clears busy state before step 6 buttons are rendered', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  const skipFunctionStart = importerWorkbenchSource.indexOf('async function skipDedupStep() {')
+  const saveTemplateStart = importerWorkbenchSource.indexOf('async function saveTemplate() {')
+  const skipFunctionSource = importerWorkbenchSource.slice(skipFunctionStart, saveTemplateStart)
+
+  assert.equal(skipFunctionSource.includes("busyAction.value = ''\n    currentStep.value = 6"), true)
+})
+
+test('skip dedup step validates lazily before explicit dry run and import execution', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('async function ensureValidationBeforeExecution()'), true)
+  assert.equal(importerWorkbenchSource.includes("busyState: 'validation'"), true)
+  assert.equal(importerWorkbenchSource.includes('const validationResult = await ensureValidationBeforeExecution()'), true)
+  assert.equal(importerWorkbenchSource.includes('if (!validationResult && !validationData.value) {'), true)
 })
 
 test('validation step empty state points to real import after checks pass', () => {

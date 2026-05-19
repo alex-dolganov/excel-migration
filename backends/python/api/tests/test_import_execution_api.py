@@ -614,6 +614,86 @@ class ImportExecutionApiTest(TestCase):
         )
         return session
 
+    def create_uploaded_linked_contact_deal_session(self, rows):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_contact_deal",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="linked-contact-deal.xlsx",
+        )
+        session.stored_file.save(
+            "linked-contact-deal.xlsx",
+            SimpleUploadedFile(
+                "linked-contact-deal.xlsx",
+                build_xlsx_with_sheets([("Linked", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_contact_company_session(self, rows):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_contact_company",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="linked-contact-company.xlsx",
+        )
+        session.stored_file.save(
+            "linked-contact-company.xlsx",
+            SimpleUploadedFile(
+                "linked-contact-company.xlsx",
+                build_xlsx_with_sheets([("Linked", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_deal_contact_session(self, rows):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_deal_contact",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="linked-deal-contact.xlsx",
+        )
+        session.stored_file.save(
+            "linked-deal-contact.xlsx",
+            SimpleUploadedFile(
+                "linked-deal-contact.xlsx",
+                build_xlsx_with_sheets([("Linked", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_deal_company_session(self, rows):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_deal_company",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="linked-deal-company.xlsx",
+        )
+        session.stored_file.save(
+            "linked-deal-company.xlsx",
+            SimpleUploadedFile(
+                "linked-deal-company.xlsx",
+                build_xlsx_with_sheets([("Linked", rows)]),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
     def create_uploaded_crm_activity_session(self, rows):
         session = ImportSession.objects.create(
             portal_member_id="member-1",
@@ -995,6 +1075,548 @@ class ImportExecutionApiTest(TestCase):
         account.deal_updated_records = deal_updated_records
         account.company_list_calls = company_list_calls
         account.deal_list_calls = deal_list_calls
+        return account
+
+    def create_linked_contact_deal_account(
+        self,
+        *,
+        member_id="member-1",
+        domain_url="test.bitrix24.ru",
+        contact_duplicates_by_filter=None,
+        deal_duplicates_by_filter=None,
+    ):
+        contact_created_fields = []
+        deal_created_fields = []
+        contact_updated_records = []
+        deal_updated_records = []
+        contact_list_calls = []
+        deal_list_calls = []
+        contact_record_id_sequence = itertools.count(start=701)
+        deal_record_id_sequence = itertools.count(start=801)
+        contact_duplicates_by_filter = contact_duplicates_by_filter or {}
+        deal_duplicates_by_filter = deal_duplicates_by_filter or {}
+
+        def contact_add(fields, *, params=None, timeout=None):
+            contact_created_fields.append(dict(fields))
+            return FakeAddRequest(next(contact_record_id_sequence))
+
+        def deal_add(fields, *, params=None, timeout=None):
+            deal_created_fields.append(dict(fields))
+            return FakeAddRequest(next(deal_record_id_sequence))
+
+        def contact_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            contact_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(contact_duplicates_by_filter.get(normalized_filter, []))
+
+        def deal_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            deal_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(deal_duplicates_by_filter.get(normalized_filter, []))
+
+        def contact_update(record_id, fields, *, params=None, timeout=None):
+            contact_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        def deal_update(record_id, fields, *, params=None, timeout=None):
+            deal_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        account = SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "LAST_NAME": {
+                                    "title": "Фамилия контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_CONTACT_SOURCE": {
+                                    "title": "Источник контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        ),
+                        add=contact_add,
+                        list=contact_list,
+                        update=contact_update,
+                    ),
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Сумма",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "CURRENCY_ID": {
+                                    "title": "Валюта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "STAGE_ID": {
+                                    "title": "Стадия",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": {
+                                        "NEW": "Новая",
+                                        "IN_PROGRESS": "В работе",
+                                    },
+                                },
+                                "CONTACT_ID": {
+                                    "title": "Контакт",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_DEAL_CHANNEL": {
+                                    "title": "Канал сделки",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        ),
+                        add=deal_add,
+                        list=deal_list,
+                        update=deal_update,
+                    ),
+                )
+            ),
+        )
+        account.contact_created_fields = contact_created_fields
+        account.deal_created_fields = deal_created_fields
+        account.contact_updated_records = contact_updated_records
+        account.deal_updated_records = deal_updated_records
+        account.contact_list_calls = contact_list_calls
+        account.deal_list_calls = deal_list_calls
+        return account
+
+    def create_linked_contact_company_account(
+        self,
+        *,
+        member_id="member-1",
+        domain_url="test.bitrix24.ru",
+        contact_duplicates_by_filter=None,
+        company_duplicates_by_filter=None,
+    ):
+        contact_created_fields = []
+        company_created_fields = []
+        contact_updated_records = []
+        company_updated_records = []
+        contact_list_calls = []
+        company_list_calls = []
+        contact_record_id_sequence = itertools.count(start=701)
+        company_record_id_sequence = itertools.count(start=901)
+        contact_duplicates_by_filter = contact_duplicates_by_filter or {}
+        company_duplicates_by_filter = company_duplicates_by_filter or {}
+
+        def contact_add(fields, *, params=None, timeout=None):
+            contact_created_fields.append(dict(fields))
+            return FakeAddRequest(next(contact_record_id_sequence))
+
+        def company_add(fields, *, params=None, timeout=None):
+            company_created_fields.append(dict(fields))
+            return FakeAddRequest(next(company_record_id_sequence))
+
+        def contact_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            contact_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(contact_duplicates_by_filter.get(normalized_filter, []))
+
+        def company_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            company_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(company_duplicates_by_filter.get(normalized_filter, []))
+
+        def contact_update(record_id, fields, *, params=None, timeout=None):
+            contact_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        def company_update(record_id, fields, *, params=None, timeout=None):
+            company_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        account = SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "LAST_NAME": {
+                                    "title": "Фамилия контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон контакта",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "COMPANY_ID": {
+                                    "title": "Компания",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        ),
+                        add=contact_add,
+                        list=contact_list,
+                        update=contact_update,
+                    ),
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон компании",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "EMAIL": {
+                                    "title": "Email компании",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                            }
+                        ),
+                        add=company_add,
+                        list=company_list,
+                        update=company_update,
+                    ),
+                )
+            ),
+        )
+        account.contact_created_fields = contact_created_fields
+        account.company_created_fields = company_created_fields
+        account.contact_updated_records = contact_updated_records
+        account.company_updated_records = company_updated_records
+        account.contact_list_calls = contact_list_calls
+        account.company_list_calls = company_list_calls
+        return account
+
+    def create_linked_deal_contact_account(
+        self,
+        *,
+        member_id="member-1",
+        domain_url="test.bitrix24.ru",
+        deal_duplicates_by_filter=None,
+        contact_duplicates_by_filter=None,
+    ):
+        deal_created_fields = []
+        contact_created_fields = []
+        deal_updated_records = []
+        contact_updated_records = []
+        deal_list_calls = []
+        contact_list_calls = []
+        deal_record_id_sequence = itertools.count(start=801)
+        contact_record_id_sequence = itertools.count(start=701)
+        deal_duplicates_by_filter = deal_duplicates_by_filter or {}
+        contact_duplicates_by_filter = contact_duplicates_by_filter or {}
+
+        def deal_add(fields, *, params=None, timeout=None):
+            deal_created_fields.append(dict(fields))
+            return FakeAddRequest(next(deal_record_id_sequence))
+
+        def contact_add(fields, *, params=None, timeout=None):
+            contact_created_fields.append(dict(fields))
+            return FakeAddRequest(next(contact_record_id_sequence))
+
+        def deal_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            deal_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(deal_duplicates_by_filter.get(normalized_filter, []))
+
+        def contact_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            contact_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(contact_duplicates_by_filter.get(normalized_filter, []))
+
+        def deal_update(record_id, fields, *, params=None, timeout=None):
+            deal_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        def contact_update(record_id, fields, *, params=None, timeout=None):
+            contact_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        account = SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Сумма",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "CURRENCY_ID": {
+                                    "title": "Валюта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "STAGE_ID": {
+                                    "title": "Стадия",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": {
+                                        "NEW": "Новая",
+                                        "IN_PROGRESS": "В работе",
+                                    },
+                                },
+                                "CONTACT_ID": {
+                                    "title": "Контакт",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_DEAL_CHANNEL": {
+                                    "title": "Канал сделки",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        ),
+                        add=deal_add,
+                        list=deal_list,
+                        update=deal_update,
+                    ),
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "LAST_NAME": {
+                                    "title": "Фамилия контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_CONTACT_SOURCE": {
+                                    "title": "Источник контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        ),
+                        add=contact_add,
+                        list=contact_list,
+                        update=contact_update,
+                    ),
+                )
+            ),
+        )
+        account.deal_created_fields = deal_created_fields
+        account.contact_created_fields = contact_created_fields
+        account.deal_updated_records = deal_updated_records
+        account.contact_updated_records = contact_updated_records
+        account.deal_list_calls = deal_list_calls
+        account.contact_list_calls = contact_list_calls
+        return account
+
+    def create_linked_deal_company_account(
+        self,
+        *,
+        member_id="member-1",
+        domain_url="test.bitrix24.ru",
+        deal_duplicates_by_filter=None,
+        company_duplicates_by_filter=None,
+    ):
+        deal_created_fields = []
+        company_created_fields = []
+        deal_updated_records = []
+        company_updated_records = []
+        deal_list_calls = []
+        company_list_calls = []
+        deal_record_id_sequence = itertools.count(start=801)
+        company_record_id_sequence = itertools.count(start=901)
+        deal_duplicates_by_filter = deal_duplicates_by_filter or {}
+        company_duplicates_by_filter = company_duplicates_by_filter or {}
+
+        def deal_add(fields, *, params=None, timeout=None):
+            deal_created_fields.append(dict(fields))
+            return FakeAddRequest(next(deal_record_id_sequence))
+
+        def company_add(fields, *, params=None, timeout=None):
+            company_created_fields.append(dict(fields))
+            return FakeAddRequest(next(company_record_id_sequence))
+
+        def deal_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            deal_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(deal_duplicates_by_filter.get(normalized_filter, []))
+
+        def company_list(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            company_list_calls.append({"filter": dict(filter or {}), "select": list(select or [])})
+            return FakeListRequest(company_duplicates_by_filter.get(normalized_filter, []))
+
+        def deal_update(record_id, fields, *, params=None, timeout=None):
+            deal_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        def company_update(record_id, fields, *, params=None, timeout=None):
+            company_updated_records.append({"id": record_id, "fields": dict(fields)})
+            return FakeUpdateRequest(True)
+
+        account = SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Сумма",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "CURRENCY_ID": {
+                                    "title": "Валюта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "STAGE_ID": {
+                                    "title": "Стадия",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": {
+                                        "NEW": "Новая",
+                                        "IN_PROGRESS": "В работе",
+                                    },
+                                },
+                                "COMPANY_ID": {
+                                    "title": "Компания",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        ),
+                        add=deal_add,
+                        list=deal_list,
+                        update=deal_update,
+                    ),
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон компании",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                            }
+                        ),
+                        add=company_add,
+                        list=company_list,
+                        update=company_update,
+                    ),
+                )
+            ),
+        )
+        account.deal_created_fields = deal_created_fields
+        account.company_created_fields = company_created_fields
+        account.deal_updated_records = deal_updated_records
+        account.company_updated_records = company_updated_records
+        account.deal_list_calls = deal_list_calls
+        account.company_list_calls = company_list_calls
         return account
 
     def create_uploaded_task_comment_session(self, rows):
@@ -1391,6 +2013,278 @@ class ImportExecutionApiTest(TestCase):
                         "fields": [],
                     },
                     "deal": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        if validate:
+            validation_response = self.client.post(
+                reverse("importer:session-validate", kwargs={"session_id": session.id}),
+                data={},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+            self.assertEqual(validation_response.status_code, 200)
+
+    def prepare_linked_contact_deal_session(self, session, *, validate=True, dedup=None):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "CONTACT__NAME": {
+                        "source_header": "Имя контакта",
+                        "column": "A",
+                    },
+                    "CONTACT__LAST_NAME": {
+                        "source_header": "Фамилия контакта",
+                        "column": "B",
+                    },
+                    "CONTACT__EMAIL": {
+                        "source_header": "Email контакта",
+                        "column": "C",
+                    },
+                    "CONTACT__UF_CRM_CONTACT_SOURCE": {
+                        "source_header": "Источник контакта",
+                        "column": "D",
+                    },
+                    "DEAL__TITLE": {
+                        "source_header": "Название сделки",
+                        "column": "E",
+                    },
+                    "DEAL__OPPORTUNITY": {
+                        "source_header": "Сумма",
+                        "column": "F",
+                    },
+                    "DEAL__CURRENCY_ID": {
+                        "source_header": "Валюта",
+                        "column": "G",
+                    },
+                    "DEAL__STAGE_ID": {
+                        "source_header": "Стадия",
+                        "column": "H",
+                    },
+                    "DEAL__UF_CRM_DEAL_CHANNEL": {
+                        "source_header": "Канал сделки",
+                        "column": "I",
+                    },
+                },
+                "dedup": dedup or {
+                    "contact": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                    "deal": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        if validate:
+            validation_response = self.client.post(
+                reverse("importer:session-validate", kwargs={"session_id": session.id}),
+                data={},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+            self.assertEqual(validation_response.status_code, 200)
+
+    def prepare_linked_contact_company_session(self, session, *, validate=True, dedup=None):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "CONTACT__EXTERNAL_KEY": {
+                        "source_header": "Внешний ключ контакта",
+                        "column": "A",
+                    },
+                    "CONTACT__NAME": {
+                        "source_header": "Имя контакта",
+                        "column": "B",
+                    },
+                    "CONTACT__LAST_NAME": {
+                        "source_header": "Фамилия контакта",
+                        "column": "C",
+                    },
+                    "CONTACT__EMAIL": {
+                        "source_header": "Email контакта",
+                        "column": "D",
+                    },
+                    "COMPANY__TITLE": {
+                        "source_header": "Название компании",
+                        "column": "E",
+                    },
+                    "COMPANY__PHONE": {
+                        "source_header": "Телефон компании",
+                        "column": "F",
+                    },
+                },
+                "dedup": dedup or {
+                    "contact": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                    "company": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        if validate:
+            validation_response = self.client.post(
+                reverse("importer:session-validate", kwargs={"session_id": session.id}),
+                data={},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+            self.assertEqual(validation_response.status_code, 200)
+
+    def prepare_linked_deal_contact_session(self, session, *, validate=True, dedup=None):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "DEAL__EXTERNAL_KEY": {
+                        "source_header": "Внешний ключ сделки",
+                        "column": "A",
+                    },
+                    "DEAL__TITLE": {
+                        "source_header": "Название сделки",
+                        "column": "B",
+                    },
+                    "DEAL__OPPORTUNITY": {
+                        "source_header": "Сумма",
+                        "column": "C",
+                    },
+                    "DEAL__CURRENCY_ID": {
+                        "source_header": "Валюта",
+                        "column": "D",
+                    },
+                    "DEAL__STAGE_ID": {
+                        "source_header": "Стадия",
+                        "column": "E",
+                    },
+                    "CONTACT__NAME": {
+                        "source_header": "Имя контакта",
+                        "column": "F",
+                    },
+                    "CONTACT__LAST_NAME": {
+                        "source_header": "Фамилия контакта",
+                        "column": "G",
+                    },
+                    "CONTACT__EMAIL": {
+                        "source_header": "Email контакта",
+                        "column": "H",
+                    },
+                    "CONTACT__UF_CRM_CONTACT_SOURCE": {
+                        "source_header": "Источник контакта",
+                        "column": "I",
+                    },
+                },
+                "dedup": dedup or {
+                    "deal": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                    "contact": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        if validate:
+            validation_response = self.client.post(
+                reverse("importer:session-validate", kwargs={"session_id": session.id}),
+                data={},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+            self.assertEqual(validation_response.status_code, 200)
+
+    def prepare_linked_deal_company_session(self, session, *, validate=True, dedup=None):
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "DEAL__EXTERNAL_KEY": {
+                        "source_header": "Внешний ключ сделки",
+                        "column": "A",
+                    },
+                    "DEAL__TITLE": {
+                        "source_header": "Название сделки",
+                        "column": "B",
+                    },
+                    "DEAL__OPPORTUNITY": {
+                        "source_header": "Сумма",
+                        "column": "C",
+                    },
+                    "DEAL__CURRENCY_ID": {
+                        "source_header": "Валюта",
+                        "column": "D",
+                    },
+                    "DEAL__STAGE_ID": {
+                        "source_header": "Стадия",
+                        "column": "E",
+                    },
+                    "COMPANY__TITLE": {
+                        "source_header": "Название компании",
+                        "column": "F",
+                    },
+                    "COMPANY__PHONE": {
+                        "source_header": "Телефон компании",
+                        "column": "G",
+                    },
+                },
+                "dedup": dedup or {
+                    "deal": {
+                        "strategy": "create",
+                        "fields": [],
+                    },
+                    "company": {
                         "strategy": "create",
                         "fields": [],
                     },
@@ -4172,6 +5066,434 @@ class ImportExecutionApiTest(TestCase):
                 "COMPANY_ID": 601,
             }
         ])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_creates_contact_then_deal_and_links_them_in_linked_import(self, get_from_jwt_token):
+        account = self.create_linked_contact_deal_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_linked_contact_deal_session(
+            [
+                [
+                    "Имя контакта",
+                    "Фамилия контакта",
+                    "Email контакта",
+                    "Источник контакта",
+                    "Название сделки",
+                    "Сумма",
+                    "Валюта",
+                    "Стадия",
+                    "Канал сделки",
+                ],
+                [
+                    "Алиса",
+                    "Иванова",
+                    "alice@example.ru",
+                    "Сайт",
+                    "Редизайн сайта",
+                    "150000",
+                    "RUB",
+                    "Новая",
+                    "Партнеры",
+                ],
+            ]
+        )
+        self.prepare_linked_contact_deal_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 1)
+        self.assertEqual(response.json()["item"]["created_ids"], [801])
+        self.assertEqual(len(response.json()["item"]["results"]), 1)
+        result_item = response.json()["item"]["results"][0]
+        self.assertEqual(result_item["row_number"], 2)
+        self.assertEqual(result_item["status"], "created")
+        self.assertEqual(result_item["record_id"], 801)
+        self.assertEqual(result_item["report_entity"], "Контакт + Сделка")
+        self.assertEqual(result_item["report_title"], "Алиса Иванова / Редизайн сайта")
+        self.assertEqual(result_item["report_record_id"], "Контакт 701 · Сделка 801")
+        self.assertTrue(result_item["report_date_time"])
+        self.assertEqual(result_item["linked_records"], {
+            "contact": {
+                "id": 701,
+                "title": "Алиса Иванова",
+                "status": "created",
+            },
+            "deal": {
+                "id": 801,
+                "title": "Редизайн сайта",
+                "status": "created",
+            },
+        })
+        self.assertEqual(account.contact_created_fields, [
+            {
+                "NAME": "Алиса",
+                "LAST_NAME": "Иванова",
+                "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                "UF_CRM_CONTACT_SOURCE": "Сайт",
+            }
+        ])
+        self.assertEqual(account.deal_created_fields, [
+            {
+                "TITLE": "Редизайн сайта",
+                "OPPORTUNITY": 150000.0,
+                "CURRENCY_ID": "RUB",
+                "STAGE_ID": "NEW",
+                "CONTACT_ID": 701,
+                "UF_CRM_DEAL_CHANNEL": "Партнеры",
+            }
+        ])
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_creates_contact_then_company_and_binds_them_in_linked_contact_company_import(self, get_from_jwt_token, bitrix_api_request):
+        account = self.create_linked_contact_company_account()
+        get_from_jwt_token.return_value = account
+        bitrix_api_request.return_value = SimpleNamespace(result=True)
+
+        session = self.create_uploaded_linked_contact_company_session(
+            [
+                [
+                    "Внешний ключ контакта",
+                    "Имя контакта",
+                    "Фамилия контакта",
+                    "Email контакта",
+                    "Название компании",
+                    "Телефон компании",
+                ],
+                [
+                    "contact_001",
+                    "Алиса",
+                    "Иванова",
+                    "alice@example.ru",
+                    "ООО Альфа",
+                    "+78005550101",
+                ],
+            ]
+        )
+        self.prepare_linked_contact_company_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 1)
+        self.assertEqual(response.json()["item"]["created_ids"], [901])
+        result_item = response.json()["item"]["results"][0]
+        self.assertEqual(result_item["record_id"], 901)
+        self.assertEqual(result_item["report_entity"], "Контакт + Компания")
+        self.assertEqual(result_item["report_title"], "Алиса Иванова / ООО Альфа")
+        self.assertEqual(result_item["report_record_id"], "Контакт 701 · Компания 901")
+        self.assertEqual(result_item["linked_records"], {
+            "contact": {
+                "id": 701,
+                "title": "Алиса Иванова",
+                "status": "created",
+            },
+            "company": {
+                "id": 901,
+                "title": "ООО Альфа",
+                "status": "created",
+            },
+        })
+        self.assertEqual(account.contact_created_fields, [
+            {
+                "NAME": "Алиса",
+                "LAST_NAME": "Иванова",
+                "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                "XML_ID": "contact_001",
+            }
+        ])
+        self.assertEqual(account.company_created_fields, [
+            {
+                "TITLE": "ООО Альфа",
+                "PHONE": [{"VALUE": "+78005550101", "VALUE_TYPE": "WORK"}],
+            }
+        ])
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="crm.contact.company.add",
+            params={
+                "id": 701,
+                "fields": {
+                    "COMPANY_ID": 901,
+                },
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_creates_deal_then_contact_and_binds_them_in_linked_deal_contact_import(self, get_from_jwt_token, bitrix_api_request):
+        account = self.create_linked_deal_contact_account()
+        get_from_jwt_token.return_value = account
+        bitrix_api_request.return_value = SimpleNamespace(result=True)
+
+        session = self.create_uploaded_linked_deal_contact_session(
+            [
+                [
+                    "Внешний ключ сделки",
+                    "Название сделки",
+                    "Сумма",
+                    "Валюта",
+                    "Стадия",
+                    "Имя контакта",
+                    "Фамилия контакта",
+                    "Email контакта",
+                    "Источник контакта",
+                ],
+                [
+                    "deal_001",
+                    "Редизайн сайта",
+                    "150000",
+                    "RUB",
+                    "Новая",
+                    "Алиса",
+                    "Иванова",
+                    "alice@example.ru",
+                    "Сайт",
+                ],
+            ]
+        )
+        self.prepare_linked_deal_contact_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 1)
+        self.assertEqual(response.json()["item"]["created_ids"], [701])
+        self.assertEqual(len(response.json()["item"]["results"]), 1)
+        result_item = response.json()["item"]["results"][0]
+        self.assertEqual(result_item["row_number"], 2)
+        self.assertEqual(result_item["status"], "created")
+        self.assertEqual(result_item["record_id"], 701)
+        self.assertEqual(result_item["report_entity"], "Сделка + Контакт")
+        self.assertEqual(result_item["report_title"], "Редизайн сайта / Алиса Иванова")
+        self.assertEqual(result_item["report_record_id"], "Сделка 801 · Контакт 701")
+        self.assertTrue(result_item["report_date_time"])
+        self.assertEqual(result_item["linked_records"], {
+            "deal": {
+                "id": 801,
+                "title": "Редизайн сайта",
+                "status": "created",
+            },
+            "contact": {
+                "id": 701,
+                "title": "Алиса Иванова",
+                "status": "created",
+            },
+        })
+        self.assertEqual(account.deal_created_fields, [
+            {
+                "TITLE": "Редизайн сайта",
+                "OPPORTUNITY": 150000.0,
+                "CURRENCY_ID": "RUB",
+                "STAGE_ID": "NEW",
+                "XML_ID": "deal_001",
+            }
+        ])
+        self.assertEqual(account.contact_created_fields, [
+            {
+                "NAME": "Алиса",
+                "LAST_NAME": "Иванова",
+                "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                "UF_CRM_CONTACT_SOURCE": "Сайт",
+            }
+        ])
+        bitrix_api_request.assert_called_once_with(
+            bitrix_token=account,
+            api_method="crm.deal.contact.add",
+            params={
+                "id": 801,
+                "fields": {
+                    "CONTACT_ID": 701,
+                },
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_creates_deal_then_company_and_links_them_in_linked_deal_company_import(self, get_from_jwt_token, bitrix_api_request):
+        account = self.create_linked_deal_company_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_linked_deal_company_session(
+            [
+                [
+                    "Внешний ключ сделки",
+                    "Название сделки",
+                    "Сумма",
+                    "Валюта",
+                    "Стадия",
+                    "Название компании",
+                    "Телефон компании",
+                ],
+                [
+                    "deal_001",
+                    "Редизайн сайта",
+                    "150000",
+                    "RUB",
+                    "Новая",
+                    "ООО Альфа",
+                    "+78005550101",
+                ],
+            ]
+        )
+        self.prepare_linked_deal_company_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 1)
+        self.assertEqual(response.json()["item"]["created_ids"], [901])
+        result_item = response.json()["item"]["results"][0]
+        self.assertEqual(result_item["record_id"], 901)
+        self.assertEqual(result_item["report_entity"], "Сделка + Компания")
+        self.assertEqual(result_item["report_title"], "Редизайн сайта / ООО Альфа")
+        self.assertEqual(result_item["report_record_id"], "Сделка 801 · Компания 901")
+        self.assertEqual(result_item["linked_records"], {
+            "deal": {
+                "id": 801,
+                "title": "Редизайн сайта",
+                "status": "created",
+            },
+            "company": {
+                "id": 901,
+                "title": "ООО Альфа",
+                "status": "created",
+            },
+        })
+        self.assertEqual(account.deal_created_fields, [
+            {
+                "TITLE": "Редизайн сайта",
+                "OPPORTUNITY": 150000.0,
+                "CURRENCY_ID": "RUB",
+                "STAGE_ID": "NEW",
+                "XML_ID": "deal_001",
+            }
+        ])
+        self.assertEqual(account.company_created_fields, [
+            {
+                "TITLE": "ООО Альфа",
+                "PHONE": [{"VALUE": "+78005550101", "VALUE_TYPE": "WORK"}],
+            }
+        ])
+        self.assertEqual(account.deal_updated_records, [
+            {
+                "id": 801,
+                "fields": {
+                    "COMPANY_ID": 901,
+                },
+            }
+        ])
+        bitrix_api_request.assert_not_called()
+
+    @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_linked_deal_contact_import_reuses_deal_for_repeated_external_key(self, get_from_jwt_token, bitrix_api_request):
+        account = self.create_linked_deal_contact_account()
+        get_from_jwt_token.return_value = account
+        bitrix_api_request.return_value = SimpleNamespace(result=True)
+
+        session = self.create_uploaded_linked_deal_contact_session(
+            [
+                [
+                    "Внешний ключ сделки",
+                    "Название сделки",
+                    "Сумма",
+                    "Валюта",
+                    "Стадия",
+                    "Имя контакта",
+                    "Фамилия контакта",
+                    "Email контакта",
+                    "Источник контакта",
+                ],
+                [
+                    "deal_001",
+                    "Редизайн сайта",
+                    "150000",
+                    "RUB",
+                    "Новая",
+                    "Алиса",
+                    "Иванова",
+                    "alice@example.ru",
+                    "Сайт",
+                ],
+                [
+                    "deal_001",
+                    "Редизайн сайта",
+                    "150000",
+                    "RUB",
+                    "Новая",
+                    "Борис",
+                    "Петров",
+                    "boris@example.ru",
+                    "Партнеры",
+                ],
+            ]
+        )
+        self.prepare_linked_deal_contact_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 2)
+        self.assertEqual(response.json()["item"]["created_ids"], [701, 702])
+        self.assertEqual(len(account.deal_created_fields), 1)
+        self.assertEqual(account.deal_created_fields[0]["XML_ID"], "deal_001")
+        self.assertEqual(len(account.contact_created_fields), 2)
+        self.assertEqual(account.contact_created_fields[0]["NAME"], "Алиса")
+        self.assertEqual(account.contact_created_fields[1]["NAME"], "Борис")
+        self.assertEqual(bitrix_api_request.call_count, 2)
+        self.assertEqual(
+            [call.kwargs for call in bitrix_api_request.call_args_list],
+            [
+                {
+                    "bitrix_token": account,
+                    "api_method": "crm.deal.contact.add",
+                    "params": {
+                        "id": 801,
+                        "fields": {
+                            "CONTACT_ID": 701,
+                        },
+                    },
+                },
+                {
+                    "bitrix_token": account,
+                    "api_method": "crm.deal.contact.add",
+                    "params": {
+                        "id": 801,
+                        "fields": {
+                            "CONTACT_ID": 702,
+                        },
+                    },
+                },
+            ],
+        )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_run_linked_import_reuses_company_for_repeated_external_key(self, get_from_jwt_token):

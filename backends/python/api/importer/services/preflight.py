@@ -1,7 +1,9 @@
 from .mapping import resolve_field_item_value
 from .import_execution import (
+    build_linked_record_title,
     build_linked_mapping_groups,
     build_linked_row_payload,
+    get_linked_parent_entity_type,
     is_linked_import_entity_type,
     normalize_entity_dedup_settings,
 )
@@ -225,14 +227,15 @@ def _build_linked_identity_warnings(
     if not is_linked_import_entity_type(entity_type):
         return []
 
+    parent_entity_type = get_linked_parent_entity_type(entity_type)
     grouped_mapping = build_linked_mapping_groups(mapping, fields, entity_type=entity_type)
-    company_mapping = grouped_mapping.get("company", {})
-    if "TITLE" not in company_mapping or "XML_ID" in company_mapping:
+    parent_mapping = grouped_mapping.get(parent_entity_type, {})
+    if not parent_mapping or "XML_ID" in parent_mapping or "EXTERNAL_KEY" in parent_mapping:
         return []
 
     normalized_dedup = normalize_entity_dedup_settings(entity_type, dedup_settings)
-    company_dedup_fields = set((normalized_dedup.get("company") or {}).get("fields", []))
-    if company_dedup_fields.intersection(company_mapping.keys()):
+    parent_dedup_fields = set((normalized_dedup.get(parent_entity_type) or {}).get("fields", []))
+    if parent_dedup_fields.intersection(parent_mapping.keys()):
         return []
 
     title_counts = {}
@@ -248,11 +251,11 @@ def _build_linked_identity_warnings(
             fields,
             entity_type=entity_type,
         )
-        company_payload = linked_payload.get("company", {})
-        company_title = str(company_payload.get("TITLE") or "").strip()
-        if not company_title:
+        parent_payload = linked_payload.get(parent_entity_type, {})
+        parent_title = build_linked_record_title(parent_entity_type, parent_payload)
+        if not parent_title:
             continue
-        title_counts[company_title] = title_counts.get(company_title, 0) + 1
+        title_counts[parent_title] = title_counts.get(parent_title, 0) + 1
 
     repeated_row_count = sum(count for count in title_counts.values() if count > 1)
     if repeated_row_count < 2:
@@ -260,9 +263,9 @@ def _build_linked_identity_warnings(
 
     return [
         _build_issue(
-            "linked_company_identity_missing",
+            f"linked_{parent_entity_type}_identity_missing",
             "warning",
-            entity="company",
+            entity=parent_entity_type,
             row_count=repeated_row_count,
         ),
     ]

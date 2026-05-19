@@ -40,6 +40,13 @@ TOKEN_ALIASES = {
     "kontragent": "title",
 }
 TOKEN_SEQUENCE_ALIASES = {
+    ("внешний", "ключ"): ("externalkey",),
+    ("внешний", "ключ", "сделки"): ("externalkey",),
+    ("внешний", "ключ", "контакта"): ("externalkey",),
+    ("внешний", "ключ", "компании"): ("externalkey",),
+    ("внешний", "ключ", "xml", "id"): ("externalkey",),
+    ("xml", "id"): ("externalkey",),
+    ("external", "key"): ("externalkey",),
     ("lead", "name"): ("lead", "title"),
     ("lead", "title"): ("title",),
     ("task", "title"): ("title",),

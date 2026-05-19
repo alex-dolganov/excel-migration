@@ -175,6 +175,62 @@ def serialize_session(session: ImportSession) -> dict:
     }
 
 
+def serialize_session_history_summary(summary: dict | None) -> dict:
+    if not isinstance(summary, dict):
+        return {}
+
+    payload = {}
+    import_run = summary.get("import_run")
+    if isinstance(import_run, dict):
+        counters = {}
+        for key in (
+            "checked_rows",
+            "created_rows",
+            "updated_rows",
+            "skipped_rows",
+            "failed_rows",
+            "cancelled_rows",
+            "remaining_rows",
+            "retried_rows",
+        ):
+            value = import_run.get(key)
+            if value is None:
+                continue
+            try:
+                counters[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+        if counters:
+            payload["import_run"] = counters
+
+    job = summary.get("job")
+    if isinstance(job, dict):
+        state = str(job.get("state") or "").strip()
+        if state:
+            payload["job"] = {"state": state}
+
+    return payload
+
+
+def serialize_session_history_item(session: ImportSession) -> dict:
+    import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
+    return {
+        "id": str(session.id),
+        "entity_type": session.entity_type,
+        "entity_config": import_settings.get("entity_config") if isinstance(import_settings.get("entity_config"), dict) else None,
+        "source_format": session.source_format,
+        "status": session.status,
+        "original_filename": session.original_filename,
+        "processed_rows": session.processed_rows,
+        "successful_rows": session.successful_rows,
+        "failed_rows": session.failed_rows,
+        "total_rows": session.total_rows,
+        "summary": serialize_session_history_summary(session.summary),
+        "created_at": session.created_at.isoformat(),
+        "updated_at": session.updated_at.isoformat(),
+    }
+
+
 def serialize_template(template: ImportTemplate) -> dict:
     return {
         "id": str(template.id),
@@ -1339,7 +1395,7 @@ def import_sessions(request: AuthorizedRequest):
             portal_member_id=portal_member_id,
         ).order_by("-created_at")
 
-        return JsonResponse({"items": [serialize_session(item) for item in sessions]})
+        return JsonResponse({"items": [serialize_session_history_item(item) for item in sessions]})
 
     if not has_permission(account, "sessions.create"):
         return permission_denied_response()
@@ -2411,11 +2467,12 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
         **summary,
         "import_run": import_result,
     }
+    auth_error = import_result.get("auth_error") or ""
     session.status = ImportSession.Status.CANCELLED if import_result.get("cancelled") else ImportSession.Status.COMPLETED
     session.processed_rows = import_result["checked_rows"]
     session.successful_rows = import_result["created_rows"] + import_result.get("updated_rows", 0)
     session.failed_rows = import_result["failed_rows"]
-    session.last_error = ""
+    session.last_error = auth_error
     session.save(
         update_fields=[
             "summary",

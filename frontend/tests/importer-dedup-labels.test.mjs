@@ -48,7 +48,7 @@ test('keeps dedup payload fields for any valid mapped importer fields', () => {
     condition: 'all',
   }), {
     strategy: 'update',
-    fields: ['OPPORTUNITY', 'CURRENCY_ID', 'STAGE_ID'],
+    fields: ['OPPORTUNITY', 'currency_id', 'STAGE_ID'],
     condition: 'all',
   })
 })
@@ -71,7 +71,10 @@ test('formats duplicate match and missing dedup details with Russian field label
       status: 'updated',
       statusLabel: 'Обновлено',
       recordId: '912',
-      details: 'ID 912 · Совпадение: Сумма, Дата создания · Неполный поиск дублей: Валюта, Дата создания',
+      title: '—',
+      entityLabel: '—',
+      createdAt: '—',
+      details: 'Совпадение: Сумма, Дата создания · Неполный поиск дублей: Валюта, Дата создания',
     },
   ])
 

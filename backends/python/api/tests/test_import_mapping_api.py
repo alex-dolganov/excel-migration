@@ -240,6 +240,278 @@ class ImportMappingApiTest(TestCase):
             ),
         )
 
+    def create_linked_contact_deal_account(self, member_id="member-1", domain_url="test.bitrix24.ru"):
+        return SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "LAST_NAME": {
+                                    "title": "Фамилия контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_CONTACT_SOURCE": {
+                                    "title": "Источник контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Сумма",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "CONTACT_ID": {
+                                    "title": "Контакт",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_DEAL_CHANNEL": {
+                                    "title": "Канал сделки",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
+    def create_linked_contact_company_account(self, member_id="member-1", domain_url="test.bitrix24.ru"):
+        return SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "LAST_NAME": {
+                                    "title": "Фамилия контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "COMPANY_ID": {
+                                    "title": "Компания",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_CONTACT_SOURCE": {
+                                    "title": "Источник контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон компании",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_COMPANY_SEGMENT": {
+                                    "title": "Сегмент компании",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
+    def create_linked_deal_contact_account(self, member_id="member-1", domain_url="test.bitrix24.ru"):
+        return SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Сумма",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "CONTACT_ID": {
+                                    "title": "Контакт",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_DEAL_CHANNEL": {
+                                    "title": "Канал сделки",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "LAST_NAME": {
+                                    "title": "Фамилия контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_CONTACT_SOURCE": {
+                                    "title": "Источник контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
+    def create_linked_deal_company_account(self, member_id="member-1", domain_url="test.bitrix24.ru"):
+        return SimpleNamespace(
+            member_id=member_id,
+            domain_url=domain_url,
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "COMPANY_ID": {
+                                    "title": "Компания",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_DEAL_CHANNEL": {
+                                    "title": "Канал сделки",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон компании",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_COMPANY_SEGMENT": {
+                                    "title": "Сегмент компании",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
     def create_deal_account_with_generic_titles(self, member_id="member-1", domain_url="test.bitrix24.ru"):
         return SimpleNamespace(
             member_id=member_id,
@@ -435,6 +707,156 @@ class ImportMappingApiTest(TestCase):
                                 ["ООО Альфа", "+78005550101", "Редизайн сайта", "150000"],
                             ],
                         ),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_contact_deal_session(self):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_contact_deal",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="linked-contact-deal.xlsx",
+        )
+        session.stored_file.save(
+            "linked-contact-deal.xlsx",
+            SimpleUploadedFile(
+                "linked-contact-deal.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        (
+                            "Linked",
+                            [
+                                ["Имя контакта", "Email контакта", "Источник контакта", "Название сделки", "Сумма", "Канал сделки"],
+                                ["Алиса", "alice@example.ru", "Сайт", "Редизайн сайта", "150000", "Партнеры"],
+                            ],
+                        ),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_contact_deal_session_with_headers(
+        self,
+        headers,
+        data_rows,
+        *,
+        filename="linked-contact-deal-custom.xlsx",
+    ):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_contact_deal",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets(
+                    [
+                        ("Linked", [headers, *data_rows]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_contact_company_session_with_headers(
+        self,
+        headers,
+        data_rows,
+        *,
+        filename="linked-contact-company-custom.xlsx",
+    ):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_contact_company",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets(
+                    [
+                        ("Linked", [headers, *data_rows]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_deal_contact_session_with_headers(
+        self,
+        headers,
+        data_rows,
+        *,
+        filename="linked-deal-contact-custom.xlsx",
+    ):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_deal_contact",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets(
+                    [
+                        ("Linked", [headers, *data_rows]),
+                    ]
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        return session
+
+    def create_uploaded_linked_deal_company_session_with_headers(
+        self,
+        headers,
+        data_rows,
+        *,
+        filename="linked-deal-company-custom.xlsx",
+    ):
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type="linked_deal_company",
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename=filename,
+        )
+        session.stored_file.save(
+            filename,
+            SimpleUploadedFile(
+                filename,
+                build_xlsx_with_sheets(
+                    [
+                        ("Linked", [headers, *data_rows]),
                     ]
                 ),
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -809,6 +1231,36 @@ class ImportMappingApiTest(TestCase):
         })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_auto_matches_external_key_header_for_linked_deal_contact_template(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_deal_contact_account()
+
+        session = self.create_uploaded_linked_deal_contact_session_with_headers(
+            ["Внешний ключ сделки", "Название сделки", "Имя контакта"],
+            [["deal_001", "Редизайн сайта", "Алиса"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["item"]["candidate_mapping"]["DEAL__EXTERNAL_KEY"],
+            {
+                "source_header": "Внешний ключ сделки",
+                "column": "A",
+                "target_field": "DEAL__EXTERNAL_KEY",
+                "match_type": "fuzzy",
+            },
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_returns_linked_entity_metadata_for_linked_company_deal_sessions(self, get_from_jwt_token):
         get_from_jwt_token.return_value = self.create_linked_company_deal_account()
 
@@ -844,6 +1296,366 @@ class ImportMappingApiTest(TestCase):
                 },
             ],
         )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_entity_metadata_for_linked_contact_deal_sessions(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_contact_deal_account()
+
+        session = self.create_uploaded_linked_contact_deal_session()
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["item"]["linked_entities"],
+            [
+                {
+                    "id": "contact",
+                    "label": "Контакт",
+                    "source_entity_type": "contact",
+                    "prefix": "CONTACT__",
+                    "excluded_source_ids": [],
+                },
+                {
+                    "id": "deal",
+                    "label": "Сделка",
+                    "source_entity_type": "deal",
+                    "prefix": "DEAL__",
+                    "excluded_source_ids": ["CONTACT_ID"],
+                },
+            ],
+        )
+        field_ids = {
+            item["id"]
+            for item in response.json()["item"]["fields"]
+        }
+        self.assertIn("CONTACT__UF_CRM_CONTACT_SOURCE", field_ids)
+        self.assertIn("DEAL__UF_CRM_DEAL_CHANNEL", field_ids)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_auto_matches_custom_fields_for_linked_contact_deal_sessions(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_contact_deal_account()
+
+        session = self.create_uploaded_linked_contact_deal_session()
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        candidate_mapping = response.json()["item"]["candidate_mapping"]
+        self.assertEqual(candidate_mapping["CONTACT__UF_CRM_CONTACT_SOURCE"]["source_header"], "Источник контакта")
+        self.assertEqual(candidate_mapping["DEAL__UF_CRM_DEAL_CHANNEL"]["source_header"], "Канал сделки")
+        self.assertEqual(candidate_mapping["CONTACT__UF_CRM_CONTACT_SOURCE"]["target_field"], "CONTACT__UF_CRM_CONTACT_SOURCE")
+        self.assertEqual(candidate_mapping["DEAL__UF_CRM_DEAL_CHANNEL"]["target_field"], "DEAL__UF_CRM_DEAL_CHANNEL")
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_entity_metadata_for_linked_contact_company_sessions(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_contact_company_account()
+
+        session = self.create_uploaded_linked_contact_company_session_with_headers(
+            ["Внешний ключ контакта", "Имя контакта", "Источник контакта", "Название компании", "Сегмент компании"],
+            [["contact_001", "Алиса", "Сайт", "ООО Альфа", "Enterprise"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["item"]["linked_entities"],
+            [
+                {
+                    "id": "contact",
+                    "label": "Контакт",
+                    "source_entity_type": "contact",
+                    "prefix": "CONTACT__",
+                    "excluded_source_ids": ["COMPANY_ID"],
+                },
+                {
+                    "id": "company",
+                    "label": "Компания",
+                    "source_entity_type": "company",
+                    "prefix": "COMPANY__",
+                    "excluded_source_ids": [],
+                },
+            ],
+        )
+        field_ids = {item["id"] for item in response.json()["item"]["fields"]}
+        self.assertIn("CONTACT__EXTERNAL_KEY", field_ids)
+        self.assertIn("CONTACT__UF_CRM_CONTACT_SOURCE", field_ids)
+        self.assertIn("COMPANY__UF_CRM_COMPANY_SEGMENT", field_ids)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_preflight_warning_for_repeated_contact_rows_without_identity_strategy(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_contact_company_account()
+
+        session = self.create_uploaded_linked_contact_company_session_with_headers(
+            ["Имя контакта", "Название компании"],
+            [
+                ["Алиса", "ООО Альфа"],
+                ["Алиса", "ООО Бета"],
+            ],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "CONTACT__NAME": {
+                        "source_header": "Имя контакта",
+                        "column": "A",
+                    },
+                    "COMPANY__TITLE": {
+                        "source_header": "Название компании",
+                        "column": "B",
+                    },
+                },
+                "dedup": {
+                    "strategy": "create",
+                    "fields": [],
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["preflight"], {
+            "blocking_issue_count": 0,
+            "warning_count": 1,
+            "issues": [
+                {
+                    "code": "linked_contact_identity_missing",
+                    "severity": "warning",
+                    "entity": "contact",
+                    "row_count": 2,
+                },
+            ],
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_entity_metadata_for_linked_deal_contact_sessions(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_deal_contact_account()
+
+        session = self.create_uploaded_linked_deal_contact_session_with_headers(
+            ["Внешний ключ сделки", "Название сделки", "Канал сделки", "Имя контакта", "Источник контакта"],
+            [["deal_001", "Редизайн сайта", "Партнеры", "Алиса", "Сайт"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["item"]["linked_entities"],
+            [
+                {
+                    "id": "deal",
+                    "label": "Сделка",
+                    "source_entity_type": "deal",
+                    "prefix": "DEAL__",
+                    "excluded_source_ids": ["CONTACT_ID"],
+                },
+                {
+                    "id": "contact",
+                    "label": "Контакт",
+                    "source_entity_type": "contact",
+                    "prefix": "CONTACT__",
+                    "excluded_source_ids": [],
+                },
+            ],
+        )
+        field_ids = {
+            item["id"]
+            for item in response.json()["item"]["fields"]
+        }
+        self.assertIn("DEAL__EXTERNAL_KEY", field_ids)
+        self.assertIn("DEAL__UF_CRM_DEAL_CHANNEL", field_ids)
+        self.assertIn("CONTACT__UF_CRM_CONTACT_SOURCE", field_ids)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_preflight_warning_for_repeated_deal_rows_without_identity_strategy(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_deal_contact_account()
+
+        session = self.create_uploaded_linked_deal_contact_session_with_headers(
+            ["Название сделки", "Имя контакта"],
+            [
+                ["Редизайн сайта", "Алиса"],
+                ["Редизайн сайта", "Боб"],
+            ],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "DEAL__TITLE": {
+                        "source_header": "Название сделки",
+                        "column": "A",
+                    },
+                    "CONTACT__NAME": {
+                        "source_header": "Имя контакта",
+                        "column": "B",
+                    },
+                },
+                "dedup": {
+                    "strategy": "create",
+                    "fields": [],
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["preflight"], {
+            "blocking_issue_count": 0,
+            "warning_count": 1,
+            "issues": [
+                {
+                    "code": "linked_deal_identity_missing",
+                    "severity": "warning",
+                    "entity": "deal",
+                    "row_count": 2,
+                },
+            ],
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_entity_metadata_for_linked_deal_company_sessions(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_deal_company_account()
+
+        session = self.create_uploaded_linked_deal_company_session_with_headers(
+            ["Внешний ключ сделки", "Название сделки", "Канал сделки", "Название компании", "Сегмент компании"],
+            [["deal_001", "Редизайн сайта", "Партнеры", "ООО Альфа", "Enterprise"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["item"]["linked_entities"],
+            [
+                {
+                    "id": "deal",
+                    "label": "Сделка",
+                    "source_entity_type": "deal",
+                    "prefix": "DEAL__",
+                    "excluded_source_ids": ["COMPANY_ID"],
+                },
+                {
+                    "id": "company",
+                    "label": "Компания",
+                    "source_entity_type": "company",
+                    "prefix": "COMPANY__",
+                    "excluded_source_ids": [],
+                },
+            ],
+        )
+        field_ids = {item["id"] for item in response.json()["item"]["fields"]}
+        self.assertIn("DEAL__EXTERNAL_KEY", field_ids)
+        self.assertIn("DEAL__UF_CRM_DEAL_CHANNEL", field_ids)
+        self.assertIn("COMPANY__UF_CRM_COMPANY_SEGMENT", field_ids)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_preflight_warning_for_repeated_deal_rows_in_linked_deal_company_without_identity_strategy(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_deal_company_account()
+
+        session = self.create_uploaded_linked_deal_company_session_with_headers(
+            ["Название сделки", "Название компании"],
+            [
+                ["Редизайн сайта", "ООО Альфа"],
+                ["Редизайн сайта", "ООО Бета"],
+            ],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "DEAL__TITLE": {
+                        "source_header": "Название сделки",
+                        "column": "A",
+                    },
+                    "COMPANY__TITLE": {
+                        "source_header": "Название компании",
+                        "column": "B",
+                    },
+                },
+                "dedup": {
+                    "strategy": "create",
+                    "fields": [],
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["preflight"], {
+            "blocking_issue_count": 0,
+            "warning_count": 1,
+            "issues": [
+                {
+                    "code": "linked_deal_identity_missing",
+                    "severity": "warning",
+                    "entity": "deal",
+                    "row_count": 2,
+                },
+            ],
+        })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_returns_fuzzy_candidate_mapping_for_close_headers(self, get_from_jwt_token):
@@ -1189,6 +2001,64 @@ class ImportMappingApiTest(TestCase):
                     "code": "linked_company_identity_missing",
                     "severity": "warning",
                     "entity": "company",
+                    "row_count": 2,
+                },
+            ],
+        })
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_returns_linked_preflight_warning_for_repeated_contact_rows_without_identity_strategy(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_linked_contact_deal_account()
+
+        session = self.create_uploaded_linked_contact_deal_session_with_headers(
+            ["Имя контакта", "Фамилия контакта", "Название сделки"],
+            [
+                ["Алиса", "Иванова", "Редизайн сайта"],
+                ["Алиса", "Иванова", "Аудит воронки"],
+            ],
+            filename="linked-contact-deal-repeat.xlsx",
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "CONTACT__NAME": {
+                        "source_header": "Имя контакта",
+                        "column": "A",
+                    },
+                    "CONTACT__LAST_NAME": {
+                        "source_header": "Фамилия контакта",
+                        "column": "B",
+                    },
+                    "DEAL__TITLE": {
+                        "source_header": "Название сделки",
+                        "column": "C",
+                    },
+                },
+                "dedup": {
+                    "strategy": "create",
+                    "fields": [],
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["preflight"], {
+            "blocking_issue_count": 0,
+            "warning_count": 1,
+            "issues": [
+                {
+                    "code": "linked_contact_identity_missing",
+                    "severity": "warning",
+                    "entity": "contact",
                     "row_count": 2,
                 },
             ],

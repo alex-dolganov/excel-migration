@@ -22,7 +22,11 @@ import {
   buildLinkedImportRunSummary,
   buildImportRunStatusFilters,
   buildImportRunRetryState,
+  buildLinkedPrimaryEntityOptions,
+  buildLinkedSecondaryEntityOptions,
   isLinkedImportEntityType,
+  resolveLinkedStrategyEntityType,
+  resolveLinkedStrategyPair,
   shouldWaitForDryRunExecutionSnapshot,
   shouldWaitForImportExecutionSnapshot,
   buildMappingFieldItems,
@@ -42,7 +46,6 @@ import {
   getWizardNextLabel,
   normalizeMappingSelectValue,
   resolveMappingSelectValue,
-  shouldRenderInlineWizardFooter,
   buildSessionHistoryRows,
   FILE_ATTACH_IMPORT_SCENARIOS,
 } from '~/utils/importer-ui'
@@ -196,11 +199,14 @@ const importRunPage = ref(1)
 const linkedSummaryPage = ref(1)
 const busyAction = ref('')
 const cancelRequested = ref(false)
+const skippedDedupStep = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const expandedTextBlocks = ref<Record<string, boolean>>({})
 const recentSessions = ref<Record<string, any>[]>([])
+const historyLoadError = ref('')
 const currentView = ref<'wizard' | 'history' | 'bulkAttach'>('wizard')
+const restoringHistorySessionId = ref('')
 
 function isValidPerRowDedupDecision(value: unknown): value is string {
   return PER_ROW_DEDUP_DECISION_VALUES.has(String(value || '').trim().toLowerCase())
@@ -213,8 +219,11 @@ const importerPermissionState = computed(() => buildImporterPermissionState({
 }))
 
 const historyRows = computed(() => buildSessionHistoryRows(recentSessions.value))
-const fileName = computed(() => selectedFile.value?.name || '')
-const sourceFormat = computed(() => detectSourceFormat(fileName.value))
+const fileName = computed(() => selectedFile.value?.name || String(session.value?.original_filename || ''))
+const sourceFormat = computed(() => (
+  detectSourceFormat(fileName.value)
+  || String(session.value?.source_format || '').trim()
+))
 const importModeOptions = computed(() => buildImportModeOptions())
 const importModeMeta = computed(() => getImportModeMeta(importMode.value))
 const isSimpleImportMode = computed(() => importModeMeta.value.value === 'simple')
@@ -223,6 +232,8 @@ const scenarioSections = computed(() => buildImportScenarioSections())
 const crmScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'crm')?.items || [])
 const taskScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'task')?.items || [])
 const linkedScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'linked')?.items || [])
+const linkedPrimaryEntityItems = computed(() => buildLinkedPrimaryEntityOptions())
+const linkedSecondaryEntityItems = computed(() => buildLinkedSecondaryEntityOptions(selectedLinkedPrimaryEntityType.value))
 const hrScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'hr')?.items || [])
 const fileAttachCrmEntityItems = computed(() =>
   Object.values(FILE_ATTACH_IMPORT_SCENARIOS).map((s) => ({ value: s.value, label: s.entityLabel })),
@@ -247,7 +258,8 @@ const currentImportTitle = computed(() => 'Excel Migration')
 const selectedFamily = ref('')
 const selectedCrmEntityType = ref('')
 const selectedTaskEntityType = ref('')
-const selectedLinkedEntityType = ref('')
+const selectedLinkedPrimaryEntityType = ref('')
+const selectedLinkedSecondaryEntityType = ref('')
 const selectedHrEntityType = ref('')
 const selectedFileAttachEntityType = ref('')
 const smartProcesses = ref<Record<string, any>[]>([])
@@ -460,13 +472,13 @@ const canRunValidation = computed(() => (
 const canRunDryRun = computed(() => (
   importerPermissionState.value.canRunSessions
   && Boolean(session.value?.id)
-  && Boolean(validationData.value)
+  && (Boolean(validationData.value) || skippedDedupStep.value)
   && !busyAction.value
 ))
 const canRunImport = computed(() => (
   importerPermissionState.value.canRunSessions
   && Boolean(session.value?.id)
-  && Boolean(validationData.value)
+  && (Boolean(validationData.value) || skippedDedupStep.value)
   && !hasBlockingPreflightIssues.value
   && !busyAction.value
 ))
@@ -512,7 +524,6 @@ const maxAvailableStep = computed(() => {
 
   return 1
 })
-const progressPercent = computed(() => Math.round((currentStep.value / 7) * 100))
 const sessionJobMode = computed(() => String(session.value?.summary?.job?.mode || '').trim())
 const importJobState = computed(() => String(session.value?.summary?.job?.state || '').trim())
 const showsSessionProgress = computed(() => (
@@ -539,117 +550,6 @@ const dedupProgressDescription = computed(() => {
   }
 
   return 'На больших файлах проверка может занять время. После завершения сразу откроется шаг проверки.'
-})
-const footerStatusLabel = computed(() => {
-  if (cancelRequested.value) {
-    return 'Останавливаем импорт'
-  }
-
-  if (busyAction.value === 'start') {
-    return 'Загружаем файл'
-  }
-
-  if (busyAction.value === 'structure') {
-    return 'Обновляем структуру'
-  }
-
-  if (busyAction.value === 'mapping') {
-    return 'Сохраняем соответствие'
-  }
-
-  if (busyAction.value === 'template-save') {
-    return 'Сохраняем шаблон'
-  }
-
-  if (busyAction.value === 'template-apply') {
-    return 'Применяем шаблон'
-  }
-
-  if (busyAction.value === 'dedup') {
-    return 'Сохраняем правила дублей'
-  }
-
-  if (busyAction.value === 'dedup-skip') {
-    return 'Пропускаем шаг дублей и проверяем данные'
-  }
-
-  if (busyAction.value === 'validation') {
-    return 'Проверяем данные'
-  }
-
-  if (busyAction.value === 'dry-run') {
-    if (sessionJobMode.value === 'dry_run' && importJobState.value === 'queued') {
-      return 'Тестовый импорт поставлен в очередь'
-    }
-    if (sessionJobMode.value === 'dry_run' && importJobState.value === 'running') {
-      return 'Тестовый импорт выполняется в фоне'
-    }
-    return 'Готовим тестовый импорт'
-  }
-
-  if (busyAction.value === 'run') {
-    if (importJobState.value === 'queued') {
-      return 'Задача поставлена в очередь'
-    }
-    if (importJobState.value === 'running') {
-      return 'Импорт выполняется в фоне'
-    }
-    return 'Запускаем импорт'
-  }
-
-  if (busyAction.value === 'retry') {
-    if (importJobState.value === 'queued') {
-      return 'Повтор поставлен в очередь'
-    }
-    if (importJobState.value === 'running') {
-      return 'Повтор выполняется в фоне'
-    }
-    return 'Повторяем неуспешные строки'
-  }
-
-  if (busyAction.value === 'report') {
-    return 'Готовим CSV-отчет'
-  }
-
-  if (busyAction.value === 'example-template') {
-    return 'Готовим Excel-шаблон'
-  }
-
-  if (importJobState.value === 'failed') {
-    return 'Фоновая задача завершилась с ошибкой'
-  }
-
-  if (importRunData.value?.cancelled) {
-    return `Остановлено. Не запущено строк: ${Number(importRunData.value?.remaining_rows || 0)}`
-  }
-
-  if (importRunData.value) {
-    return importRunFailedRows.value > 0
-      ? `Неуспешных строк: ${importRunFailedRows.value}`
-      : importRunUpdatedRows.value > 0
-        ? `Создано: ${importRunCreatedRows.value}, обновлено: ${importRunUpdatedRows.value}`
-        : `Создано строк: ${importRunCreatedRows.value}`
-  }
-
-  if (validationData.value) {
-    return validationIssueCount.value > 0
-      ? `Найдено ошибок: ${validationIssueCount.value}`
-      : 'Проверка завершена'
-  }
-
-  if (previewRowLimitExceeded.value) {
-    return 'Превышен лимит строк для импорта'
-  }
-
-  if (mappingSavedCount.value > 0) {
-    if (unmappedValueSummary.value.hasUnmappedValues) {
-      return `Нужно сопоставить значений: ${unmappedValueSummary.value.totalValues}`
-    }
-
-    return `Сохранено полей: ${mappingSavedCount.value}`
-  }
-
-  return `Этап ${currentStep.value} из 7`
 })
 const currentStepMeta = computed(() => {
   const items: Record<number, { eyebrow: string, title: string }> = {
@@ -690,8 +590,63 @@ const wizardAdvanceMode = computed(() => getWizardAdvanceMode(currentStep.value,
 const canGoNext = computed(() => canAdvanceWizard(currentStep.value, maxAvailableStep.value, {
   hasMissingRequiredFields: requiredFieldSummary.value.hasMissingRequired,
 }))
-const showInlineWizardFooter = computed(() => shouldRenderInlineWizardFooter(currentStep.value))
 const nextStepLabel = computed(() => getWizardNextLabel(currentStep.value))
+function normalizeMappingPayloadForCompare(payload: Record<string, any> | null | undefined) {
+  const safePayload = payload && typeof payload === 'object' ? payload : {}
+
+  return Object.keys(safePayload)
+    .sort((left, right) => left.localeCompare(right))
+    .reduce((normalized: Record<string, any>, fieldId) => {
+      const item = safePayload[fieldId] && typeof safePayload[fieldId] === 'object' ? safePayload[fieldId] : {}
+      const normalizedItem: Record<string, any> = {
+        source_header: String(item.source_header || ''),
+        column: String(item.column || ''),
+        target_field: String(item.target_field || fieldId),
+      }
+      const columnType = String(item.column_type || '').trim().toLowerCase()
+      if (columnType) {
+        normalizedItem.column_type = columnType
+      }
+
+      const valueMappingSource = item.value_mapping && typeof item.value_mapping === 'object' ? item.value_mapping : {}
+      const normalizedValueMapping = Object.keys(valueMappingSource)
+        .sort((left, right) => left.localeCompare(right))
+        .reduce((mapping: Record<string, string>, sourceValue) => {
+          mapping[sourceValue] = String(valueMappingSource[sourceValue] || '')
+          return mapping
+        }, {})
+
+      if (Object.keys(normalizedValueMapping).length > 0) {
+        normalizedItem.value_mapping = normalizedValueMapping
+      }
+
+      normalized[fieldId] = normalizedItem
+      return normalized
+    }, {})
+}
+
+function normalizeTaskDefaultsForCompare(taskDefaults: Record<string, any> | null | undefined) {
+  const safeTaskDefaults = taskDefaults && typeof taskDefaults === 'object' ? taskDefaults : {}
+  return {
+    default_responsible_id: String(safeTaskDefaults.default_responsible_id || ''),
+    default_creator_id: String(safeTaskDefaults.default_creator_id || ''),
+    default_comment_author_id: String(safeTaskDefaults.default_comment_author_id || ''),
+  }
+}
+
+const currentMappingPayload = computed(() => normalizeMappingPayloadForCompare(buildMappingPayload(mappingRows.value)))
+const savedMappingPayload = computed(() => normalizeMappingPayloadForCompare(mappingData.value?.saved_mapping))
+const currentTaskDefaultsPayload = computed(() => normalizeTaskDefaultsForCompare({
+  default_responsible_id: taskDefaultResponsibleId.value,
+  default_creator_id: taskDefaultCreatorId.value,
+  default_comment_author_id: taskDefaultCommentAuthorId.value,
+}))
+const savedTaskDefaultsPayload = computed(() => normalizeTaskDefaultsForCompare(mappingData.value?.task_defaults))
+const hasPendingMappingChanges = computed(() => (
+  JSON.stringify(currentMappingPayload.value) !== JSON.stringify(savedMappingPayload.value)
+  || JSON.stringify(currentTaskDefaultsPayload.value) !== JSON.stringify(savedTaskDefaultsPayload.value)
+))
+const canGoNextFromMapping = computed(() => !hasPendingMappingChanges.value && canGoNext.value)
 const importSteps = computed(() => {
   const stepState = (id: number): StepState => {
     if (id < currentStep.value && id <= maxAvailableStep.value) {
@@ -950,6 +905,7 @@ const importRunPageRangeEnd = computed(() => (
     : 0
 ))
 const isLinkedEntityImport = computed(() => isLinkedImportEntityType(entityType.value))
+const isLinkedCompanyContactImport = computed(() => entityType.value === 'linked_company_contact')
 const stepSixStatusLabel = computed(() => {
   if (dryRunData.value) {
     if (dryRunPendingDecisionRows.value > 0) {
@@ -1248,7 +1204,8 @@ function finishImporterFlow() {
   selectedFamily.value = ''
   selectedCrmEntityType.value = ''
   selectedTaskEntityType.value = ''
-  selectedLinkedEntityType.value = ''
+  selectedLinkedPrimaryEntityType.value = ''
+  selectedLinkedSecondaryEntityType.value = ''
   selectedHrEntityType.value = ''
   selectedFileAttachEntityType.value = ''
   selectedSmartProcessId.value = ''
@@ -1448,9 +1405,13 @@ function getTextBlockDisplayValue(key: string, value: unknown) {
   return isTextBlockExpanded(key) ? text : buildCollapsedText(text)
 }
 
-watch(dedupStrategy, (value) => {
+watch(dedupStrategy, (value, previousValue) => {
   if (value === 'create') {
     dedupFields.value = []
+  }
+
+  if (previousValue !== undefined && value !== previousValue && busyAction.value !== 'dedup-skip') {
+    skippedDedupStep.value = false
   }
 })
 
@@ -1476,7 +1437,18 @@ watch(isDedupApplicable, (applicable) => {
   if (!applicable) {
     dedupStrategy.value = 'create'
     dedupFields.value = []
+    skippedDedupStep.value = false
   }
+})
+
+watch(dedupCondition, (value, previousValue) => {
+  if (previousValue !== undefined && value !== previousValue && busyAction.value !== 'dedup-skip') {
+    skippedDedupStep.value = false
+  }
+})
+
+watch(() => String(session.value?.id || ''), () => {
+  skippedDedupStep.value = false
 })
 
 watch(entityType, (value) => {
@@ -1488,7 +1460,8 @@ watch(entityType, (value) => {
   if (crmScenarioItems.value.some((item) => item.value === normalizedValue)) {
     selectedCrmEntityType.value = normalizedValue
     selectedTaskEntityType.value = ''
-    selectedLinkedEntityType.value = ''
+    selectedLinkedPrimaryEntityType.value = ''
+    selectedLinkedSecondaryEntityType.value = ''
     selectedHrEntityType.value = ''
     if (normalizedValue !== 'smart_process') {
       selectedSmartProcessId.value = ''
@@ -1498,13 +1471,16 @@ watch(entityType, (value) => {
   if (taskScenarioItems.value.some((item) => item.value === normalizedValue)) {
     selectedTaskEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
-    selectedLinkedEntityType.value = ''
+    selectedLinkedPrimaryEntityType.value = ''
+    selectedLinkedSecondaryEntityType.value = ''
     selectedHrEntityType.value = ''
     selectedSmartProcessId.value = ''
   }
 
   if (linkedScenarioItems.value.some((item) => item.value === normalizedValue)) {
-    selectedLinkedEntityType.value = normalizedValue
+    const linkedStrategyPair = resolveLinkedStrategyPair(normalizedValue)
+    selectedLinkedPrimaryEntityType.value = linkedStrategyPair.primaryEntityType
+    selectedLinkedSecondaryEntityType.value = linkedStrategyPair.secondaryEntityType
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
     selectedHrEntityType.value = ''
@@ -1515,7 +1491,8 @@ watch(entityType, (value) => {
     selectedHrEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
-    selectedLinkedEntityType.value = ''
+    selectedLinkedPrimaryEntityType.value = ''
+    selectedLinkedSecondaryEntityType.value = ''
     selectedSmartProcessId.value = ''
   }
 }, { immediate: true })
@@ -1695,7 +1672,8 @@ function selectFamily(family: string) {
   selectedFamily.value = family
   selectedCrmEntityType.value = ''
   selectedTaskEntityType.value = ''
-  selectedLinkedEntityType.value = ''
+  selectedLinkedPrimaryEntityType.value = ''
+  selectedLinkedSecondaryEntityType.value = ''
   selectedHrEntityType.value = ''
   selectedFileAttachEntityType.value = ''
   selectedSmartProcessId.value = ''
@@ -1709,7 +1687,8 @@ function goBackToFamilySelection() {
   selectedFamily.value = ''
   selectedCrmEntityType.value = ''
   selectedTaskEntityType.value = ''
-  selectedLinkedEntityType.value = ''
+  selectedLinkedPrimaryEntityType.value = ''
+  selectedLinkedSecondaryEntityType.value = ''
   selectedHrEntityType.value = ''
   selectedFileAttachEntityType.value = ''
   selectedSmartProcessId.value = ''
@@ -1776,7 +1755,8 @@ function updateScenarioEntityType(family: 'crm' | 'task' | 'linked' | 'hr', valu
   if (family === 'crm') {
     selectedCrmEntityType.value = normalizedValue
     selectedTaskEntityType.value = ''
-    selectedLinkedEntityType.value = ''
+    selectedLinkedPrimaryEntityType.value = ''
+    selectedLinkedSecondaryEntityType.value = ''
     selectedHrEntityType.value = ''
     selectedFileAttachEntityType.value = ''
     if (normalizedValue !== 'smart_process') {
@@ -1785,12 +1765,15 @@ function updateScenarioEntityType(family: 'crm' | 'task' | 'linked' | 'hr', valu
   } else if (family === 'task') {
     selectedTaskEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
-    selectedLinkedEntityType.value = ''
+    selectedLinkedPrimaryEntityType.value = ''
+    selectedLinkedSecondaryEntityType.value = ''
     selectedHrEntityType.value = ''
     selectedFileAttachEntityType.value = ''
     selectedSmartProcessId.value = ''
   } else if (family === 'linked') {
-    selectedLinkedEntityType.value = normalizedValue
+    const linkedStrategyPair = resolveLinkedStrategyPair(normalizedValue)
+    selectedLinkedPrimaryEntityType.value = linkedStrategyPair.primaryEntityType
+    selectedLinkedSecondaryEntityType.value = linkedStrategyPair.secondaryEntityType
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
     selectedHrEntityType.value = ''
@@ -1800,7 +1783,8 @@ function updateScenarioEntityType(family: 'crm' | 'task' | 'linked' | 'hr', valu
     selectedHrEntityType.value = normalizedValue
     selectedCrmEntityType.value = ''
     selectedTaskEntityType.value = ''
-    selectedLinkedEntityType.value = ''
+    selectedLinkedPrimaryEntityType.value = ''
+    selectedLinkedSecondaryEntityType.value = ''
     selectedFileAttachEntityType.value = ''
     selectedSmartProcessId.value = ''
   }
@@ -1816,13 +1800,53 @@ function updateFileAttachEntityType(value: string) {
 
   selectedFileAttachEntityType.value = normalizedValue
   selectedCrmEntityType.value = ''
-  selectedLinkedEntityType.value = ''
+  selectedLinkedPrimaryEntityType.value = ''
+  selectedLinkedSecondaryEntityType.value = ''
   selectedHrEntityType.value = ''
   selectedTaskEntityType.value = ''
   selectedSmartProcessId.value = ''
   selectedFamily.value = 'crm'
   entityType.value = normalizedValue
   currentView.value = 'bulkAttach'
+  resetMessages()
+}
+
+function updateLinkedPrimaryEntityType(value: string) {
+  const normalizedValue = String(value || '').trim()
+  selectedLinkedPrimaryEntityType.value = normalizedValue
+
+  const allowedSecondaryValues = new Set(linkedSecondaryEntityItems.value.map((item) => String(item?.value || '').trim()))
+  if (!allowedSecondaryValues.has(selectedLinkedSecondaryEntityType.value)) {
+    selectedLinkedSecondaryEntityType.value = ''
+  }
+
+  selectedCrmEntityType.value = ''
+  selectedTaskEntityType.value = ''
+  selectedHrEntityType.value = ''
+  selectedFileAttachEntityType.value = ''
+  selectedSmartProcessId.value = ''
+  selectedFamily.value = 'crm'
+
+  const resolvedStrategyEntityType = resolveLinkedStrategyEntityType(
+    selectedLinkedPrimaryEntityType.value,
+    selectedLinkedSecondaryEntityType.value,
+  )
+  entityType.value = resolvedStrategyEntityType
+  resetMessages()
+}
+
+function updateLinkedSecondaryEntityType(value: string) {
+  selectedLinkedSecondaryEntityType.value = String(value || '').trim()
+  selectedCrmEntityType.value = ''
+  selectedTaskEntityType.value = ''
+  selectedHrEntityType.value = ''
+  selectedFileAttachEntityType.value = ''
+  selectedSmartProcessId.value = ''
+  selectedFamily.value = 'crm'
+  entityType.value = resolveLinkedStrategyEntityType(
+    selectedLinkedPrimaryEntityType.value,
+    selectedLinkedSecondaryEntityType.value,
+  )
   resetMessages()
 }
 
@@ -1972,6 +1996,7 @@ async function applyStructure() {
 
     await refreshMapping()
     setSuccess('Параметры чтения файла обновлены.')
+    currentStep.value = 3
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -2133,6 +2158,8 @@ function toggleDedupField(fieldId: string) {
     return
   }
 
+  skippedDedupStep.value = false
+
   if (dedupFields.value.includes(fieldId)) {
     dedupFields.value = dedupFields.value.filter((value) => value !== fieldId)
     return
@@ -2247,11 +2274,16 @@ async function skipDedupStep() {
 
   try {
     await persistDedupSettings()
-    await executeValidation({ persistDedup: false, resetStatus: false, busyState: 'dedup-skip' })
+    skippedDedupStep.value = true
+    busyAction.value = ''
+    currentStep.value = 6
+    setSuccess('Шаг дублей пропущен. При необходимости запустите проверку или тестовый импорт на следующем шаге.')
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
-    busyAction.value = ''
+    if (busyAction.value === 'dedup-skip') {
+      busyAction.value = ''
+    }
   }
 }
 
@@ -2370,6 +2402,18 @@ async function runValidation() {
   }
 }
 
+async function ensureValidationBeforeExecution() {
+  if (validationData.value) {
+    return validationData.value
+  }
+
+  return await executeValidation({
+    persistDedup: false,
+    resetStatus: false,
+    busyState: 'validation',
+  })
+}
+
 async function runDryRun() {
   if (!session.value?.id) {
     return
@@ -2380,6 +2424,12 @@ async function runDryRun() {
 
   try {
     await persistDedupSettingsIfNeeded()
+    const validationResult = await ensureValidationBeforeExecution()
+    if (!validationResult && !validationData.value) {
+      return
+    }
+    skippedDedupStep.value = false
+    busyAction.value = 'dry-run'
     const dryRunResult = await executeDryRunRequest(String(session.value.id))
     setSuccess(
       requiresPerRowDedupDecision.value && Number(dryRunResult?.pending_decision_rows || 0) > 0
@@ -2406,8 +2456,13 @@ async function runImport() {
   try {
     busyAction.value = 'run'
     await persistDedupSettingsIfNeeded()
+    const validationResult = await ensureValidationBeforeExecution()
+    if (!validationResult && !validationData.value) {
+      return
+    }
+    busyAction.value = 'run'
 
-    if (isDirectCrmEntityImport.value && dedupStrategy.value === 'create' && !dryRunData.value) {
+    if (isDirectCrmEntityImport.value && dedupStrategy.value === 'create' && !dryRunData.value && !skippedDedupStep.value) {
       busyAction.value = 'dry-run'
       await executeDryRunRequest(String(session.value.id))
     }
@@ -2595,11 +2650,13 @@ async function downloadExampleTemplate() {
 }
 
 async function loadHistory() {
+  historyLoadError.value = ''
+
   try {
     const response = await apiStore.listImportSessions()
     recentSessions.value = Array.isArray(response?.items) ? response.items : []
-  } catch {
-    // silently ignore history load failures
+  } catch (error) {
+    historyLoadError.value = error instanceof Error ? error.message : 'Не удалось загрузить историю импортов.'
   }
 }
 
@@ -2609,6 +2666,198 @@ function syncSessionSnapshot(snapshot: Record<string, any> | null | undefined) {
   }
 
   session.value = session.value ? { ...session.value, ...snapshot } : snapshot
+}
+
+function getSessionSnapshotId(snapshot: Record<string, any> | null | undefined) {
+  return String(snapshot?.session_id || snapshot?.id || '').trim()
+}
+
+function syncPreviewSnapshot(snapshot: Record<string, any> | null | undefined) {
+  const previewSnapshot = snapshot?.preview_data && typeof snapshot.preview_data === 'object'
+    ? snapshot.preview_data
+    : null
+
+  preview.value = previewSnapshot
+  headerRowInput.value = Number(previewSnapshot?.header_row || 1)
+  dataStartRowInput.value = Number(previewSnapshot?.data_start_row || 2)
+}
+
+function applyHistoryScenarioSelection(snapshot: Record<string, any> | null | undefined) {
+  const normalizedEntityType = String(snapshot?.entity_type || '').trim()
+  if (!normalizedEntityType) {
+    return
+  }
+
+  importMode.value = 'advanced'
+
+  if (fileAttachCrmEntityItems.value.some((item) => String(item?.value || '').trim() === normalizedEntityType)) {
+    updateFileAttachEntityType(normalizedEntityType)
+  } else if (crmScenarioItems.value.some((item) => String(item?.value || '').trim() === normalizedEntityType)) {
+    updateScenarioEntityType('crm', normalizedEntityType)
+  } else if (taskScenarioItems.value.some((item) => String(item?.value || '').trim() === normalizedEntityType)) {
+    updateScenarioEntityType('task', normalizedEntityType)
+  } else if (linkedScenarioItems.value.some((item) => String(item?.value || '').trim() === normalizedEntityType)) {
+    updateScenarioEntityType('linked', normalizedEntityType)
+  } else if (hrScenarioItems.value.some((item) => String(item?.value || '').trim() === normalizedEntityType)) {
+    updateScenarioEntityType('hr', normalizedEntityType)
+  } else {
+    selectedFamily.value = 'crm'
+    entityType.value = normalizedEntityType
+  }
+
+  const entityConfig = snapshot?.entity_config && typeof snapshot.entity_config === 'object'
+    ? snapshot.entity_config
+    : null
+  if (normalizedEntityType === 'smart_process' && entityConfig?.entityTypeId) {
+    selectedSmartProcessId.value = String(entityConfig.entityTypeId)
+  }
+}
+
+function resolveRestoredCurrentStep(snapshot: Record<string, any> | null | undefined) {
+  if (importRunData.value || shouldWaitForImportExecutionSnapshot(snapshot)) {
+    return 7
+  }
+
+  if (dryRunData.value || validationData.value || shouldWaitForDryRunExecutionSnapshot(snapshot)) {
+    return 6
+  }
+
+  const savedMapping = mappingData.value?.saved_mapping && typeof mappingData.value.saved_mapping === 'object'
+    ? mappingData.value.saved_mapping
+    : {}
+
+  if (mappingData.value && Object.keys(savedMapping).length > 0) {
+    return 5
+  }
+
+  if (mappingData.value) {
+    return 4
+  }
+
+  if (preview.value) {
+    return 2
+  }
+
+  if (session.value?.id) {
+    return 2
+  }
+
+  return 1
+}
+
+function syncRestoredExecutionState(snapshot: Record<string, any> | null | undefined) {
+  const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
+  validationData.value = summary.validation && typeof summary.validation === 'object'
+    ? summary.validation
+    : null
+  dryRunData.value = buildDryRunSummaryFromSessionSnapshot(snapshot)
+  importRunData.value = buildImportRunSummaryFromSessionSnapshot(snapshot)
+  skippedDedupStep.value = false
+
+  const job = summary.job && typeof summary.job === 'object' ? summary.job : {}
+  const jobMode = String(job.mode || '').trim().toLowerCase()
+  const jobState = String(job.state || '').trim().toLowerCase()
+  if (['queued', 'running'].includes(jobState)) {
+    busyAction.value = jobMode === 'dry_run'
+      ? 'dry-run'
+      : jobMode === 'retry'
+        ? 'retry'
+        : jobMode === 'run'
+          ? 'run'
+          : ''
+  } else {
+    busyAction.value = ''
+  }
+
+  currentStep.value = resolveRestoredCurrentStep(snapshot)
+}
+
+async function resumeHistorySessionBackground(snapshot: Record<string, any> | null | undefined) {
+  const sessionId = getSessionSnapshotId(snapshot)
+  if (!sessionId) {
+    return
+  }
+
+  if (shouldWaitForDryRunExecutionSnapshot(snapshot)) {
+    busyAction.value = 'dry-run'
+    currentStep.value = 6
+
+    try {
+      dryRunData.value = await resolveDryRunExecutionResult(sessionId, snapshot)
+      currentStep.value = 6
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (busyAction.value === 'dry-run') {
+        busyAction.value = ''
+      }
+    }
+
+    return
+  }
+
+  if (!shouldWaitForImportExecutionSnapshot(snapshot)) {
+    return
+  }
+
+  const jobMode = String(snapshot?.summary?.job?.mode || '').trim().toLowerCase()
+  busyAction.value = jobMode === 'retry' ? 'retry' : 'run'
+  currentStep.value = 7
+
+  try {
+    importRunData.value = await resolveImportExecutionResult(sessionId, snapshot)
+    currentStep.value = 7
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
+  } finally {
+    if (['run', 'retry'].includes(String(busyAction.value || '').trim())) {
+      busyAction.value = ''
+    }
+  }
+}
+
+async function resumeHistorySession(sessionId: string) {
+  if (!sessionId || restoringHistorySessionId.value) {
+    return
+  }
+
+  resetMessages()
+  restoringHistorySessionId.value = sessionId
+
+  try {
+    const response = await apiStore.getImportSession(sessionId)
+    const snapshot = response.item && typeof response.item === 'object' ? response.item : null
+    if (!snapshot) {
+      throw new Error('Не удалось загрузить сохранённую сессию импорта.')
+    }
+
+    resetFlowState()
+    clearSelectedFile()
+    currentView.value = 'wizard'
+    applyHistoryScenarioSelection(snapshot)
+    session.value = snapshot
+    syncPreviewSnapshot(snapshot)
+
+    if (preview.value) {
+      await refreshMapping()
+    }
+
+    syncRestoredExecutionState(snapshot)
+    currentView.value = isFileAttachMode.value ? 'bulkAttach' : 'wizard'
+    setSuccess(`Сессия «${String(snapshot.original_filename || 'Без имени')}» восстановлена.`)
+    await loadHistory()
+
+    if (
+      shouldWaitForDryRunExecutionSnapshot(snapshot)
+      || shouldWaitForImportExecutionSnapshot(snapshot)
+    ) {
+      void resumeHistorySessionBackground(snapshot)
+    }
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
+  } finally {
+    restoringHistorySessionId.value = ''
+  }
 }
 
 function buildImportRunFromSnapshot(snapshot: Record<string, any> | null | undefined) {
@@ -2730,7 +2979,23 @@ onMounted(loadHistory)
 </script>
 
 <template>
-  <section class="w-full min-w-0">
+  <section class="relative w-full min-w-0">
+    <!-- Fullscreen overlay while restoring a session from history -->
+    <Transition name="history-restore-fade">
+      <div
+        v-if="restoringHistorySessionId"
+        class="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-[30px] bg-white/90 backdrop-blur-sm"
+      >
+        <div class="h-12 w-12 animate-spin rounded-full border-4 border-[#dfe5eb] border-t-[#2e6bd9]" />
+        <div class="mt-5 text-base font-semibold text-[#2f4254]">
+          Загружаем импорт…
+        </div>
+        <div class="mt-1 text-sm text-[#8ea0b2]">
+          Восстанавливаем сохранённые настройки
+        </div>
+      </div>
+    </Transition>
+
     <div
       v-if="currentView === 'history'"
       class="overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)]"
@@ -2757,7 +3022,33 @@ onMounted(loadHistory)
 
       <div class="min-h-[600px] overflow-y-auto px-6 py-6 sm:px-8 sm:py-8">
         <div
-          v-if="historyRows.length === 0"
+          v-if="historyLoadError"
+          class="mb-4 rounded-[20px] border border-[#ffd9dd] bg-[#fff7f8] px-5 py-4"
+        >
+          <div class="text-sm font-semibold text-[#b33a48]">
+            Не удалось загрузить историю
+          </div>
+          <div class="mt-1 text-sm text-[#8f5560]">
+            {{ historyLoadError }}
+          </div>
+        </div>
+
+        <div
+          v-if="historyLoadError && historyRows.length === 0"
+          class="flex min-h-[300px] items-center justify-center"
+        >
+          <div class="text-center">
+            <div class="text-sm font-medium text-[#314256]">
+              История пока недоступна
+            </div>
+            <div class="mt-1 text-sm text-[#8ea0b2]">
+              Попробуйте обновить страницу или открыть раздел позже.
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-else-if="historyRows.length === 0"
           class="flex min-h-[300px] items-center justify-center"
         >
           <div class="text-center">
@@ -2824,6 +3115,16 @@ onMounted(loadHistory)
                   {{ row.updatedAtLabel }}
                 </div>
               </div>
+            </div>
+            <div class="mt-4 flex flex-wrap justify-end gap-3">
+              <B24Button
+                :label="row.actionLabel"
+                color="air-primary"
+                size="lg"
+                :loading="restoringHistorySessionId === row.key"
+                :disabled="!importerPermissionState.canViewSessions || Boolean(restoringHistorySessionId)"
+                @click="resumeHistorySession(row.key)"
+              />
             </div>
           </div>
         </div>
@@ -3168,15 +3469,26 @@ onMounted(loadHistory)
                     <section v-if="showsAdvancedImportTools" class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
                       <div class="text-sm font-semibold text-[#314256]">Связанный импорт</div>
                       <div class="mt-1 text-sm text-[#6f8194]">Одна строка Excel создаёт и связывает несколько сущностей.</div>
-                      <B24FormField label="Выберите связанный сценарий" class="mt-4">
+                      <B24FormField label="Выберите основную сущность" class="mt-4">
                         <B24Select
-                          :model-value="selectedLinkedEntityType"
-                          :items="linkedScenarioItems"
-                          placeholder="Например, Компания + Контакт"
+                          :model-value="selectedLinkedPrimaryEntityType"
+                          :items="linkedPrimaryEntityItems"
+                          placeholder="Например, Сделка"
                           size="lg"
                           class="w-full"
                           :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
-                          @update:model-value="updateScenarioEntityType('linked', String($event || ''))"
+                          @update:model-value="updateLinkedPrimaryEntityType(String($event || ''))"
+                        />
+                      </B24FormField>
+                      <B24FormField label="Выберите связанную сущность" class="mt-4">
+                        <B24Select
+                          :model-value="selectedLinkedSecondaryEntityType"
+                          :items="linkedSecondaryEntityItems"
+                          placeholder="Например, Контакт"
+                          size="lg"
+                          class="w-full"
+                          :disabled="!selectedLinkedPrimaryEntityType || !importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                          @update:model-value="updateLinkedSecondaryEntityType(String($event || ''))"
                         />
                       </B24FormField>
                     </section>
@@ -3204,13 +3516,17 @@ onMounted(loadHistory)
                       <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange">
                       <div class="space-y-4">
                         <div class="rounded-[16px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-4">
-                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
+                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                            Файл
+                          </div>
                           <div class="truncate text-sm font-medium text-[#314256]">{{ fileName || 'Файл еще не выбран' }}</div>
                           <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV, размер файла до 50 МБ</div>
                         </div>
                         <B24Button label="Выбрать файл" color="air-primary" size="lg" class="w-full" :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)" @click="openFilePicker" />
                         <div class="rounded-[16px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-4">
-                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаблон</div>
+                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                            Шаблон
+                          </div>
                           <div class="mt-2 text-sm font-medium text-[#314256]">{{ exampleTemplateDownloadMeta.title }}</div>
                           <div class="mt-1 text-xs text-[#7f92a7]">{{ exampleTemplateDownloadMeta.description }}</div>
                         </div>
@@ -3354,14 +3670,23 @@ onMounted(loadHistory)
                 <h2 class="mt-1 text-xl font-semibold text-[#314256]">Параметры чтения файла</h2>
               </div>
 
-              <B24Button
-                label="Применить"
-                color="air-primary"
-                size="lg"
-                :loading="busyAction === 'structure'"
-                :disabled="!canApplyStructure"
-                @click="applyStructure"
-              />
+              <div class="flex flex-wrap gap-3">
+                <B24Button
+                  label="Назад"
+                  color="air-primary"
+                  size="lg"
+                  :disabled="!canGoBack"
+                  @click="goBack"
+                />
+                <B24Button
+                  label="Применить и продолжить"
+                  color="air-primary"
+                  size="lg"
+                  :loading="busyAction === 'structure'"
+                  :disabled="!canApplyStructure"
+                  @click="applyStructure"
+                />
+              </div>
             </div>
 
             <div class="grid gap-5 lg:grid-cols-[minmax(0,220px)_minmax(0,220px)_minmax(0,1fr)]">
@@ -3414,46 +3739,6 @@ onMounted(loadHistory)
               </div>
             </div>
 
-            <div
-              v-if="showInlineWizardFooter"
-              class="mt-6 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f7fbff_0%,#eef5ff_100%)] px-4 py-4 sm:px-5"
-            >
-              <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                <div class="min-w-0 flex-1 xl:max-w-[460px]">
-                  <div class="mb-2 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                    <span>Прогресс</span>
-                    <span>{{ currentStep }} / 7</span>
-                  </div>
-                  <div class="h-2 rounded-full bg-[#e6edf5]">
-                    <div
-                      class="h-2 rounded-full bg-[linear-gradient(90deg,#2e6bd9_0%,#41b7ff_100%)] transition-all duration-300"
-                      :style="{ width: `${progressPercent}%` }"
-                    />
-                  </div>
-                </div>
-
-                <div class="flex flex-wrap items-center gap-3">
-                  <div class="rounded-full border border-[#d7e7ff] bg-white/85 px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
-                    {{ footerStatusLabel }}
-                  </div>
-
-                  <B24Button
-                    label="Назад"
-                    color="air-primary"
-                    size="lg"
-                    :disabled="!canGoBack"
-                    @click="goBack"
-                  />
-                  <B24Button
-                    :label="nextStepLabel"
-                    color="air-primary"
-                    size="lg"
-                    :disabled="!canGoNext"
-                    @click="goNext"
-                  />
-                </div>
-              </div>
-            </div>
           </section>
 
           <section v-if="currentStep === 3" class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
@@ -3463,8 +3748,24 @@ onMounted(loadHistory)
                 <h2 class="mt-1 text-xl font-semibold text-[#314256]">Пример файла</h2>
               </div>
 
-              <div class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
-                {{ previewTableRows.length }} строк в предпросмотре
+              <div class="flex flex-wrap items-center gap-3">
+                <div class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
+                  {{ previewTableRows.length }} строк в предпросмотре
+                </div>
+                <B24Button
+                  label="Назад"
+                  color="air-primary"
+                  size="lg"
+                  :disabled="!canGoBack"
+                  @click="goBack"
+                />
+                <B24Button
+                  :label="nextStepLabel"
+                  color="air-primary"
+                  size="lg"
+                  :disabled="!canGoNext"
+                  @click="goNext"
+                />
               </div>
             </div>
 
@@ -3491,46 +3792,6 @@ onMounted(loadHistory)
               />
             </div>
 
-            <div
-              v-if="showInlineWizardFooter"
-              class="mt-6 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f7fbff_0%,#eef5ff_100%)] px-4 py-4 sm:px-5"
-            >
-              <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                <div class="min-w-0 flex-1 xl:max-w-[460px]">
-                  <div class="mb-2 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                    <span>Прогресс</span>
-                    <span>{{ currentStep }} / 7</span>
-                  </div>
-                  <div class="h-2 rounded-full bg-[#e6edf5]">
-                    <div
-                      class="h-2 rounded-full bg-[linear-gradient(90deg,#2e6bd9_0%,#41b7ff_100%)] transition-all duration-300"
-                      :style="{ width: `${progressPercent}%` }"
-                    />
-                  </div>
-                </div>
-
-                <div class="flex flex-wrap items-center gap-3">
-                  <div class="rounded-full border border-[#d7e7ff] bg-white/85 px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
-                    {{ footerStatusLabel }}
-                  </div>
-
-                  <B24Button
-                    label="Назад"
-                    color="air-primary"
-                    size="lg"
-                    :disabled="!canGoBack"
-                    @click="goBack"
-                  />
-                  <B24Button
-                    :label="nextStepLabel"
-                    color="air-primary"
-                    size="lg"
-                    :disabled="!canGoNext"
-                    @click="goNext"
-                  />
-                </div>
-              </div>
-            </div>
           </section>
 
           <section v-if="currentStep === 4" class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
@@ -3541,6 +3802,13 @@ onMounted(loadHistory)
               </div>
 
               <div class="flex flex-wrap gap-3">
+                <B24Button
+                  label="Назад"
+                  color="air-primary"
+                  size="lg"
+                  :disabled="!canGoBack"
+                  @click="goBack"
+                />
                 <B24Button
                   label="Заполнить автоматически"
                   color="air-secondary-accent-2"
@@ -3556,7 +3824,21 @@ onMounted(loadHistory)
                   :disabled="!canSaveMapping"
                   @click="saveMapping"
                 />
+                <B24Button
+                  v-if="!hasPendingMappingChanges"
+                  :label="nextStepLabel"
+                  color="air-primary"
+                  size="lg"
+                  :disabled="!canGoNextFromMapping"
+                  @click="goNext"
+                />
               </div>
+            </div>
+            <div
+              v-if="hasPendingMappingChanges"
+              class="mb-5 rounded-[16px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-3 text-sm text-[#5f7285]"
+            >
+              Сохраните соответствие и выбранные значения по умолчанию, чтобы перейти к следующему шагу.
             </div>
 
             <section
@@ -4111,6 +4393,13 @@ onMounted(loadHistory)
 
                 <div class="flex flex-wrap gap-3">
                   <B24Button
+                    label="Назад"
+                    color="air-primary"
+                    size="lg"
+                    :disabled="!canGoBack"
+                    @click="goBack"
+                  />
+                  <B24Button
                     v-if="isDedupApplicable"
                     label="Пропустить шаг"
                     color="air-tertiary"
@@ -4342,6 +4631,13 @@ onMounted(loadHistory)
                 </div>
 
                 <div class="flex flex-wrap gap-3">
+                  <B24Button
+                    label="Назад"
+                    color="air-primary"
+                    size="lg"
+                    :disabled="!canGoBack"
+                    @click="goBack"
+                  />
                   <B24Button
                     label="Тестовый импорт"
                     color="air-secondary-accent-2"
@@ -4701,11 +4997,20 @@ onMounted(loadHistory)
                   <h2 class="mt-1 text-xl font-semibold text-[#314256]">Результат импорта</h2>
                 </div>
 
-                <div
-                  class="rounded-full px-4 py-2 text-sm font-semibold"
-                  :class="importRunFailedRows > 0 ? 'border border-[#ffe1c7] bg-[#fff7ef] text-[#c77d2b]' : 'border border-[#d7e7ff] bg-[#f4f9ff] text-[#2e6bd9]'"
-                >
-                  {{ importRunFailedRows > 0 ? `Есть ошибки: ${importRunFailedRows}` : 'Импорт завершен без ошибок' }}
+                <div class="flex flex-wrap items-center gap-3">
+                  <B24Button
+                    label="Назад"
+                    color="air-primary"
+                    size="lg"
+                    :disabled="!canGoBack"
+                    @click="goBack"
+                  />
+                  <div
+                    class="rounded-full px-4 py-2 text-sm font-semibold"
+                    :class="importRunFailedRows > 0 ? 'border border-[#ffe1c7] bg-[#fff7ef] text-[#c77d2b]' : 'border border-[#d7e7ff] bg-[#f4f9ff] text-[#2e6bd9]'"
+                  >
+                    {{ importRunFailedRows > 0 ? `Есть ошибки: ${importRunFailedRows}` : 'Импорт завершен без ошибок' }}
+                  </div>
                 </div>
               </div>
 
@@ -4730,6 +5035,35 @@ onMounted(loadHistory)
                   <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Пропущено</div>
                   <div class="mt-1 text-lg font-semibold text-[#314256]">{{ importRunSkippedRows }}</div>
                 </div>
+              </div>
+            </section>
+
+            <section
+              v-if="busyAction === 'retry'"
+              class="rounded-[24px] border border-[#d7e7ff] bg-[#f4f9ff] p-5"
+            >
+              <div class="mb-4 flex items-center gap-3">
+                <div class="h-5 w-5 animate-spin rounded-full border-2 border-[#b8d4f8] border-t-[#2e6bd9]" />
+                <div class="text-base font-semibold text-[#2e6bd9]">
+                  Повтор импорта в процессе…
+                </div>
+              </div>
+              <div class="mb-2 flex items-center justify-between text-sm">
+                <span class="text-[#5f7285]">Прогресс</span>
+                <span class="font-medium text-[#314256]">
+                  {{ session?.processed_rows ?? 0 }} из {{ session?.total_rows ?? '…' }} строк
+                </span>
+              </div>
+              <div class="mb-4 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
+                <div
+                  class="h-2 rounded-full bg-[#2e6bd9] transition-all duration-500"
+                  :style="{ width: (session?.total_rows ? Math.min(100, Math.round(((session?.processed_rows ?? 0) / session.total_rows) * 100)) : 0) + '%' }"
+                />
+              </div>
+              <div class="flex flex-wrap gap-5 text-sm text-[#5f7285]">
+                <span>Обработано: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
+                <span>Успешно: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
+                <span>Ошибки: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
               </div>
             </section>
 
@@ -4830,7 +5164,7 @@ onMounted(loadHistory)
             </section>
 
             <section
-              v-if="!isLinkedEntityImport || !linkedImportRunSummary.hasSummary"
+              v-if="!isLinkedCompanyContactImport || !linkedImportRunSummary.hasSummary"
               class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5"
             >
               <div class="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -5065,44 +5399,18 @@ onMounted(loadHistory)
             </section>
           </section>
         </div>
-
-        <div
-          v-if="!showInlineWizardFooter"
-          class="border-t border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbfe_100%)] px-6 py-5 sm:px-8"
-        >
-          <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div class="min-w-0 flex-1 xl:max-w-[460px]">
-                <div class="mb-2 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                  <span>Прогресс</span>
-                  <span>{{ currentStep }} / 7</span>
-                </div>
-                <div class="h-2 rounded-full bg-[#e6edf5]">
-                <div
-                  class="h-2 rounded-full bg-[linear-gradient(90deg,#2e6bd9_0%,#41b7ff_100%)] transition-all duration-300"
-                  :style="{ width: `${progressPercent}%` }"
-                />
-              </div>
-            </div>
-
-            <div class="flex flex-wrap gap-3">
-              <B24Button
-                label="Назад"
-                color="air-primary"
-                size="lg"
-                :disabled="!canGoBack"
-                @click="goBack"
-              />
-              <B24Button
-                :label="nextStepLabel"
-                color="air-primary"
-                size="lg"
-                :disabled="!canGoNext"
-                @click="goNext"
-              />
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   </section>
 </template>
+
+<style scoped>
+.history-restore-fade-enter-active,
+.history-restore-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+.history-restore-fade-enter-from,
+.history-restore-fade-leave-to {
+  opacity: 0;
+}
+</style>

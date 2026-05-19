@@ -643,6 +643,10 @@ TASK_USERFIELD_TYPE_MAP = {
 CONTACT_OPTIONAL_NAME_FIELDS = {"NAME", "LAST_NAME", "SECOND_NAME"}
 LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
 LINKED_COMPANY_DEAL_ENTITY_TYPE = "linked_company_deal"
+LINKED_CONTACT_COMPANY_ENTITY_TYPE = "linked_contact_company"
+LINKED_CONTACT_DEAL_ENTITY_TYPE = "linked_contact_deal"
+LINKED_DEAL_COMPANY_ENTITY_TYPE = "linked_deal_company"
+LINKED_DEAL_CONTACT_ENTITY_TYPE = "linked_deal_contact"
 LINKED_IMPORT_SCHEMAS = {
     LINKED_COMPANY_CONTACT_ENTITY_TYPE: {
         "label": "Компания + Контакт",
@@ -679,6 +683,82 @@ LINKED_IMPORT_SCHEMAS = {
                 "source_entity_type": "deal",
                 "prefix": "DEAL__",
                 "excluded_source_ids": ("COMPANY_ID",),
+            },
+        ],
+    },
+    LINKED_CONTACT_COMPANY_ENTITY_TYPE: {
+        "label": "Контакт + Компания",
+        "entities": [
+            {
+                "id": "contact",
+                "label": "Контакт",
+                "source_entity_type": "contact",
+                "prefix": "CONTACT__",
+                "excluded_source_ids": ("COMPANY_ID",),
+            },
+            {
+                "id": "company",
+                "label": "Компания",
+                "source_entity_type": "company",
+                "prefix": "COMPANY__",
+                "excluded_source_ids": (),
+            },
+        ],
+    },
+    LINKED_CONTACT_DEAL_ENTITY_TYPE: {
+        "label": "Контакт + Сделка",
+        "entities": [
+            {
+                "id": "contact",
+                "label": "Контакт",
+                "source_entity_type": "contact",
+                "prefix": "CONTACT__",
+                "excluded_source_ids": (),
+            },
+            {
+                "id": "deal",
+                "label": "Сделка",
+                "source_entity_type": "deal",
+                "prefix": "DEAL__",
+                "excluded_source_ids": ("CONTACT_ID",),
+            },
+        ],
+    },
+    LINKED_DEAL_COMPANY_ENTITY_TYPE: {
+        "label": "Сделка + Компания",
+        "entities": [
+            {
+                "id": "deal",
+                "label": "Сделка",
+                "source_entity_type": "deal",
+                "prefix": "DEAL__",
+                "excluded_source_ids": ("COMPANY_ID",),
+            },
+            {
+                "id": "company",
+                "label": "Компания",
+                "source_entity_type": "company",
+                "prefix": "COMPANY__",
+                "excluded_source_ids": (),
+            },
+        ],
+    },
+    LINKED_DEAL_CONTACT_ENTITY_TYPE: {
+        "label": "Сделка + Контакт",
+        "entities": [
+            {
+                "id": "deal",
+                "label": "Сделка",
+                "source_entity_type": "deal",
+                "prefix": "DEAL__",
+                "excluded_source_ids": ("CONTACT_ID",),
+            },
+            {
+                "id": "contact",
+                "label": "Контакт",
+                "source_entity_type": "contact",
+                "prefix": "CONTACT__",
+                "excluded_source_ids": (),
             },
         ],
     },
@@ -1531,6 +1611,7 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
             source_entity_type = linked_entity["source_entity_type"]
             source_fields_result = source_fields_results[source_entity_type]
             source_fields = normalize_fields_result(source_fields_result, entity_type=source_entity_type)
+            source_fields = enrich_standard_crm_status_fields(account, source_entity_type, source_fields)
             prefix = linked_entity["prefix"]
             entity_label = linked_entity["label"]
             excluded_source_ids = set(linked_entity["excluded_source_ids"])
@@ -1549,15 +1630,16 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
                     }
                 )
 
+        parent_entity = linked_import_schema["entities"][0]
         virtual_fields = [
             {
-                "id": "COMPANY__EXTERNAL_KEY",
-                "title": "Компания / Внешний ключ (XML_ID)",
+                "id": f"{parent_entity['prefix']}EXTERNAL_KEY",
+                "title": f"{parent_entity['label']} / Внешний ключ (XML_ID)",
                 "type": "string",
                 "required": False,
                 "multiple": False,
                 "is_custom": False,
-                "linked_entity": "company",
+                "linked_entity": parent_entity["id"],
                 "linked_source_id": "EXTERNAL_KEY",
             }
         ]

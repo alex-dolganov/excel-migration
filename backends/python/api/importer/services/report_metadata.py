@@ -1,6 +1,6 @@
 from django.utils import timezone
 
-from .b24_fields import SMART_PROCESS_ENTITY_TYPE
+from .b24_fields import SMART_PROCESS_ENTITY_TYPE, get_linked_import_schema
 from .validation import normalize_value
 
 
@@ -23,6 +23,10 @@ REPORT_ENTITY_LABELS = {
     "department": "Подразделение",
     "linked_company_contact": "Компания + Контакт",
     "linked_company_deal": "Компания + Сделка",
+    "linked_contact_company": "Контакт + Компания",
+    "linked_contact_deal": "Контакт + Сделка",
+    "linked_deal_company": "Сделка + Компания",
+    "linked_deal_contact": "Сделка + Контакт",
 }
 
 
@@ -67,25 +71,54 @@ def _build_person_title(row_payload: dict | None) -> str:
     return " ".join(part for part in parts if part).strip()
 
 
-def _build_linked_title(linked_records=None, linked_payload=None) -> str:
-    linked_records_map = linked_records if isinstance(linked_records, dict) else {}
-    linked_payload_map = linked_payload if isinstance(linked_payload, dict) else {}
-    company_title = _first_non_empty(
-        linked_records_map.get("company", {}),
-        (linked_payload_map.get("company") or {}).get("TITLE"),
-    )
-    contact_title = _first_non_empty(
-        linked_records_map.get("contact", {}),
-        _build_person_title(linked_payload_map.get("contact", {})),
-        (linked_payload_map.get("contact") or {}).get("EMAIL"),
-        (linked_payload_map.get("contact") or {}).get("PHONE"),
-    )
-    deal_title = _first_non_empty(
-        linked_records_map.get("deal", {}),
-        (linked_payload_map.get("deal") or {}).get("TITLE"),
+def _build_linked_entity_title(entity_id: str, linked_records_map: dict, linked_payload_map: dict) -> str:
+    if entity_id == "company":
+        return _first_non_empty(
+            linked_records_map.get("company", {}),
+            (linked_payload_map.get("company") or {}).get("TITLE"),
+        )
+
+    if entity_id == "contact":
+        return _first_non_empty(
+            linked_records_map.get("contact", {}),
+            _build_person_title(linked_payload_map.get("contact", {})),
+            (linked_payload_map.get("contact") or {}).get("EMAIL"),
+            (linked_payload_map.get("contact") or {}).get("PHONE"),
+        )
+
+    if entity_id == "deal":
+        return _first_non_empty(
+            linked_records_map.get("deal", {}),
+            (linked_payload_map.get("deal") or {}).get("TITLE"),
+        )
+
+    return _first_non_empty(
+        linked_records_map.get(entity_id, {}),
+        (linked_payload_map.get(entity_id) or {}).get("TITLE"),
+        (linked_payload_map.get(entity_id) or {}).get("NAME"),
     )
 
-    return " / ".join(part for part in [company_title, contact_title, deal_title] if part)
+
+def _build_linked_title(entity_type: str, linked_records=None, linked_payload=None) -> str:
+    linked_records_map = linked_records if isinstance(linked_records, dict) else {}
+    linked_payload_map = linked_payload if isinstance(linked_payload, dict) else {}
+    linked_schema = get_linked_import_schema(entity_type)
+    entity_ids = [
+        str(entity.get("id") or "").strip().lower()
+        for entity in (linked_schema or {}).get("entities", [])
+        if str(entity.get("id") or "").strip()
+    ]
+    if not entity_ids:
+        entity_ids = ["company", "contact", "deal"]
+
+    return " / ".join(
+        part
+        for part in [
+            _build_linked_entity_title(entity_id, linked_records_map, linked_payload_map)
+            for entity_id in entity_ids
+        ]
+        if part
+    )
 
 
 def build_report_entity_label(entity_type: str, *, entity_config: dict | None = None) -> str:
@@ -94,6 +127,12 @@ def build_report_entity_label(entity_type: str, *, entity_config: dict | None = 
         if smart_process_title:
             return f"Смарт-процесс: {smart_process_title}"
         return "Смарт-процесс"
+
+    linked_schema = get_linked_import_schema(entity_type)
+    if linked_schema is not None:
+        linked_label = normalize_value(linked_schema.get("label"))
+        if linked_label:
+            return linked_label
 
     return REPORT_ENTITY_LABELS.get(str(entity_type or "").strip(), str(entity_type or "").strip())
 
@@ -107,8 +146,8 @@ def build_report_title(
 ) -> str:
     fields = row_payload if isinstance(row_payload, dict) else {}
 
-    if entity_type in {"linked_company_contact", "linked_company_deal"}:
-        return _build_linked_title(linked_records=linked_records, linked_payload=linked_payload)
+    if get_linked_import_schema(entity_type) is not None:
+        return _build_linked_title(entity_type, linked_records=linked_records, linked_payload=linked_payload)
 
     if entity_type in {"lead", "company", "deal", "task", "task_checklist_item", SMART_PROCESS_ENTITY_TYPE}:
         return _first_non_empty(fields.get("TITLE"))
@@ -148,19 +187,29 @@ def build_report_title(
     )
 
 
-def build_report_record_id(record_id=None, *, linked_records: dict | None = None) -> str:
+def build_report_record_id(entity_type: str, record_id=None, *, linked_records: dict | None = None) -> str:
     linked_records_map = linked_records if isinstance(linked_records, dict) else {}
     if linked_records_map:
+        linked_schema = get_linked_import_schema(entity_type)
+        entity_ids = [
+            str(entity.get("id") or "").strip().lower()
+            for entity in (linked_schema or {}).get("entities", [])
+            if str(entity.get("id") or "").strip()
+        ]
+        if not entity_ids:
+            entity_ids = list(linked_records_map.keys())
+
+        entity_labels = {
+            "company": "Компания",
+            "contact": "Контакт",
+            "deal": "Сделка",
+        }
         labels = []
-        company_id = normalize_value((linked_records_map.get("company") or {}).get("id"))
-        contact_id = normalize_value((linked_records_map.get("contact") or {}).get("id"))
-        deal_id = normalize_value((linked_records_map.get("deal") or {}).get("id"))
-        if company_id:
-            labels.append(f"Компания {company_id}")
-        if contact_id:
-            labels.append(f"Контакт {contact_id}")
-        if deal_id:
-            labels.append(f"Сделка {deal_id}")
+        for entity_id in entity_ids:
+            entity_record_id = normalize_value((linked_records_map.get(entity_id) or {}).get("id"))
+            if not entity_record_id:
+                continue
+            labels.append(f"{entity_labels.get(entity_id, entity_id)} {entity_record_id}")
         if labels:
             return " · ".join(labels)
 
@@ -186,5 +235,5 @@ def build_import_result_report_meta(
             linked_records=linked_records,
             linked_payload=linked_payload,
         ),
-        "report_record_id": build_report_record_id(record_id, linked_records=linked_records),
+        "report_record_id": build_report_record_id(entity_type, record_id, linked_records=linked_records),
     }

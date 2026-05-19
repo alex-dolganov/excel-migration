@@ -186,6 +186,113 @@ class ImportExampleTemplatesApiTest(TestCase):
             self.assertIn(value, sheet_xml)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_operator_can_download_example_template_for_linked_contact_deal(self, get_from_jwt_token):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        get_from_jwt_token.return_value = self.create_account(is_admin=False)
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=linked_contact_deal",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("linked_contact_deal-import-example.xlsx", response["Content-Disposition"])
+
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        for value in [
+            "Внешний ключ контакта",
+            "Имя контакта",
+            "Фамилия контакта",
+            "Телефон контакта",
+            "Название сделки",
+            "Сумма",
+            "Валюта",
+            "Стадия",
+        ]:
+            self.assertIn(value, sheet_xml)
+
+        for value in [
+            "contact_001",
+            "Алиса",
+            "Иванова",
+            "+79990001122",
+            "Редизайн сайта",
+            "150000",
+            "RUB",
+        ]:
+            self.assertIn(value, sheet_xml)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_operator_can_download_example_template_for_linked_contact_company(self, get_from_jwt_token):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        get_from_jwt_token.return_value = self.create_account(is_admin=False)
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=linked_contact_company",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("linked_contact_company-import-example.xlsx", response["Content-Disposition"])
+
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        for value in [
+            "Внешний ключ контакта",
+            "Имя контакта",
+            "Фамилия контакта",
+            "Телефон контакта",
+            "Название компании",
+            "Телефон компании",
+            "Email компании",
+        ]:
+            self.assertIn(value, sheet_xml)
+
+        for value in [
+            "contact_001",
+            "Алиса",
+            "Иванова",
+            "+79990001122",
+            "ООО Альфа",
+            "+78005550101",
+        ]:
+            self.assertIn(value, sheet_xml)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_operator_can_download_example_template_for_linked_deal_company(self, get_from_jwt_token):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        get_from_jwt_token.return_value = self.create_account(is_admin=False)
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=linked_deal_company",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("linked_deal_company-import-example.xlsx", response["Content-Disposition"])
+
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        for value in [
+            "Название сделки",
+            "Сумма",
+            "Валюта",
+            "Стадия",
+            "Название компании",
+            "Телефон компании",
+            "Email компании",
+        ]:
+            self.assertIn(value, sheet_xml)
+        self.assertNotIn("Внешний ключ сделки", sheet_xml)
+
+        for value in [
+            "Редизайн сайта",
+            "150000",
+            "RUB",
+            "ООО Альфа",
+            "+78005550101",
+        ]:
+            self.assertIn(value, sheet_xml)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_operator_can_download_contact_example_template_without_company_name_column(self, get_from_jwt_token):
         self.create_role(user_id=7, role=ROLE_OPERATOR)
         get_from_jwt_token.return_value = self.create_account(is_admin=False)

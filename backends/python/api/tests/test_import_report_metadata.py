@@ -89,6 +89,94 @@ class ImportReportMetadataTest(SimpleTestCase):
             },
         )
 
+    @override_settings(TIME_ZONE="UTC", USE_TZ=True)
+    def test_build_import_result_report_meta_formats_linked_contact_deal_summary(self):
+        meta = build_import_result_report_meta(
+            "linked_contact_deal",
+            record_id=81,
+            linked_records={
+                "contact": {"id": 71, "title": "Алиса Иванова"},
+                "deal": {"id": 81, "title": "Редизайн сайта"},
+            },
+            timestamp=datetime(2026, 5, 14, 10, 7, 0, tzinfo=dt_timezone.utc),
+        )
+
+        self.assertEqual(
+            meta,
+            {
+                "report_date_time": "14.05.2026 10:07:00",
+                "report_entity": "Контакт + Сделка",
+                "report_title": "Алиса Иванова / Редизайн сайта",
+                "report_record_id": "Контакт 71 · Сделка 81",
+            },
+        )
+
+    @override_settings(TIME_ZONE="UTC", USE_TZ=True)
+    def test_build_import_result_report_meta_formats_linked_contact_company_summary(self):
+        meta = build_import_result_report_meta(
+            "linked_contact_company",
+            record_id=91,
+            linked_records={
+                "contact": {"id": 71, "title": "Алиса Иванова"},
+                "company": {"id": 91, "title": "ООО Альфа"},
+            },
+            timestamp=datetime(2026, 5, 14, 10, 7, 30, tzinfo=dt_timezone.utc),
+        )
+
+        self.assertEqual(
+            meta,
+            {
+                "report_date_time": "14.05.2026 10:07:30",
+                "report_entity": "Контакт + Компания",
+                "report_title": "Алиса Иванова / ООО Альфа",
+                "report_record_id": "Контакт 71 · Компания 91",
+            },
+        )
+
+    @override_settings(TIME_ZONE="UTC", USE_TZ=True)
+    def test_build_import_result_report_meta_formats_linked_deal_contact_summary(self):
+        meta = build_import_result_report_meta(
+            "linked_deal_contact",
+            record_id=71,
+            linked_records={
+                "deal": {"id": 81, "title": "Редизайн сайта"},
+                "contact": {"id": 71, "title": "Алиса Иванова"},
+            },
+            timestamp=datetime(2026, 5, 14, 10, 8, 0, tzinfo=dt_timezone.utc),
+        )
+
+        self.assertEqual(
+            meta,
+            {
+                "report_date_time": "14.05.2026 10:08:00",
+                "report_entity": "Сделка + Контакт",
+                "report_title": "Редизайн сайта / Алиса Иванова",
+                "report_record_id": "Сделка 81 · Контакт 71",
+            },
+        )
+
+    @override_settings(TIME_ZONE="UTC", USE_TZ=True)
+    def test_build_import_result_report_meta_formats_linked_deal_company_summary(self):
+        meta = build_import_result_report_meta(
+            "linked_deal_company",
+            record_id=91,
+            linked_records={
+                "deal": {"id": 81, "title": "Редизайн сайта"},
+                "company": {"id": 91, "title": "ООО Альфа"},
+            },
+            timestamp=datetime(2026, 5, 14, 10, 8, 30, tzinfo=dt_timezone.utc),
+        )
+
+        self.assertEqual(
+            meta,
+            {
+                "report_date_time": "14.05.2026 10:08:30",
+                "report_entity": "Сделка + Компания",
+                "report_title": "Редизайн сайта / ООО Альфа",
+                "report_record_id": "Сделка 81 · Компания 91",
+            },
+        )
+
     def test_build_import_report_csv_returns_human_readable_russian_csv(self):
         csv_text = build_import_report_csv(
             {

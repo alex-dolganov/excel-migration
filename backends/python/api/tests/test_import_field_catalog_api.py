@@ -1130,6 +1130,529 @@ class ImportFieldCatalogApiTest(TestCase):
 
     @patch("importer.services.b24_fields.BitrixAPIRequest")
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_deal_stage_items_for_linked_company_deal_when_raw_catalog_is_empty(self, get_from_jwt_token, bitrix_api_request):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "STAGE_ID": {
+                                    "title": "Стадия сделки",
+                                    "type": "crm_status",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                    "items": [],
+                                },
+                                "COMPANY_ID": {
+                                    "title": "Компания",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+        bitrix_api_request.return_value = SimpleNamespace(
+            result={
+                "statuses": [
+                    {"STATUS_ID": "NEW", "NAME": "Новая"},
+                    {"STATUS_ID": "IN_PROGRESS", "NAME": "В работе"},
+                ]
+            }
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "linked_company_deal"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        items_by_id = {item["id"]: item for item in response.json()["items"]}
+        self.assertEqual(
+            items_by_id["DEAL__STAGE_ID"]["items"],
+            [
+                {"id": "NEW", "title": "Новая"},
+                {"id": "IN_PROGRESS", "title": "В работе"},
+            ],
+        )
+        self.assertEqual(
+            [call.kwargs for call in bitrix_api_request.call_args_list],
+            [
+                {
+                    "bitrix_token": get_from_jwt_token.return_value,
+                    "api_method": "crm.status.list",
+                    "params": {"filter": {"ENTITY_ID": "DEAL_STAGE"}},
+                },
+            ],
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_combined_field_catalog_for_linked_contact_deal_import_with_custom_fields(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_CONTACT_SOURCE": {
+                                    "title": "Источник контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Сумма",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "CONTACT_ID": {
+                                    "title": "Контакт",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_DEAL_CHANNEL": {
+                                    "title": "Канал сделки",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "linked_contact_deal"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["entity_type"], "linked_contact_deal")
+        self.assertEqual(
+            response.json()["linked_entities"],
+            [
+                {
+                    "id": "contact",
+                    "label": "Контакт",
+                    "source_entity_type": "contact",
+                    "prefix": "CONTACT__",
+                    "excluded_source_ids": [],
+                },
+                {
+                    "id": "deal",
+                    "label": "Сделка",
+                    "source_entity_type": "deal",
+                    "prefix": "DEAL__",
+                    "excluded_source_ids": ["CONTACT_ID"],
+                },
+            ],
+        )
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+        self.assertEqual(items_by_id["CONTACT__NAME"]["title"], "Контакт / Имя контакта")
+        self.assertEqual(items_by_id["DEAL__TITLE"]["title"], "Сделка / Название сделки")
+        self.assertEqual(
+            items_by_id["CONTACT__UF_CRM_CONTACT_SOURCE"],
+            {
+                "id": "CONTACT__UF_CRM_CONTACT_SOURCE",
+                "title": "Контакт / Источник контакта",
+                "type": "string",
+                "required": False,
+                "multiple": False,
+                "is_custom": True,
+                "items": [],
+                "linked_entity": "contact",
+                "linked_source_id": "UF_CRM_CONTACT_SOURCE",
+            },
+        )
+        self.assertEqual(
+            items_by_id["DEAL__UF_CRM_DEAL_CHANNEL"],
+            {
+                "id": "DEAL__UF_CRM_DEAL_CHANNEL",
+                "title": "Сделка / Канал сделки",
+                "type": "string",
+                "required": False,
+                "multiple": False,
+                "is_custom": True,
+                "items": [],
+                "linked_entity": "deal",
+                "linked_source_id": "UF_CRM_DEAL_CHANNEL",
+            },
+        )
+        self.assertNotIn("DEAL__CONTACT_ID", items_by_id)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_combined_field_catalog_for_linked_contact_company_import_with_custom_fields(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "COMPANY_ID": {
+                                    "title": "Компания",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_CONTACT_SOURCE": {
+                                    "title": "Источник контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон компании",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_COMPANY_SEGMENT": {
+                                    "title": "Сегмент компании",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "linked_contact_company"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["entity_type"], "linked_contact_company")
+        self.assertEqual(
+            response.json()["linked_entities"],
+            [
+                {
+                    "id": "contact",
+                    "label": "Контакт",
+                    "source_entity_type": "contact",
+                    "prefix": "CONTACT__",
+                    "excluded_source_ids": ["COMPANY_ID"],
+                },
+                {
+                    "id": "company",
+                    "label": "Компания",
+                    "source_entity_type": "company",
+                    "prefix": "COMPANY__",
+                    "excluded_source_ids": [],
+                },
+            ],
+        )
+        items_by_id = {item["id"]: item for item in response.json()["items"]}
+        self.assertEqual(items_by_id["CONTACT__EXTERNAL_KEY"]["title"], "Контакт / Внешний ключ (XML_ID)")
+        self.assertEqual(items_by_id["CONTACT__NAME"]["title"], "Контакт / Имя контакта")
+        self.assertEqual(items_by_id["COMPANY__TITLE"]["title"], "Компания / Название компании")
+        self.assertEqual(items_by_id["COMPANY__UF_CRM_COMPANY_SEGMENT"]["title"], "Компания / Сегмент компании")
+        self.assertNotIn("CONTACT__COMPANY_ID", items_by_id)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_combined_field_catalog_for_linked_deal_contact_import_with_custom_fields(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "OPPORTUNITY": {
+                                    "title": "Сумма",
+                                    "type": "money",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "CONTACT_ID": {
+                                    "title": "Контакт",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_DEAL_CHANNEL": {
+                                    "title": "Канал сделки",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    contact=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "NAME": {
+                                    "title": "Имя контакта",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "EMAIL": {
+                                    "title": "Email контакта",
+                                    "type": "email",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_CONTACT_SOURCE": {
+                                    "title": "Источник контакта",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "linked_deal_contact"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["entity_type"], "linked_deal_contact")
+        self.assertEqual(
+            response.json()["linked_entities"],
+            [
+                {
+                    "id": "deal",
+                    "label": "Сделка",
+                    "source_entity_type": "deal",
+                    "prefix": "DEAL__",
+                    "excluded_source_ids": ["CONTACT_ID"],
+                },
+                {
+                    "id": "contact",
+                    "label": "Контакт",
+                    "source_entity_type": "contact",
+                    "prefix": "CONTACT__",
+                    "excluded_source_ids": [],
+                },
+            ],
+        )
+        items_by_id = {
+            item["id"]: item
+            for item in response.json()["items"]
+        }
+        self.assertEqual(items_by_id["DEAL__EXTERNAL_KEY"]["title"], "Сделка / Внешний ключ (XML_ID)")
+        self.assertEqual(items_by_id["DEAL__TITLE"]["title"], "Сделка / Название сделки")
+        self.assertEqual(items_by_id["CONTACT__NAME"]["title"], "Контакт / Имя контакта")
+        self.assertEqual(
+            items_by_id["CONTACT__UF_CRM_CONTACT_SOURCE"],
+            {
+                "id": "CONTACT__UF_CRM_CONTACT_SOURCE",
+                "title": "Контакт / Источник контакта",
+                "type": "string",
+                "required": False,
+                "multiple": False,
+                "is_custom": True,
+                "items": [],
+                "linked_entity": "contact",
+                "linked_source_id": "UF_CRM_CONTACT_SOURCE",
+            },
+        )
+        self.assertNotIn("DEAL__CONTACT_ID", items_by_id)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_returns_combined_field_catalog_for_linked_deal_company_import_with_custom_fields(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название сделки",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "COMPANY_ID": {
+                                    "title": "Компания",
+                                    "type": "integer",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                                "UF_CRM_DEAL_CHANNEL": {
+                                    "title": "Канал сделки",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                    company=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {
+                                    "title": "Название компании",
+                                    "type": "string",
+                                    "isRequired": True,
+                                    "isMultiple": False,
+                                },
+                                "PHONE": {
+                                    "title": "Телефон компании",
+                                    "type": "phone",
+                                    "isRequired": False,
+                                    "isMultiple": True,
+                                },
+                                "UF_CRM_COMPANY_SEGMENT": {
+                                    "title": "Сегмент компании",
+                                    "type": "string",
+                                    "isRequired": False,
+                                    "isMultiple": False,
+                                },
+                            }
+                        )
+                    ),
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "linked_deal_company"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["entity_type"], "linked_deal_company")
+        self.assertEqual(
+            response.json()["linked_entities"],
+            [
+                {
+                    "id": "deal",
+                    "label": "Сделка",
+                    "source_entity_type": "deal",
+                    "prefix": "DEAL__",
+                    "excluded_source_ids": ["COMPANY_ID"],
+                },
+                {
+                    "id": "company",
+                    "label": "Компания",
+                    "source_entity_type": "company",
+                    "prefix": "COMPANY__",
+                    "excluded_source_ids": [],
+                },
+            ],
+        )
+        items_by_id = {item["id"]: item for item in response.json()["items"]}
+        self.assertEqual(items_by_id["DEAL__EXTERNAL_KEY"]["title"], "Сделка / Внешний ключ (XML_ID)")
+        self.assertEqual(items_by_id["DEAL__TITLE"]["title"], "Сделка / Название сделки")
+        self.assertEqual(items_by_id["COMPANY__TITLE"]["title"], "Компания / Название компании")
+        self.assertEqual(items_by_id["COMPANY__UF_CRM_COMPANY_SEGMENT"]["title"], "Компания / Сегмент компании")
+        self.assertNotIn("DEAL__COMPANY_ID", items_by_id)
+
+    @patch("importer.services.b24_fields.BitrixAPIRequest")
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_returns_deal_crm_status_items_from_crm_status_list_when_field_catalog_is_empty(self, get_from_jwt_token, bitrix_api_request):
         get_from_jwt_token.return_value = SimpleNamespace(
             member_id="member-1",

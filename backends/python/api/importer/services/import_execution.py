@@ -2,7 +2,7 @@ import os
 import re
 import time
 
-from b24pysdk.error import BitrixRequestTimeout
+from b24pysdk.error import BitrixOAuthInvalidGrant, BitrixRequestTimeout
 from b24pysdk.bitrix_api.requests import BitrixAPIBatchRequest, BitrixAPIRequest
 
 from .validation import (
@@ -42,9 +42,33 @@ CRM_ACTIVITY_COMMUNICATION_TYPES = {
 HR_ENTITY_TYPES = {"user", "department"}
 LINKED_COMPANY_CONTACT_ENTITY_TYPE = "linked_company_contact"
 LINKED_COMPANY_DEAL_ENTITY_TYPE = "linked_company_deal"
-LINKED_COMPANY_CHILD_ENTITY_TYPES = {
-    LINKED_COMPANY_CONTACT_ENTITY_TYPE: "contact",
-    LINKED_COMPANY_DEAL_ENTITY_TYPE: "deal",
+LINKED_CONTACT_COMPANY_ENTITY_TYPE = "linked_contact_company"
+LINKED_CONTACT_DEAL_ENTITY_TYPE = "linked_contact_deal"
+LINKED_DEAL_COMPANY_ENTITY_TYPE = "linked_deal_company"
+LINKED_DEAL_CONTACT_ENTITY_TYPE = "linked_deal_contact"
+LINKED_RELATION_STRATEGIES = {
+    LINKED_COMPANY_CONTACT_ENTITY_TYPE: {
+        "mode": "field",
+        "field": "COMPANY_ID",
+    },
+    LINKED_COMPANY_DEAL_ENTITY_TYPE: {
+        "mode": "field",
+        "field": "COMPANY_ID",
+    },
+    LINKED_CONTACT_COMPANY_ENTITY_TYPE: {
+        "mode": "contact_company_binding",
+    },
+    LINKED_CONTACT_DEAL_ENTITY_TYPE: {
+        "mode": "field",
+        "field": "CONTACT_ID",
+    },
+    LINKED_DEAL_COMPANY_ENTITY_TYPE: {
+        "mode": "parent_field",
+        "field": "COMPANY_ID",
+    },
+    LINKED_DEAL_CONTACT_ENTITY_TYPE: {
+        "mode": "deal_contact_binding",
+    },
 }
 
 SUPPORTED_DEDUP_STRATEGIES = {"create", "skip", "update", "ask"}
@@ -276,11 +300,64 @@ def is_linked_import_entity_type(entity_type: str) -> bool:
     return get_linked_import_schema(str(entity_type or "").strip()) is not None
 
 
-def get_linked_company_child_entity_type(entity_type: str) -> str:
-    child_entity_type = LINKED_COMPANY_CHILD_ENTITY_TYPES.get(str(entity_type or "").strip())
-    if not child_entity_type:
+def get_linked_parent_entity_type(entity_type: str) -> str:
+    linked_entity_ids = get_linked_entity_ids(entity_type)
+    if len(linked_entity_ids) < 2:
         raise ValueError(f"Unsupported linked import entity type: {entity_type}")
-    return child_entity_type
+    return linked_entity_ids[0]
+
+
+def get_linked_child_entity_type(entity_type: str) -> str:
+    linked_entity_ids = get_linked_entity_ids(entity_type)
+    if len(linked_entity_ids) < 2:
+        raise ValueError(f"Unsupported linked import entity type: {entity_type}")
+    return linked_entity_ids[1]
+
+
+def get_linked_child_link_field(entity_type: str) -> str:
+    relation_strategy = LINKED_RELATION_STRATEGIES.get(str(entity_type or "").strip())
+    child_link_field = str((relation_strategy or {}).get("field") or "").strip()
+    if child_link_field:
+        return child_link_field
+
+    parent_entity_type = get_linked_parent_entity_type(entity_type)
+    child_entity_type = get_linked_child_entity_type(entity_type)
+    raise ValueError(f"Unsupported linked import entity relation: {parent_entity_type} -> {child_entity_type}")
+
+
+def get_linked_relation_strategy(entity_type: str) -> dict:
+    relation_strategy = LINKED_RELATION_STRATEGIES.get(str(entity_type or "").strip())
+    if relation_strategy is None:
+        raise ValueError(f"Unsupported linked import entity type: {entity_type}")
+    return dict(relation_strategy)
+
+
+def bind_deal_contact(account, *, deal_id, contact_id) -> None:
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="crm.deal.contact.add",
+        params={
+            "id": deal_id,
+            "fields": {
+                "CONTACT_ID": contact_id,
+            },
+        },
+    )
+    unwrap_bitrix_result(response)
+
+
+def bind_contact_company(account, *, contact_id, company_id) -> None:
+    response = BitrixAPIRequest(
+        bitrix_token=account,
+        api_method="crm.contact.company.add",
+        params={
+            "id": contact_id,
+            "fields": {
+                "COMPANY_ID": company_id,
+            },
+        },
+    )
+    unwrap_bitrix_result(response)
 
 
 def build_linked_field_groups(fields: list[dict], entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> dict[str, list[dict]]:
@@ -1791,7 +1868,8 @@ def execute_linked_dry_run(
     skipped_rows = 0
     pending_decision_rows = 0
     results = []
-    child_entity_type = get_linked_company_child_entity_type(entity_type)
+    parent_entity_type = get_linked_parent_entity_type(entity_type)
+    child_entity_type = get_linked_child_entity_type(entity_type)
 
     def _find_existing_linked_record(account, linked_entity_type: str, row_payload: dict, linked_dedup_settings: dict):
         return find_existing_record_cached(
@@ -1841,14 +1919,14 @@ def execute_linked_dry_run(
             default_field_values=default_field_values,
         )
 
-        company_action = resolve_linked_record_action_with_decision(
+        parent_action = resolve_linked_record_action_with_decision(
             account,
-            "company",
-            linked_payload.get("company", {}),
-            dedup_settings.get("company", {}),
+            parent_entity_type,
+            linked_payload.get(parent_entity_type, {}),
+            dedup_settings.get(parent_entity_type, {}),
             "",
             find_existing_record_fn=_find_existing_linked_record,
-        ) if linked_payload.get("company") else {"mode": "skip_payload", "record_id": None, "meta": {}}
+        ) if linked_payload.get(parent_entity_type) else {"mode": "skip_payload", "record_id": None, "meta": {}}
 
         child_action = resolve_linked_record_action_with_decision(
             account,
@@ -1860,12 +1938,12 @@ def execute_linked_dry_run(
         ) if linked_payload.get(child_entity_type) else {"mode": "skip_payload", "record_id": None, "meta": {}}
 
         linked_actions = {
-            "company": company_action,
+            parent_entity_type: parent_action,
             child_entity_type: child_action,
         }
         duplicate_decision_summary = build_linked_duplicate_decision_summary(linked_actions, entity_type)
 
-        if company_action.get("mode") == "pending_decision" or child_action.get("mode") == "pending_decision":
+        if parent_action.get("mode") == "pending_decision" or child_action.get("mode") == "pending_decision":
             pending_decision_rows += 1
             results.append(
                 {
@@ -1884,7 +1962,7 @@ def execute_linked_dry_run(
             )
             continue
 
-        has_updates = company_action.get("mode") == "update" or child_action.get("mode") == "update"
+        has_updates = parent_action.get("mode") == "update" or child_action.get("mode") == "update"
 
         ready_rows += 1
         if has_updates:
@@ -1956,9 +2034,14 @@ def execute_linked_import(
     updated_ids = []
     results = []
     was_cancelled = False
-    child_entity_type = get_linked_company_child_entity_type(entity_type)
-    child_link_field = "COMPANY_ID"
-    company_ext_key_cache: dict[str, int] = {}
+    parent_entity_type = get_linked_parent_entity_type(entity_type)
+    child_entity_type = get_linked_child_entity_type(entity_type)
+    relation_strategy = get_linked_relation_strategy(entity_type)
+    relation_mode = str(relation_strategy.get("mode") or "").strip()
+    relation_field = str(relation_strategy.get("field") or "").strip()
+    child_link_field = relation_field if relation_mode == "field" else ""
+    parent_link_field = relation_field if relation_mode == "parent_field" else ""
+    parent_ext_key_cache: dict[str, int] = {}
 
     for row_index, row_number in enumerate(row_numbers):
         if row_number < data_start_row:
@@ -2036,8 +2119,10 @@ def execute_linked_import(
             )
             continue
 
-        company_payload = dict(linked_payload.get("company", {}))
-        ext_key = str(company_payload.pop("EXTERNAL_KEY", "") or "").strip()
+        parent_payload = dict(linked_payload.get(parent_entity_type, {}))
+        ext_key = str(parent_payload.pop("EXTERNAL_KEY", "") or "").strip()
+        if ext_key:
+            parent_payload["XML_ID"] = ext_key
         child_payload = linked_payload.get(child_entity_type, {})
         decisions = per_row_decisions if isinstance(per_row_decisions, dict) else {}
         row_decision = str(decisions.get(str(row_number), "")).strip().lower()
@@ -2045,15 +2130,15 @@ def execute_linked_import(
             row_decision = ""
 
         try:
-            if ext_key and ext_key in company_ext_key_cache:
-                company_action = {"mode": "cached", "record_id": company_ext_key_cache[ext_key], "meta": {}}
-            elif company_payload:
-                company_action = _bitrix_retry(lambda: resolve_linked_record_action_with_decision(
-                    account, "company", company_payload, dedup_settings.get("company", {}),
+            if ext_key and ext_key in parent_ext_key_cache:
+                parent_action = {"mode": "cached", "record_id": parent_ext_key_cache[ext_key], "meta": {}}
+            elif parent_payload:
+                parent_action = _bitrix_retry(lambda: resolve_linked_record_action_with_decision(
+                    account, parent_entity_type, parent_payload, dedup_settings.get(parent_entity_type, {}),
                     row_decision,
                 ))
             else:
-                company_action = {"mode": "skip_payload", "record_id": None, "meta": {}}
+                parent_action = {"mode": "skip_payload", "record_id": None, "meta": {}}
             child_action = _bitrix_retry(lambda: resolve_linked_record_action_with_decision(
                 account, child_entity_type, child_payload, dedup_settings.get(child_entity_type, {}),
                 row_decision,
@@ -2071,15 +2156,15 @@ def execute_linked_import(
             continue
 
         linked_actions = {
-            "company": company_action,
+            parent_entity_type: parent_action,
             child_entity_type: child_action,
         }
         duplicate_decision_summary = build_linked_duplicate_decision_summary(linked_actions, entity_type)
 
-        if company_action.get("mode") == "pending_decision" or child_action.get("mode") == "pending_decision":
+        if parent_action.get("mode") == "pending_decision" or child_action.get("mode") == "pending_decision":
             raise ValueError("Run a dry run and choose an action for each duplicate before import execution")
 
-        if company_action.get("mode") == "skip_row" or child_action.get("mode") == "skip_row":
+        if parent_action.get("mode") == "skip_row" or child_action.get("mode") == "skip_row":
             skipped_rows += 1
             results.append(
                 {
@@ -2092,15 +2177,15 @@ def execute_linked_import(
             )
             continue
 
-        company_id = company_action.get("record_id")
+        parent_record_id = parent_action.get("record_id")
         try:
-            if company_payload and company_action["mode"] != "cached":
-                if company_action["mode"] == "update":
-                    _bitrix_retry(lambda: update_entity_record(account, "company", company_action["record_id"], company_payload))
-                elif company_action["mode"] == "create":
-                    company_id = _bitrix_retry(lambda: create_entity_record(account, "company", company_payload))
-            if ext_key and company_id is not None:
-                company_ext_key_cache[ext_key] = company_id
+            if parent_payload and parent_action["mode"] != "cached":
+                if parent_action["mode"] == "update":
+                    _bitrix_retry(lambda: update_entity_record(account, parent_entity_type, parent_action["record_id"], parent_payload))
+                elif parent_action["mode"] == "create":
+                    parent_record_id = _bitrix_retry(lambda: create_entity_record(account, parent_entity_type, parent_payload))
+            if ext_key and parent_record_id is not None:
+                parent_ext_key_cache[ext_key] = parent_record_id
         except Exception as error:
             failed_rows += 1
             results.append(
@@ -2113,10 +2198,10 @@ def execute_linked_import(
             )
             continue
 
-        if company_id is not None and child_payload:
+        if child_link_field and parent_record_id is not None and child_payload:
             child_payload = {
                 **child_payload,
-                child_link_field: normalize_record_id(company_id) or company_id,
+                child_link_field: normalize_record_id(parent_record_id) or parent_record_id,
             }
 
         child_record_id = child_action.get("record_id")
@@ -2124,10 +2209,22 @@ def execute_linked_import(
             if child_payload:
                 if child_action["mode"] == "update":
                     _bitrix_retry(lambda: update_entity_record(account, child_entity_type, child_action["record_id"], child_payload))
-                elif child_action["mode"] == "reuse" and company_id is not None and child_action["record_id"] is not None:
-                    _bitrix_retry(lambda: update_entity_record(account, child_entity_type, child_action["record_id"], {child_link_field: company_id}))
+                elif child_link_field and child_action["mode"] == "reuse" and parent_record_id is not None and child_action["record_id"] is not None:
+                    _bitrix_retry(lambda: update_entity_record(account, child_entity_type, child_action["record_id"], {child_link_field: parent_record_id}))
                 elif child_action["mode"] == "create":
                     child_record_id = _bitrix_retry(lambda: create_entity_record(account, child_entity_type, child_payload))
+
+            if relation_mode == "parent_field" and parent_record_id is not None and child_record_id is not None and parent_link_field:
+                _bitrix_retry(lambda: update_entity_record(
+                    account,
+                    parent_entity_type,
+                    parent_record_id,
+                    {parent_link_field: normalize_record_id(child_record_id) or child_record_id},
+                ))
+            if relation_mode == "deal_contact_binding" and parent_record_id is not None and child_record_id is not None:
+                _bitrix_retry(lambda: bind_deal_contact(account, deal_id=parent_record_id, contact_id=child_record_id))
+            if relation_mode == "contact_company_binding" and parent_record_id is not None and child_record_id is not None:
+                _bitrix_retry(lambda: bind_contact_company(account, contact_id=parent_record_id, company_id=child_record_id))
         except Exception as error:
             failed_rows += 1
             results.append(
@@ -2142,17 +2239,36 @@ def execute_linked_import(
 
         has_child_link_update = (
             child_action.get("mode") == "reuse"
-            and company_id is not None
+            and bool(child_link_field)
+            and parent_record_id is not None
             and child_action.get("record_id") is not None
         )
-        has_updates = company_action.get("mode") == "update" or child_action.get("mode") == "update" or has_child_link_update
+        has_parent_link_update = (
+            relation_mode == "parent_field"
+            and child_action.get("mode") == "reuse"
+            and parent_record_id is not None
+            and child_action.get("record_id") is not None
+        )
+        has_relation_binding_update = (
+            relation_mode in {"deal_contact_binding", "contact_company_binding"}
+            and child_action.get("mode") == "reuse"
+            and parent_record_id is not None
+            and child_action.get("record_id") is not None
+        )
+        has_updates = (
+            parent_action.get("mode") == "update"
+            or child_action.get("mode") == "update"
+            or has_parent_link_update
+            or has_child_link_update
+            or has_relation_binding_update
+        )
         linked_records = {}
         linked_entity_payloads = {
-            "company": company_payload,
+            parent_entity_type: parent_payload,
             child_entity_type: child_payload,
         }
         linked_entity_record_ids = {
-            "company": company_id,
+            parent_entity_type: parent_record_id,
             child_entity_type: child_record_id,
         }
         for linked_entity in get_linked_entity_ids(entity_type):
@@ -2454,6 +2570,7 @@ def execute_import(
     updated_ids = []
     results = []
     was_cancelled = False
+    oauth_abort_error: str = ""
     use_batch = _is_batch_eligible(entity_type, normalized_dedup_settings)
     pending_batch: list = []
     report_entity_config = (import_context or {}).get("entity_config") if isinstance(import_context, dict) else None
@@ -2564,6 +2681,8 @@ def execute_import(
                 default_field_values=default_field_values,
             )
         except Exception as error:
+            if isinstance(error, BitrixOAuthInvalidGrant):
+                oauth_abort_error = safe_format_import_error(error)
             failed_rows += 1
             results.append(
                 {
@@ -2573,6 +2692,8 @@ def execute_import(
                     **build_import_result_report_meta(entity_type, entity_config=report_entity_config),
                 }
             )
+            if oauth_abort_error:
+                break
             continue
 
         if use_batch:
@@ -2599,6 +2720,8 @@ def execute_import(
                 )
             )
         except Exception as error:
+            if isinstance(error, BitrixOAuthInvalidGrant):
+                oauth_abort_error = safe_format_import_error(error)
             failed_rows += 1
             results.append(
                 {
@@ -2612,6 +2735,8 @@ def execute_import(
                     ),
                 }
             )
+            if oauth_abort_error:
+                break
             continue
 
         existing_record_id = existing_record_match.get("record_id") if isinstance(existing_record_match, dict) else None
@@ -2670,6 +2795,8 @@ def execute_import(
                 try:
                     _bitrix_retry(lambda: _update_existing_record(existing_record_id, row_payload))
                 except Exception as error:
+                    if isinstance(error, BitrixOAuthInvalidGrant):
+                        oauth_abort_error = safe_format_import_error(error)
                     failed_rows += 1
                     results.append(
                         {
@@ -2684,6 +2811,8 @@ def execute_import(
                             ),
                         }
                     )
+                    if oauth_abort_error:
+                        break
                     continue
                 updated_rows += 1
                 updated_ids.append(existing_record_id)
@@ -2709,6 +2838,8 @@ def execute_import(
             try:
                 _bitrix_retry(lambda: _update_existing_record(existing_record_id, row_payload))
             except Exception as error:
+                if isinstance(error, BitrixOAuthInvalidGrant):
+                    oauth_abort_error = safe_format_import_error(error)
                 failed_rows += 1
                 results.append(
                     {
@@ -2723,6 +2854,8 @@ def execute_import(
                         ),
                     }
                 )
+                if oauth_abort_error:
+                    break
                 continue
 
             updated_rows += 1
@@ -2747,6 +2880,8 @@ def execute_import(
         try:
             record_id = _bitrix_retry(lambda: create_entity_record(account, entity_type, row_payload, context=import_context))
         except Exception as error:
+            if isinstance(error, BitrixOAuthInvalidGrant):
+                oauth_abort_error = safe_format_import_error(error)
             failed_rows += 1
             results.append(
                 {
@@ -2760,6 +2895,8 @@ def execute_import(
                     ),
                 }
             )
+            if oauth_abort_error:
+                break
             continue
 
         created_rows += 1
@@ -2779,7 +2916,23 @@ def execute_import(
             result_item["record_id"] = record_id
         results.append(result_item)
 
-    _flush_pending_batch()
+    if oauth_abort_error:
+        processed_row_numbers = {r["row_number"] for r in results}
+        for rem_idx, rem_num in enumerate(row_numbers):
+            if rem_num < data_start_row or rem_num in processed_row_numbers:
+                continue
+            rem_row = rows[rem_idx] if rem_idx < len(rows) else []
+            if not row_has_values(rem_row):
+                continue
+            cancelled_rows += 1
+            was_cancelled = True
+            results.append({
+                "row_number": rem_num,
+                "status": "cancelled",
+                "error": "Import stopped: Bitrix24 authentication expired",
+            })
+    else:
+        _flush_pending_batch()
 
     return {
         "checked_rows": checked_rows,
@@ -2793,4 +2946,5 @@ def execute_import(
         "created_ids": created_ids,
         "updated_ids": updated_ids,
         "results": results,
+        "auth_error": oauth_abort_error,
     }

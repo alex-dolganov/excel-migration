@@ -12,7 +12,9 @@ broker_url = os.getenv(
 )
 
 celery_app = Celery("excel_migration_app", broker=broker_url)
-celery_app.conf.task_acks_late = True
+# acks_late=True caused RabbitMQ consumer_timeout (30 min default) to kill the channel
+# on long imports (15k+ rows). Session state is tracked in DB so acks_early is safe.
+celery_app.conf.task_acks_late = False
 celery_app.conf.worker_prefetch_multiplier = int(os.getenv("RABBITMQ_PREFETCH", "5"))
 celery_app.conf.task_default_queue = "importer.import-jobs"
 celery_app.autodiscover_tasks(["importer"])
