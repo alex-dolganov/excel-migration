@@ -2828,8 +2828,11 @@ def import_session_retry_failed(request: AuthorizedRequest, session_id):
         session.processed_rows = 0
         session.successful_rows = 0
         session.failed_rows = 0
+        session.total_rows = len(retry_row_numbers)
+        summary = session.summary if isinstance(session.summary, dict) else {}
+        session.summary = {**summary, "retry_total_rows": len(retry_row_numbers)}
         session.save(
-            update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"]
+            update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "total_rows", "summary", "updated_at"]
         )
         try:
             enqueue_import_session_retry(session, account)

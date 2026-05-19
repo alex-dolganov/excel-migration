@@ -391,6 +391,7 @@ const importRunUpdatedRows = computed(() => Number(importRunData.value?.updated_
 const importRunFailedRows = computed(() => Number(importRunData.value?.failed_rows || 0))
 const importRunSkippedRows = computed(() => Number(importRunData.value?.skipped_rows || 0))
 const importRunRetryState = computed(() => buildImportRunRetryState(importRunData.value))
+const retryTotalRows = computed(() => Number(session.value?.summary?.retry_total_rows || session.value?.total_rows || 0))
 const canStart = computed(() => (
   importerPermissionState.value.canCreateSessions
   && Boolean(entityType.value)
@@ -5053,13 +5054,13 @@ onMounted(loadHistory)
               <div class="mb-2 flex items-center justify-between text-sm">
                 <span class="text-[#5f7285]">Прогресс</span>
                 <span class="font-medium text-[#314256]">
-                  {{ session?.processed_rows ?? 0 }} из {{ session?.total_rows ?? '…' }} строк
+                  {{ session?.processed_rows ?? 0 }} из {{ retryTotalRows || '…' }} строк
                 </span>
               </div>
               <div class="mb-4 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
                 <div
                   class="h-2 rounded-full bg-[#2e6bd9] transition-all duration-500"
-                  :style="{ width: (session?.total_rows ? Math.min(100, Math.round(((session?.processed_rows ?? 0) / session.total_rows) * 100)) : 0) + '%' }"
+                  :style="{ width: (retryTotalRows ? Math.min(100, Math.round(((session?.processed_rows ?? 0) / retryTotalRows) * 100)) : 0) + '%' }"
                 />
               </div>
               <div class="flex flex-wrap gap-5 text-sm text-[#5f7285]">

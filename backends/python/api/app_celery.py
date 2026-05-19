@@ -1,6 +1,7 @@
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
@@ -17,4 +18,10 @@ celery_app = Celery("excel_migration_app", broker=broker_url)
 celery_app.conf.task_acks_late = False
 celery_app.conf.worker_prefetch_multiplier = int(os.getenv("RABBITMQ_PREFETCH", "5"))
 celery_app.conf.task_default_queue = "importer.import-jobs"
+celery_app.conf.beat_schedule = {
+    "cleanup-stuck-import-sessions": {
+        "task": "importer.cleanup_stuck_sessions",
+        "schedule": crontab(minute="*/10"),
+    },
+}
 celery_app.autodiscover_tasks(["importer"])
