@@ -2757,7 +2757,9 @@ function syncRestoredExecutionState(snapshot: Record<string, any> | null | undef
   const job = summary.job && typeof summary.job === 'object' ? summary.job : {}
   const jobMode = String(job.mode || '').trim().toLowerCase()
   const jobState = String(job.state || '').trim().toLowerCase()
-  if (['queued', 'running'].includes(jobState)) {
+  const sessionStatus = String(snapshot?.status || '').trim().toLowerCase()
+  const isTerminalSessionStatus = ['completed', 'failed', 'cancelled'].includes(sessionStatus)
+  if (!isTerminalSessionStatus && ['queued', 'running'].includes(jobState)) {
     busyAction.value = jobMode === 'dry_run'
       ? 'dry-run'
       : jobMode === 'retry'
@@ -2984,7 +2986,7 @@ onMounted(loadHistory)
     <Transition name="history-restore-fade">
       <div
         v-if="restoringHistorySessionId"
-        class="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-[30px] bg-white/90 backdrop-blur-sm"
+        class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white/90 backdrop-blur-sm"
       >
         <div class="h-12 w-12 animate-spin rounded-full border-4 border-[#dfe5eb] border-t-[#2e6bd9]" />
         <div class="mt-5 text-base font-semibold text-[#2f4254]">
