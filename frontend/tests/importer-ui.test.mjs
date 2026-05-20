@@ -2037,14 +2037,14 @@ test('builds dry run rows for preview before import execution', () => {
       rowNumber: 2,
       status: 'ready',
       statusLabel: 'Готово',
-      details: 'TITLE: Alice · PHONE: +123456789',
+      details: 'Название / заголовок: Alice · Телефон: +123456789',
     },
     {
       key: '3:ready_update',
       rowNumber: 3,
       status: 'ready_update',
       statusLabel: 'Готово к обновлению',
-      details: 'TITLE: Bob · EMAIL: bob@example.com · Совпадение: Email',
+      details: 'Название / заголовок: Bob · Email: bob@example.com · Совпадение: Email',
     },
     {
       key: '4:skipped_duplicate',
@@ -2166,7 +2166,7 @@ test('builds dedup weakening warning in dry run rows', () => {
       rowNumber: 2,
       status: 'ready',
       statusLabel: 'Готово',
-      details: 'TITLE: Alice · EMAIL: alice@example.com · Неполный поиск дублей: Телефон',
+      details: 'Название / заголовок: Alice · Email: alice@example.com · Неполный поиск дублей: Телефон',
     },
   ])
 })

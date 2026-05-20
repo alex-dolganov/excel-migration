@@ -12,6 +12,9 @@ class ImportReportMetadataTest(SimpleTestCase):
     def test_build_import_result_report_meta_formats_universal_fields_for_supported_entities(self):
         timestamp = datetime(2026, 5, 14, 9, 30, 45, tzinfo=dt_timezone.utc)
         cases = [
+            ("lead", {"TITLE": "Запрос с сайта"}, 601, None, None, "Лид", "Запрос с сайта", "601"),
+            ("lead", {"NAME": "Иван", "LAST_NAME": "Петров"}, 602, None, None, "Лид", "Иван Петров", "602"),
+            ("lead", {"EMAIL": "ivan@example.com"}, 603, None, None, "Лид", "ivan@example.com", "603"),
             ("deal", {"TITLE": "Сделка Альфа"}, 501, None, None, "Сделка", "Сделка Альфа", "501"),
             ("contact", {"NAME": "Анна", "LAST_NAME": "Иванова"}, 701, None, None, "Контакт", "Анна Иванова", "701"),
             ("task", {"TITLE": "Подготовить КП"}, 801, None, None, "Задача", "Подготовить КП", "801"),

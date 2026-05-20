@@ -5,6 +5,7 @@ from b24pysdk.error import BitrixRequestTimeout
 
 MISSING_BITRIX_RECORD_ID_ERROR = "Bitrix24 не подтвердил создание записи: ID не получен."
 BITRIX_UNREACHABLE_ERROR = "Не удалось связаться с Bitrix24. Проверьте доступность портала и повторите импорт."
+BITRIX_OPERATION_TIME_LIMIT_ERROR = "Bitrix24 временно заблокировал метод из-за лимита времени выполнения. Подождите 10 минут и повторите импорт."
 
 
 def _format_timeout_seconds(value) -> str:
@@ -58,6 +59,8 @@ def format_import_error(error) -> str:
     normalized_message = message.lower()
     if "Read timed out" in message:
         return "Bitrix24 не ответил вовремя. Повторите импорт."
+    if "operation time limit" in normalized_message or "operation_time_limit" in normalized_message:
+        return BITRIX_OPERATION_TIME_LIMIT_ERROR
     if any(marker in normalized_message for marker in (
         "failed to resolve",
         "nameresolutionerror",

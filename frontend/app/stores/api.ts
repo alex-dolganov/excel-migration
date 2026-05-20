@@ -324,13 +324,18 @@ export const useApiStore = defineStore(
       })
     }
 
-    const dryRunImportSession = async (sessionId: string): Promise<{ item: Record<string, any> }> => {
+    const dryRunImportSession = async (
+      sessionId: string,
+      options: { mode?: string } = {},
+    ): Promise<{ item: Record<string, any> }> => {
       return await $api(`/api/import-sessions/${sessionId}/dry-run`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${tokenJWT.value}`
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          mode: String(options.mode || '').trim(),
+        }),
       })
     }
 

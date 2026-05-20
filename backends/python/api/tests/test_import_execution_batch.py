@@ -6,10 +6,26 @@ from django.test import SimpleTestCase
 from b24pysdk.error import BitrixRequestTimeout
 import requests
 
-from importer.services.import_execution import _flush_crm_batch, _flush_crm_batch_with_fallback
+from importer.services.import_execution import _bitrix_retry, _flush_crm_batch, _flush_crm_batch_with_fallback
 
 
 class ImportExecutionBatchTest(SimpleTestCase):
+    @patch("importer.services.import_execution.time.sleep")
+    def test_bitrix_retry_waits_and_retries_when_bitrix_blocks_method_by_operation_time(self, sleep):
+        attempts = {"count": 0}
+
+        def flaky_call():
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise RuntimeError("Method is blocked due to operation time limit.")
+            return 907
+
+        result = _bitrix_retry(flaky_call)
+
+        self.assertEqual(result, 907)
+        self.assertEqual(attempts["count"], 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [60, 180])
+
     @patch("importer.services.import_execution.BitrixAPIBatchRequest")
     def test_flush_crm_batch_reads_record_ids_from_list_result(self, bitrix_api_batch_request):
         bitrix_api_batch_request.return_value = SimpleNamespace(

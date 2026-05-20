@@ -401,7 +401,7 @@ function reset() {
 <template>
   <div class="w-full space-y-6">
     <div class="mb-6">
-      <h2 class="text-xl font-bold text-[#314256]">Массовый импорт файлов (С17)</h2>
+      <h2 class="text-xl font-bold text-[#314256]">Массовое добавление файлов</h2>
       <p class="mt-1 text-sm text-[#6f8194]">Прикрепите файл к выбранным CRM-сущностям по фильтру — без Excel-файла.</p>
     </div>
 
@@ -542,11 +542,9 @@ function reset() {
       </div>
 
       <aside class="rounded-[22px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f7fbff_0%,#eef5ff_100%)] p-5">
-        <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Сценарий</div>
         <div class="mt-2 text-lg font-semibold text-[#314256]">Выбор CRM-элементов по фильтру</div>
         <div class="mt-3 space-y-3 text-sm text-[#5b728b]">
-          <p>Сначала отберите нужные записи по полям Bitrix24, затем проверьте превью и только после этого укажите файл и целевое поле.</p>
-          <p>Экран рассчитан на массовую операцию, поэтому оставлен полноширинным без узкой центральной колонки.</p>
+          <p>Отберите нужные записи по полям Bitrix24, проверьте превью, затем укажите файл и целевое поле.</p>
         </div>
       </aside>
     </div>

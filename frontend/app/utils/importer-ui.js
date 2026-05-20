@@ -1403,6 +1403,7 @@ export function buildDedupPayload(settings) {
 }
 
 const IMPORTER_FIELD_LABELS = {
+  // Universal / CRM
   ID: 'Bitrix24 ID',
   TITLE: 'Название / заголовок',
   NAME: 'Имя',
@@ -1412,10 +1413,12 @@ const IMPORTER_FIELD_LABELS = {
   PHONE: 'Телефон',
   WEB: 'Сайт',
   IM: 'Мессенджер',
+  DESCRIPTION: 'Описание',
   OPPORTUNITY: 'Сумма',
   CURRENCY_ID: 'Валюта',
   STAGE_ID: 'Стадия',
   STATUS_ID: 'Статус',
+  STATUS: 'Статус',
   SOURCE_ID: 'Источник',
   TYPE_ID: 'Тип',
   CATEGORY_ID: 'Направление',
@@ -1430,6 +1433,49 @@ const IMPORTER_FIELD_LABELS = {
   COMPANY_ID: 'Компания',
   CONTACT_ID: 'Контакт',
   COMMENTS: 'Комментарий',
+  XML_ID: 'Внешний ID',
+  // Tasks
+  PRIORITY: 'Приоритет',
+  DEADLINE: 'Крайний срок',
+  TAGS: 'Теги',
+  ACCOMPLICES: 'Соисполнители',
+  AUDITORS: 'Наблюдатели',
+  PARENT_ID: 'ID родительской задачи',
+  START_DATE_PLAN: 'Плановая дата начала',
+  END_DATE_PLAN: 'Плановая дата завершения',
+  // Task comment
+  TASK_ID: 'ID задачи',
+  AUTHOR_ID: 'Автор',
+  POST_MESSAGE: 'Комментарий',
+  // Task checklist
+  IS_COMPLETE: 'Выполнено',
+  // Task attachment / CRM files
+  FILE_URL: 'Ссылка на файл',
+  FILE_NAME: 'Имя файла',
+  FIELD_ID: 'Поле Bitrix24 (ID)',
+  // CRM Activity
+  OWNER_TYPE_ID: 'Тип сущности CRM',
+  OWNER_ID: 'ID записи CRM',
+  SUBJECT: 'Тема',
+  START_TIME: 'Дата начала',
+  END_TIME: 'Дата окончания',
+  DIRECTION: 'Направление',
+  COMMUNICATIONS_VALUE: 'Телефон / Email',
+  // CRM Note
+  ENTITY_TYPE: 'Тип сущности CRM',
+  ENTITY_ID: 'ID записи CRM',
+  COMMENT: 'Текст заметки',
+  // Users
+  PERSONAL_PHONE: 'Личный телефон',
+  PERSONAL_MOBILE: 'Мобильный телефон',
+  WORK_PHONE: 'Рабочий телефон',
+  WORK_POSITION: 'Должность',
+  UF_DEPARTMENT: 'Отдел',
+  ACTIVE: 'Активен',
+  // Departments
+  PARENT: 'Родительский отдел (ID)',
+  UF_HEAD: 'Руководитель (ID)',
+  SORT: 'Сортировка',
 }
 
 const IMPORTER_FIELD_TITLE_LABELS = {
@@ -2747,7 +2793,7 @@ function buildFlatDryRunRows(dryRunData) {
     const details = Object.entries(fields)
       .map(([key, value]) => {
         const normalizedValue = flattenFieldValue(value)
-        return normalizedValue ? `${key}: ${normalizedValue}` : ''
+        return normalizedValue ? `${formatImporterFieldLabel(key)}: ${normalizedValue}` : ''
       })
       .filter(Boolean)
       .join(' · ')

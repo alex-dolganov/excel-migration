@@ -98,6 +98,12 @@ BATCH_SIZE = 50
 PROGRESS_SAVE_INTERVAL = _read_positive_int_env("IMPORT_PROGRESS_SAVE_INTERVAL", 100)
 _RATE_LIMIT_KEYWORDS = frozenset(["query_limit_exceeded", "too many requests", "rate limit", "overloaded", "429"])
 _RATE_LIMIT_RETRY_WAITS = [5, 15, 30]
+_OPERATION_TIME_LIMIT_KEYWORDS = frozenset([
+    "operation time limit",
+    "operation_time_limit",
+    "method is blocked due to operation time limit",
+])
+_OPERATION_TIME_LIMIT_RETRY_WAITS = [60, 180, 360]
 
 _CRM_BATCH_CREATE_METHODS = {
     "lead": "crm.lead.add",
@@ -178,6 +184,10 @@ def _is_rate_limit_error(error) -> bool:
     return any(kw in str(error).lower() for kw in _RATE_LIMIT_KEYWORDS)
 
 
+def _is_operation_time_limit_error(error) -> bool:
+    return any(kw in str(error).lower() for kw in _OPERATION_TIME_LIMIT_KEYWORDS)
+
+
 def _is_timeout_error(error) -> bool:
     if isinstance(error, BitrixRequestTimeout):
         return True
@@ -187,14 +197,24 @@ def _is_timeout_error(error) -> bool:
 
 
 def _bitrix_retry(fn):
-    for attempt, wait in enumerate([0] + _RATE_LIMIT_RETRY_WAITS):
-        if wait:
-            time.sleep(wait)
+    attempt = 0
+
+    while True:
         try:
             return fn()
         except Exception as error:
-            if attempt >= len(_RATE_LIMIT_RETRY_WAITS) or not _is_rate_limit_error(error):
+            if _is_operation_time_limit_error(error):
+                retry_waits = _OPERATION_TIME_LIMIT_RETRY_WAITS
+            elif _is_rate_limit_error(error):
+                retry_waits = _RATE_LIMIT_RETRY_WAITS
+            else:
                 raise
+
+            if attempt >= len(retry_waits):
+                raise
+
+            time.sleep(retry_waits[attempt])
+            attempt += 1
 
 
 def _flush_crm_batch_with_fallback(account, entity_type: str, pending_batch: list) -> tuple:
@@ -1338,10 +1358,12 @@ def build_linked_duplicate_decision_summary(linked_actions: dict, entity_type: s
             continue
 
         meta = linked_action.get("meta", {})
-        if isinstance(meta, dict) and meta:
-            linked_meta[linked_entity] = meta
 
         record_id = normalize_record_id(linked_action.get("record_id")) or linked_action.get("record_id")
+        linked_entity_meta = dict(meta) if isinstance(meta, dict) else {}
+        if linked_entity_meta:
+            linked_meta[linked_entity] = linked_entity_meta
+
         if record_id is not None and (
             linked_action.get("mode") in {"pending_decision", "skip_row"}
             or (isinstance(meta, dict) and meta.get("duplicate_match_fields"))
@@ -1382,6 +1404,20 @@ def build_linked_duplicate_decision_summary(linked_actions: dict, entity_type: s
     if linked_meta:
         result["linked"] = linked_meta
     return result
+
+
+def resolve_linked_row_decision(per_row_decisions: dict | None, row_number: int | str, linked_entity_type: str) -> str:
+    if not isinstance(per_row_decisions, dict):
+        return ""
+
+    raw_decision = per_row_decisions.get(str(row_number))
+    normalized_entity_type = str(linked_entity_type or "").strip().lower()
+    if isinstance(raw_decision, dict):
+        entity_decision = str(raw_decision.get(normalized_entity_type, "")).strip().lower()
+        return entity_decision if entity_decision in {"create", "update", "skip"} else ""
+
+    normalized_decision = str(raw_decision or "").strip().lower()
+    return normalized_decision if normalized_decision in {"create", "update", "skip"} else ""
 
 
 def build_linked_result_fields(linked_payload: dict, entity_type: str = LINKED_COMPANY_CONTACT_ENTITY_TYPE) -> dict:
@@ -1855,6 +1891,7 @@ def execute_linked_dry_run(
     validation_summary: dict,
     fields: list[dict],
     dedup_settings: dict,
+    should_cancel=None,
     default_field_values: dict | None = None,
     progress_callback=None,
 ) -> dict:
@@ -1867,7 +1904,9 @@ def execute_linked_dry_run(
     ready_update_rows = 0
     skipped_rows = 0
     pending_decision_rows = 0
+    cancelled_rows = 0
     results = []
+    was_cancelled = False
     parent_entity_type = get_linked_parent_entity_type(entity_type)
     child_entity_type = get_linked_child_entity_type(entity_type)
 
@@ -1887,6 +1926,27 @@ def execute_linked_dry_run(
         row = rows[row_index] if row_index < len(rows) else []
         if not row_has_values(row):
             continue
+
+        if callable(should_cancel) and should_cancel():
+            was_cancelled = True
+            for remaining_index in range(row_index, len(row_numbers)):
+                remaining_row_number = row_numbers[remaining_index]
+                if remaining_row_number < data_start_row:
+                    continue
+
+                remaining_row = rows[remaining_index] if remaining_index < len(rows) else []
+                if not row_has_values(remaining_row):
+                    continue
+
+                cancelled_rows += 1
+                results.append(
+                    {
+                        "row_number": remaining_row_number,
+                        "status": "cancelled",
+                        "error": "Dry run was cancelled before row execution",
+                    }
+                )
+            break
 
         checked_rows += 1
 
@@ -2001,6 +2061,9 @@ def execute_linked_dry_run(
         "ready_update_rows": ready_update_rows,
         "skipped_rows": skipped_rows,
         "pending_decision_rows": pending_decision_rows,
+        "cancelled": was_cancelled,
+        "cancelled_rows": cancelled_rows,
+        "remaining_rows": cancelled_rows,
         "results": results,
     }
 
@@ -2125,9 +2188,8 @@ def execute_linked_import(
             parent_payload["XML_ID"] = ext_key
         child_payload = linked_payload.get(child_entity_type, {})
         decisions = per_row_decisions if isinstance(per_row_decisions, dict) else {}
-        row_decision = str(decisions.get(str(row_number), "")).strip().lower()
-        if row_decision not in {"create", "update", "skip"}:
-            row_decision = ""
+        parent_row_decision = resolve_linked_row_decision(decisions, row_number, parent_entity_type)
+        child_row_decision = resolve_linked_row_decision(decisions, row_number, child_entity_type)
 
         try:
             if ext_key and ext_key in parent_ext_key_cache:
@@ -2135,13 +2197,13 @@ def execute_linked_import(
             elif parent_payload:
                 parent_action = _bitrix_retry(lambda: resolve_linked_record_action_with_decision(
                     account, parent_entity_type, parent_payload, dedup_settings.get(parent_entity_type, {}),
-                    row_decision,
+                    parent_row_decision,
                 ))
             else:
                 parent_action = {"mode": "skip_payload", "record_id": None, "meta": {}}
             child_action = _bitrix_retry(lambda: resolve_linked_record_action_with_decision(
                 account, child_entity_type, child_payload, dedup_settings.get(child_entity_type, {}),
-                row_decision,
+                child_row_decision,
             )) if child_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
         except Exception as error:
             failed_rows += 1
@@ -2335,6 +2397,7 @@ def execute_dry_run(
     validation_summary: dict,
     fields: list[dict],
     dedup_settings=None,
+    should_cancel=None,
     default_field_values: dict | None = None,
     progress_callback=None,
     entity_config: dict | None = None,
@@ -2351,6 +2414,7 @@ def execute_dry_run(
             validation_summary=validation_summary,
             fields=fields,
             dedup_settings=normalize_linked_dedup_settings(dedup_settings, entity_type=entity_type),
+            should_cancel=should_cancel,
             default_field_values=default_field_values,
             progress_callback=progress_callback,
         )
@@ -2366,7 +2430,9 @@ def execute_dry_run(
     ready_update_rows = 0
     skipped_rows = 0
     pending_decision_rows = 0
+    cancelled_rows = 0
     results = []
+    was_cancelled = False
 
     for row_index, row_number in enumerate(row_numbers):
         if row_number < data_start_row:
@@ -2375,6 +2441,27 @@ def execute_dry_run(
         row = rows[row_index] if row_index < len(rows) else []
         if not row_has_values(row):
             continue
+
+        if callable(should_cancel) and should_cancel():
+            was_cancelled = True
+            for remaining_index in range(row_index, len(row_numbers)):
+                remaining_row_number = row_numbers[remaining_index]
+                if remaining_row_number < data_start_row:
+                    continue
+
+                remaining_row = rows[remaining_index] if remaining_index < len(rows) else []
+                if not row_has_values(remaining_row):
+                    continue
+
+                cancelled_rows += 1
+                results.append(
+                    {
+                        "row_number": remaining_row_number,
+                        "status": "cancelled",
+                        "error": "Dry run was cancelled before row execution",
+                    }
+                )
+            break
 
         checked_rows += 1
 
@@ -2510,6 +2597,9 @@ def execute_dry_run(
         "ready_update_rows": ready_update_rows,
         "skipped_rows": skipped_rows,
         "pending_decision_rows": pending_decision_rows,
+        "cancelled": was_cancelled,
+        "cancelled_rows": cancelled_rows,
+        "remaining_rows": cancelled_rows,
         "results": results,
     }
 

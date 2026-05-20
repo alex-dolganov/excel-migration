@@ -149,7 +149,15 @@ def build_report_title(
     if get_linked_import_schema(entity_type) is not None:
         return _build_linked_title(entity_type, linked_records=linked_records, linked_payload=linked_payload)
 
-    if entity_type in {"lead", "company", "deal", "task", "task_checklist_item", SMART_PROCESS_ENTITY_TYPE}:
+    if entity_type == "lead":
+        return _first_non_empty(
+            fields.get("TITLE"),
+            _build_person_title(fields),
+            fields.get("EMAIL"),
+            fields.get("PHONE"),
+        )
+
+    if entity_type in {"company", "deal", "task", "task_checklist_item", SMART_PROCESS_ENTITY_TYPE}:
         return _first_non_empty(fields.get("TITLE"))
 
     if entity_type in {"contact", "user"}:

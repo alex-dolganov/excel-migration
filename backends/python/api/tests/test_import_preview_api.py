@@ -14,7 +14,7 @@ from django.urls import reverse
 from importer.models import ImportSession
 
 
-def build_xlsx_with_sheets(sheet_payloads):
+def build_xlsx_with_sheets(sheet_payloads, *, worksheet_target_template="worksheets/sheet{index}.xml"):
     workbook_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -34,8 +34,9 @@ def build_xlsx_with_sheets(sheet_payloads):
 </Relationships>
 """.format(
         relationships="\n".join(
-            '  <Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{index}.xml"/>'.format(
-                index=index
+            '  <Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="{target}"/>'.format(
+                index=index,
+                target=worksheet_target_template.format(index=index),
             )
             for index, (_sheet_name, _rows) in enumerate(sheet_payloads, start=1)
         )
@@ -284,6 +285,51 @@ class ImportPreviewApiTest(TestCase):
         self.assertEqual(
             session.preview_data["preview_rows"],
             [["Name", "Phone"], ["Alice", "+123"]],
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_preview_reads_xlsx_when_sheet_relationship_target_is_absolute(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+        )
+
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.COMPANY,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.UPLOADED,
+            original_filename="companies.xlsx",
+        )
+        session.stored_file.save(
+            "companies.xlsx",
+            SimpleUploadedFile(
+                "companies.xlsx",
+                build_xlsx_with_sheets(
+                    [
+                        ("Компании", [["Название", "Телефон"], ["Acme", "+123"]]),
+                    ],
+                    worksheet_target_template="/xl/worksheets/sheet{index}.xml",
+                ),
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item"]["sheet_names"], ["Компании"])
+        self.assertEqual(response.json()["item"]["selected_sheet_name"], "Компании")
+        self.assertEqual(response.json()["item"]["headers"], ["Название", "Телефон"])
+        self.assertEqual(
+            response.json()["item"]["preview_rows"],
+            [["Название", "Телефон"], ["Acme", "+123"]],
         )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")

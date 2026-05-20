@@ -6,6 +6,12 @@ from importer.services.error_messages import BITRIX_UNREACHABLE_ERROR, format_im
 
 
 class ErrorMessagesTest(SimpleTestCase):
+    def test_format_import_error_explains_operation_time_limit_in_russian(self):
+        self.assertEqual(
+            format_import_error("Method is blocked due to operation time limit."),
+            "Bitrix24 временно заблокировал метод из-за лимита времени выполнения. Подождите 10 минут и повторите импорт.",
+        )
+
     def test_format_import_error_uses_error_description_from_dict(self):
         self.assertEqual(
             format_import_error(

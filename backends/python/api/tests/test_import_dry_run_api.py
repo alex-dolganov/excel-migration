@@ -545,3 +545,236 @@ class ImportDryRunApiTest(TestCase):
         self.assertEqual(response.status_code, 200, response.json())
         self.assertEqual(response.json()["item"]["ready_rows"], 2)
         self.assertEqual(account.list_calls, [{"filter": {"PHONE": "+123456789"}, "select": ["ID"]}])
+
+    @patch("importer.views.SAMPLE_PREVIEW_ROW_LIMIT", 2)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_dry_run_sample_preview_limits_rows_and_marks_result_as_partial(self, get_from_jwt_token):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session_with_rows(
+            [
+                ["Lead title", "Phone"],
+                ["Alice", "+123456789"],
+                ["Bob", "+987654321"],
+                ["Carol", "+111111111"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+
+        response = self.client.post(
+            reverse("importer:session-dry-run", kwargs={"session_id": session.id}),
+            data={"mode": "sample_preview"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["mode"], "sample_preview")
+        self.assertEqual(response.json()["item"]["is_partial"], True)
+        self.assertEqual(response.json()["item"]["sample_limit"], 2)
+        self.assertEqual(response.json()["item"]["full_total_rows"], 3)
+        self.assertEqual(response.json()["item"]["checked_rows"], 2)
+        self.assertEqual(
+            response.json()["item"]["results"],
+            [
+                {
+                    "row_number": 2,
+                    "status": "ready",
+                    "fields": {
+                        "TITLE": "Alice",
+                        "PHONE": [
+                            {
+                                "VALUE": "+123456789",
+                                "VALUE_TYPE": "WORK",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "row_number": 3,
+                    "status": "ready",
+                    "fields": {
+                        "TITLE": "Bob",
+                        "PHONE": [
+                            {
+                                "VALUE": "+987654321",
+                                "VALUE_TYPE": "WORK",
+                            }
+                        ],
+                    },
+                },
+            ],
+        )
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ImportSession.Status.VALIDATED)
+        self.assertEqual(session.summary["sample_preview"]["mode"], "sample_preview")
+        self.assertEqual(session.summary["sample_preview"]["checked_rows"], 2)
+        self.assertEqual(session.summary["sample_preview"]["is_partial"], True)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_dry_run_sample_preview_does_not_pause_for_per_duplicate_decisions(self, get_from_jwt_token):
+        account = self.create_account(
+            duplicates_by_filter={
+                (("PHONE", "+123456789"),): [{"ID": 901}],
+            }
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session_with_rows(
+            [
+                ["Lead title", "Phone"],
+                ["Alice", "+123456789"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+        session.refresh_from_db()
+        session.import_settings = {
+            **session.import_settings,
+            "dedup": {
+                "strategy": "ask",
+                "fields": ["PHONE"],
+            },
+        }
+        session.save(update_fields=["import_settings", "updated_at"])
+
+        response = self.client.post(
+            reverse("importer:session-dry-run", kwargs={"session_id": session.id}),
+            data={"mode": "sample_preview"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["mode"], "sample_preview")
+        self.assertEqual(response.json()["item"]["pending_decision_rows"], 0)
+        self.assertEqual(response.json()["item"]["ready_rows"], 1)
+        self.assertEqual(
+            response.json()["item"]["results"],
+            [
+                {
+                    "row_number": 2,
+                    "status": "ready",
+                    "fields": {
+                        "TITLE": "Alice",
+                        "PHONE": [
+                            {
+                                "VALUE": "+123456789",
+                                "VALUE_TYPE": "WORK",
+                            }
+                        ],
+                    },
+                },
+            ],
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch("importer.views.enqueue_import_session_dry_run")
+    @patch.dict("os.environ", {"ENABLE_RABBITMQ": "1", "CELERY_BROKER_URL": "amqp://guest:guest@rabbitmq:5672//"}, clear=False)
+    def test_preimport_scan_queue_uses_full_total_rows_after_sample_preview(self, enqueue_import_session_dry_run, get_from_jwt_token):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session_with_rows(
+            [
+                ["Lead title", "Phone"],
+                ["Alice", "+123456789"],
+                ["Bob", "+987654321"],
+                ["Carol", "+111111111"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+        session.total_rows = 1
+        session.save(update_fields=["total_rows", "updated_at"])
+
+        response = self.client.post(
+            reverse("importer:session-dry-run", kwargs={"session_id": session.id}),
+            data={"mode": "preimport_scan"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 202, response.json())
+        enqueue_import_session_dry_run.assert_called_once()
+
+        session.refresh_from_db()
+        self.assertEqual(session.total_rows, 3)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch("importer.services.import_execution.find_existing_record_cached")
+    def test_dry_run_stops_when_session_was_cancelled_during_execution(
+        self,
+        find_existing_record_cached,
+        get_from_jwt_token,
+    ):
+        account = self.create_account()
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_session_with_rows(
+            [
+                ["Lead title", "Phone"],
+                ["Alice", "+123456789"],
+                ["Bob", "+987654321"],
+            ]
+        )
+        self.prepare_session(session, validate=True)
+
+        first_lookup = {"done": False}
+
+        def find_existing_record_cached_side_effect(*args, **kwargs):
+            if not first_lookup["done"]:
+                first_lookup["done"] = True
+                running_session = ImportSession.objects.get(id=session.id)
+                running_session.status = ImportSession.Status.CANCELLED
+                running_session.save(update_fields=["status", "updated_at"])
+            return None
+
+        find_existing_record_cached.side_effect = find_existing_record_cached_side_effect
+
+        response = self.client.post(
+            reverse("importer:session-dry-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["status"], ImportSession.Status.CANCELLED)
+        self.assertEqual(response.json()["item"]["checked_rows"], 1)
+        self.assertEqual(response.json()["item"]["ready_rows"], 1)
+        self.assertEqual(response.json()["item"]["cancelled"], True)
+        self.assertEqual(response.json()["item"]["cancelled_rows"], 1)
+        self.assertEqual(response.json()["item"]["remaining_rows"], 1)
+        self.assertEqual(
+            response.json()["item"]["results"],
+            [
+                {
+                    "row_number": 2,
+                    "status": "ready",
+                    "fields": {
+                        "TITLE": "Alice",
+                        "PHONE": [
+                            {
+                                "VALUE": "+123456789",
+                                "VALUE_TYPE": "WORK",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "row_number": 3,
+                    "status": "cancelled",
+                    "error": "Dry run was cancelled before row execution",
+                },
+            ],
+        )
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ImportSession.Status.CANCELLED)
+        self.assertEqual(session.processed_rows, 1)
+        self.assertEqual(session.successful_rows, 1)
+        self.assertEqual(session.failed_rows, 0)
+        self.assertEqual(session.summary["dry_run"]["cancelled"], True)
+        self.assertEqual(session.summary["dry_run"]["cancelled_rows"], 1)
+        self.assertEqual(session.summary["dry_run"]["remaining_rows"], 1)
