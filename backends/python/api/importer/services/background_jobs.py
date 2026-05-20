@@ -77,10 +77,14 @@ def _send_import_completion_notify(session: ImportSession, account, *, result: d
         logging.warning("Failed to send import completion notify: %s", exc)
 
 
-def enqueue_import_session_run(session: ImportSession, account) -> str:
+def enqueue_import_session_run(session: ImportSession, account, *, per_row_decisions: dict | None = None) -> str:
     from importer.tasks import run_import_session_task
 
-    task = run_import_session_task.delay(str(session.id), str(getattr(account, "id", "")))
+    task = run_import_session_task.delay(
+        str(session.id),
+        str(getattr(account, "id", "")),
+        per_row_decisions,
+    )
     session.status = ImportSession.Status.RUNNING
     session.last_error = ""
     _update_session_job_state(session, mode="run", state="queued", task_id=str(getattr(task, "id", "")))
@@ -88,13 +92,13 @@ def enqueue_import_session_run(session: ImportSession, account) -> str:
     return str(getattr(task, "id", ""))
 
 
-def enqueue_import_session_dry_run(session: ImportSession, account) -> str:
+def enqueue_import_session_dry_run(session: ImportSession, account, *, mode: str = "preimport_scan") -> str:
     from importer.tasks import dry_run_import_session_task
 
     task = dry_run_import_session_task.delay(str(session.id), str(getattr(account, "id", "")))
     session.status = ImportSession.Status.RUNNING
     session.last_error = ""
-    _update_session_job_state(session, mode="dry_run", state="queued", task_id=str(getattr(task, "id", "")))
+    _update_session_job_state(session, mode=str(mode or "preimport_scan").strip(), state="queued", task_id=str(getattr(task, "id", "")))
     session.save(update_fields=["status", "summary", "last_error", "updated_at"])
     return str(getattr(task, "id", ""))
 
@@ -173,7 +177,7 @@ def _load_background_context(session_id: str, account_id: str) -> tuple[ImportSe
     return session, account
 
 
-def execute_import_session_run_background(*, session_id: str, account_id: str):
+def execute_import_session_run_background(*, session_id: str, account_id: str, per_row_decisions: dict | None = None):
     from importer.views import execute_import_session_run_now
 
     session, account = _load_background_context(session_id, account_id)
@@ -185,7 +189,11 @@ def execute_import_session_run_background(*, session_id: str, account_id: str):
     _update_session_job_state(session, mode="run", state="running")
     session.save(update_fields=["summary", "updated_at"])
     try:
-        result = execute_import_session_run_now(session=session, account=account)
+        result = execute_import_session_run_now(
+            session=session,
+            account=account,
+            per_row_decisions=per_row_decisions,
+        )
     except Exception as error:
         error_message = safe_format_import_error(error)
         session.refresh_from_db()
@@ -209,25 +217,32 @@ def execute_import_session_dry_run_background(*, session_id: str, account_id: st
     from importer.views import execute_import_session_dry_run_now
 
     session, account = _load_background_context(session_id, account_id)
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    job = summary.get("job") if isinstance(summary.get("job"), dict) else {}
+    job_mode = str(job.get("mode") or "preimport_scan").strip() or "preimport_scan"
     if session.status == ImportSession.Status.CANCELLED:
-        _update_session_job_state(session, mode="dry_run", state="cancelled")
+        _update_session_job_state(session, mode=job_mode, state="cancelled")
         session.save(update_fields=["summary", "updated_at"])
         return {"session_id": str(session.id), "status": session.status}
 
-    _update_session_job_state(session, mode="dry_run", state="running")
+    _update_session_job_state(session, mode=job_mode, state="running")
     session.save(update_fields=["summary", "updated_at"])
     try:
-        result = execute_import_session_dry_run_now(session=session, account=account)
+        result = execute_import_session_dry_run_now(session=session, account=account, mode=job_mode)
     except Exception as error:
         error_message = safe_format_import_error(error)
         session.refresh_from_db()
         session.status = ImportSession.Status.FAILED
         session.last_error = error_message
-        _update_session_job_state(session, mode="dry_run", state="failed", error=error_message)
+        _update_session_job_state(session, mode=job_mode, state="failed", error=error_message)
         session.save(update_fields=["status", "last_error", "summary", "updated_at"])
         raise
     session.refresh_from_db()
-    _update_session_job_state(session, mode="dry_run", state="completed")
+    _update_session_job_state(
+        session,
+        mode=job_mode,
+        state="cancelled" if session.status == ImportSession.Status.CANCELLED else "completed",
+    )
     session.save(update_fields=["summary", "updated_at"])
     return result
 

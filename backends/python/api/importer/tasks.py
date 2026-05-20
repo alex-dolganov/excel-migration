@@ -13,8 +13,12 @@ from .services.background_jobs import (
 
 
 @celery_app.task(name="importer.run_import_session")
-def run_import_session_task(session_id: str, account_id: str):
-    return execute_import_session_run_background(session_id=session_id, account_id=account_id)
+def run_import_session_task(session_id: str, account_id: str, per_row_decisions: dict | None = None):
+    return execute_import_session_run_background(
+        session_id=session_id,
+        account_id=account_id,
+        per_row_decisions=per_row_decisions,
+    )
 
 
 @celery_app.task(name="importer.dry_run_import_session")

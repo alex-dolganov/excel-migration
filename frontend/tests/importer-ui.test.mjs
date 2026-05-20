@@ -34,6 +34,7 @@ import {
   buildImportRunStatusFilters,
   buildImportRunRetryState,
   buildDryRunSummaryFromSessionSnapshot,
+  buildResolvedDryRunSummary,
   buildLinkedImportRunSummary,
   shouldWaitForDryRunExecutionSnapshot,
   shouldWaitForImportExecutionSnapshot,
@@ -844,7 +845,7 @@ test('builds task reference guidance hints for checklist and parent task fields'
     multiple: false,
   }), [
     'Укажите Bitrix24 ID компании, чтобы привязать запись к существующей компании.',
-    'Если у вас есть только название компании, используйте сценарий «Компания + Контакт».',
+    'Если у вас есть только название компании, используйте тип импорта «Компания + Контакт».',
   ])
 })
 
@@ -868,7 +869,7 @@ test('builds scenario guide for contact import with explicit company linking rul
     highlights: [
       'Название компании в обычном импорте контактов не создаёт связь автоматически.',
       'Для привязки к существующей компании используйте поле COMPANY_ID и передавайте Bitrix24 ID компании.',
-      'Если в исходном файле есть только название компании, используйте сценарий «Компания + Контакт».',
+      'Если в исходном файле есть только название компании, используйте тип импорта «Компания + Контакт».',
     ],
     exampleColumns: ['NAME', 'LAST_NAME', 'PHONE', 'EMAIL', 'COMPANY_ID'],
   })
@@ -1221,6 +1222,34 @@ test('builds dedup payload with supported strategy and normalized fields', () =>
   })
 })
 
+test('builds nested dedup payload for linked imports without flattening entity rules', () => {
+  const payload = buildDedupPayload({
+    company: {
+      strategy: 'update',
+      fields: ['TITLE'],
+      condition: 'all',
+    },
+    contact: {
+      strategy: 'skip',
+      fields: ['EMAIL'],
+      condition: 'any',
+    },
+  })
+
+  assert.deepEqual(payload, {
+    company: {
+      strategy: 'update',
+      fields: ['TITLE'],
+      condition: 'all',
+    },
+    contact: {
+      strategy: 'skip',
+      fields: ['EMAIL'],
+      condition: 'any',
+    },
+  })
+})
+
 test('builds dedup payload for smart process fields without uppercasing camelCase ids', () => {
   const payload = buildDedupPayload({
     strategy: 'update',
@@ -1480,6 +1509,99 @@ test('builds clearer linked import result rows with company and contact details'
       title: 'ООО Альфа / Алиса Иванова',
       recordId: 'Компания 71 · Контакт 73',
       details: 'Компания: ООО Альфа · ID 71 · Контакт: Алиса Иванова · ID 73',
+    },
+  ])
+})
+
+test('builds grouped linked import result rows with primary entity first and nested linked statuses', () => {
+  const rows = buildImportRunRows({
+    results: [
+      {
+        row_number: 2,
+        status: 'created',
+        linked_records: {
+          deal: {
+            id: 401,
+            title: 'Сделка 1',
+            status: 'created',
+          },
+          contact: {
+            id: 701,
+            title: 'Алиса Иванова',
+            status: 'created',
+          },
+        },
+      },
+      {
+        row_number: 3,
+        status: 'updated',
+        linked_records: {
+          deal: {
+            id: 401,
+            title: 'Сделка 1',
+            status: 'existing',
+          },
+          contact: {
+            id: 702,
+            title: 'Борис Петров',
+            status: 'created',
+          },
+        },
+      },
+    ],
+  }, 'linked_deal_contact')
+
+  assert.deepEqual(rows, [
+    {
+      key: 'deal:401',
+      rowNumber: 2,
+      rowNumberLabel: '2, 3',
+      status: 'created',
+      statusLabel: 'Создано',
+      createdAt: '—',
+      entityLabel: 'Сделка',
+      title: 'Сделка 1',
+      recordId: '401',
+      details: '—',
+      hasProblem: false,
+      hasDedupRisk: false,
+      entityTree: {
+        primary: {
+          key: 'deal:401:primary',
+          entityId: 'deal',
+          entityLabel: 'Сделка',
+          title: 'Сделка 1',
+          recordId: '401',
+          status: 'created',
+          statusLabel: 'Создано',
+          rowNumbers: [2, 3],
+          details: '',
+        },
+        linkedItems: [
+          {
+            key: 'deal:401:contact:701:0',
+            entityId: 'contact',
+            entityLabel: 'Контакт',
+            title: 'Алиса Иванова',
+            recordId: '701',
+            status: 'created',
+            statusLabel: 'Создано',
+            rowNumbers: [2],
+            details: '',
+          },
+          {
+            key: 'deal:401:contact:702:1',
+            entityId: 'contact',
+            entityLabel: 'Контакт',
+            title: 'Борис Петров',
+            recordId: '702',
+            status: 'created',
+            statusLabel: 'Создано',
+            rowNumbers: [3],
+            details: '',
+          },
+        ],
+      },
     },
   ])
 })
@@ -1941,6 +2063,88 @@ test('builds dry run rows for preview before import execution', () => {
   ])
 })
 
+test('builds grouped linked dry run rows with primary entity first and nested linked statuses', () => {
+  const rows = buildDryRunRows({
+    results: [
+      {
+        row_number: 2,
+        status: 'ready',
+        fields: {
+          DEAL__EXTERNAL_KEY: 'DEAL-1',
+          DEAL__TITLE: 'Сделка 1',
+          CONTACT__NAME: 'Алиса',
+          CONTACT__LAST_NAME: 'Иванова',
+          CONTACT__EMAIL: 'alice@example.com',
+        },
+      },
+      {
+        row_number: 3,
+        status: 'ready_update',
+        fields: {
+          DEAL__EXTERNAL_KEY: 'DEAL-1',
+          DEAL__TITLE: 'Сделка 1',
+          CONTACT__NAME: 'Борис',
+          CONTACT__LAST_NAME: 'Петров',
+          CONTACT__EMAIL: 'boris@example.com',
+        },
+        linked: {
+          contact: {
+            duplicate_match_fields: ['EMAIL'],
+          },
+        },
+      },
+    ],
+  }, 'linked_deal_contact')
+
+  assert.deepEqual(rows, [
+    {
+      key: 'deal:DEAL-1',
+      rowNumber: 2,
+      rowNumberLabel: '2, 3',
+      status: 'ready',
+      statusLabel: 'Готово',
+      details: '—',
+      entityTree: {
+        primary: {
+          key: 'deal:DEAL-1:primary',
+          entityId: 'deal',
+          entityLabel: 'Сделка',
+          title: 'Сделка 1',
+          recordId: '—',
+          status: 'ready',
+          statusLabel: 'Готово',
+          rowNumbers: [2, 3],
+          details: '',
+        },
+        linkedItems: [
+          {
+            key: 'deal:DEAL-1:contact:alice@example.com:0',
+            entityId: 'contact',
+            entityLabel: 'Контакт',
+            title: 'Алиса Иванова',
+            recordId: '—',
+            status: 'ready',
+            statusLabel: 'Готово',
+            rowNumbers: [2],
+            details: '',
+          },
+          {
+            key: 'deal:DEAL-1:contact:boris@example.com:1',
+            entityId: 'contact',
+            entityLabel: 'Контакт',
+            title: 'Борис Петров',
+            recordId: '—',
+            status: 'ready_update',
+            statusLabel: 'Готово к обновлению',
+            rowNumbers: [3],
+            details: '',
+          },
+        ],
+      },
+    },
+  ])
+})
+
 test('builds dedup weakening warning in dry run rows', () => {
   const rows = buildDryRunRows({
     results: [
@@ -2065,7 +2269,16 @@ test('builds recent session rows for import history panel', () => {
       resultLabel: 'Успех',
       resultTone: 'success',
       actionLabel: 'Открыть',
-      counters: 'Созд. 6 · Обн. 2 · Проп. 1 · Ош. 1',
+      counters: {
+        created: 6,
+        updated: 2,
+        skipped: 1,
+        failed: 1,
+        total: 0,
+        hasData: true,
+      },
+      sourceFormat: 'xlsx',
+      sourceFormatLabel: 'Excel',
       updatedAt: '2026-05-05T18:00:00+00:00',
       updatedAtLabel: '05.05.2026 18:00',
     },
@@ -2078,7 +2291,16 @@ test('builds recent session rows for import history panel', () => {
       resultLabel: 'Успех',
       resultTone: 'success',
       actionLabel: 'Открыть',
-      counters: '3 / 0',
+      counters: {
+        created: 3,
+        updated: 0,
+        skipped: 0,
+        failed: 0,
+        total: 3,
+        hasData: true,
+      },
+      sourceFormat: 'xlsx',
+      sourceFormatLabel: 'Excel',
       updatedAt: '2026-05-05T18:10:00+00:00',
       updatedAtLabel: '05.05.2026 18:10',
     },
@@ -2292,6 +2514,51 @@ test('keeps waiting for queued dry run snapshot while background check is active
       },
     },
   }), false)
+})
+
+test('resolves pending dry run rows using duplicate decisions', () => {
+  assert.deepEqual(buildResolvedDryRunSummary({
+    session_id: 'session-dry-run-ask',
+    status: 'validated',
+    checked_rows: 4,
+    ready_rows: 1,
+    ready_create_rows: 1,
+    ready_update_rows: 0,
+    skipped_rows: 0,
+    pending_decision_rows: 3,
+    results: [
+      { row_number: 2, status: 'ready', fields: { TITLE: 'Alice' } },
+      { row_number: 3, status: 'pending_decision', record_id: 901, duplicate_match_fields: ['PHONE'], fields: { TITLE: 'Bob' } },
+      { row_number: 4, status: 'pending_decision', record_id: 902, duplicate_match_fields: ['EMAIL'], fields: { TITLE: 'Carol' } },
+      { row_number: 5, status: 'pending_decision', record_id: 903, duplicate_match_fields: ['TITLE'], fields: { TITLE: 'Dave' } },
+    ],
+  }, {
+    3: 'update',
+    4: 'skip',
+    5: 'create',
+  }), {
+    session_id: 'session-dry-run-ask',
+    status: 'validated',
+    checked_rows: 4,
+    ready_rows: 3,
+    ready_create_rows: 2,
+    ready_update_rows: 1,
+    skipped_rows: 1,
+    pending_decision_rows: 0,
+    results: [
+      { row_number: 2, status: 'ready', fields: { TITLE: 'Alice' } },
+      { row_number: 3, status: 'ready_update', record_id: 901, duplicate_match_fields: ['PHONE'], fields: { TITLE: 'Bob' } },
+      {
+        row_number: 4,
+        status: 'skipped_duplicate',
+        record_id: 902,
+        duplicate_match_fields: ['EMAIL'],
+        fields: { TITLE: 'Carol' },
+        error: 'Duplicate skipped by user decision',
+      },
+      { row_number: 5, status: 'ready', record_id: 903, duplicate_match_fields: ['TITLE'], fields: { TITLE: 'Dave' } },
+    ],
+  })
 })
 
 test('builds collapsed state for recent import history panel', () => {
@@ -2628,8 +2895,45 @@ test('final step renders compact linked import summary with paging and csv fallb
   assert.equal(importerWorkbenchSource.includes('Показываем по 5 элементов на страницу, чтобы экран не перегружался.'), false)
   assert.equal(
     importerWorkbenchSource.includes('v-if="!isLinkedCompanyContactImport || !linkedImportRunSummary.hasSummary"'),
-    true,
+    false,
   )
+  assert.equal(importerWorkbenchSource.includes('hasLinkedEntityTree(row.original)'), true)
+})
+
+test('dry run and import result tables prioritize bitrix payload column and remove standalone status column', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const dryRunStart = importerWorkbenchSource.indexOf('const dryRunTableColumns = computed(() => [')
+  const dryRunEnd = importerWorkbenchSource.indexOf('])\n\nwatch(maxAvailableStep', dryRunStart)
+  const importRunStart = importerWorkbenchSource.indexOf('const importRunTableColumns = computed(() => [')
+  const importRunEnd = importerWorkbenchSource.indexOf('const dryRunTableColumns = computed(() => [', importRunStart)
+  const dryRunSource = importerWorkbenchSource.slice(dryRunStart, dryRunEnd)
+  const importRunSource = importerWorkbenchSource.slice(importRunStart, importRunEnd)
+
+  assert.equal(dryRunSource.indexOf("accessorKey: 'details'") < dryRunSource.indexOf("accessorKey: 'rowNumber'"), true)
+  assert.equal(importRunSource.indexOf("accessorKey: 'details'") < importRunSource.indexOf("accessorKey: 'rowNumber'"), true)
+  assert.equal(dryRunSource.includes("accessorKey: 'statusLabel'"), false)
+  assert.equal(importRunSource.includes("accessorKey: 'statusLabel'"), false)
+  assert.equal(importRunSource.includes("accessorKey: 'createdAt'"), false)
+  assert.equal(importRunSource.includes("accessorKey: 'entityLabel'"), false)
+  assert.equal(importRunSource.includes("accessorKey: 'title'"), false)
+  assert.equal(importRunSource.includes("accessorKey: 'recordId'"), false)
+})
+
+test('step 7 collapses the test import table into a spoiler above the final import table', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const stepSevenStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 7"')
+  const stepSevenSource = importerWorkbenchSource.slice(stepSevenStart)
+
+  assert.equal(importerWorkbenchSource.includes('const isStepSevenDryRunExpanded = ref(false)'), true)
+  assert.equal(stepSevenSource.includes('Результат тестового импорта'), true)
+  assert.equal(stepSevenSource.includes('isStepSevenDryRunExpanded'), true)
+  assert.equal(stepSevenSource.includes('Таблица тестового импорта'), false)
 })
 
 test('step 1 places choose file button between file and template blocks', () => {
@@ -2805,7 +3109,7 @@ test('dedup step can be skipped without enabling duplicate checks', () => {
   assert.equal(importerWorkbenchSource.includes('label="Пропустить шаг"'), true)
 })
 
-test('skip dedup step disables automatic dry run only for explicit top-right skip action', () => {
+test('skip dedup step switches to create strategy and starts duplicate-check flow immediately', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
     'utf8',
@@ -2813,25 +3117,27 @@ test('skip dedup step disables automatic dry run only for explicit top-right ski
 
   assert.equal(importerWorkbenchSource.includes('const skippedDedupStep = ref(false)'), true)
   assert.equal(importerWorkbenchSource.includes('skippedDedupStep.value = true'), true)
-  assert.equal(
-    importerWorkbenchSource.includes("if (isDirectCrmEntityImport.value && dedupStrategy.value === 'create' && !dryRunData.value && !skippedDedupStep.value)"),
-    true,
-  )
+  assert.equal(importerWorkbenchSource.includes("dedupStrategy.value = 'create'"), true)
+  assert.equal(importerWorkbenchSource.includes("await runDedupCheck({ skippedDedup: true })"), true)
 })
 
-test('skip dedup step keeps test import and import buttons enabled on step 6', () => {
+test('real import requires a completed full test import result', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
     'utf8',
   )
 
   assert.equal(
-    importerWorkbenchSource.includes("&& (Boolean(validationData.value) || skippedDedupStep.value)"),
+    importerWorkbenchSource.includes("&& Boolean(validationData.value)"),
+    true,
+  )
+  assert.equal(
+    importerWorkbenchSource.includes('&& Boolean(preimportScanData.value)'),
     true,
   )
 })
 
-test('skip dedup step clears busy state before step 6 buttons are rendered', () => {
+test('skip dedup step delegates navigation to duplicate-check execution instead of forcing step 6 early', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
     'utf8',
@@ -2841,7 +3147,8 @@ test('skip dedup step clears busy state before step 6 buttons are rendered', () 
   const saveTemplateStart = importerWorkbenchSource.indexOf('async function saveTemplate() {')
   const skipFunctionSource = importerWorkbenchSource.slice(skipFunctionStart, saveTemplateStart)
 
-  assert.equal(skipFunctionSource.includes("busyAction.value = ''\n    currentStep.value = 6"), true)
+  assert.equal(skipFunctionSource.includes("await runDedupCheck({ skippedDedup: true })"), true)
+  assert.equal(skipFunctionSource.includes('currentStep.value = 6'), false)
 })
 
 test('skip dedup step validates lazily before explicit dry run and import execution', () => {
@@ -2856,14 +3163,14 @@ test('skip dedup step validates lazily before explicit dry run and import execut
   assert.equal(importerWorkbenchSource.includes('if (!validationResult && !validationData.value) {'), true)
 })
 
-test('validation step empty state points to real import after checks pass', () => {
+test('validation step empty state points to test import after checks pass', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
     'utf8',
   )
 
-  assert.equal(importerWorkbenchSource.includes('empty="Ошибок не найдено. Можно запускать импорт."'), true)
-  assert.equal(importerWorkbenchSource.includes('empty="Ошибок не найдено. Можно запускать тестовый импорт."'), false)
+  assert.equal(importerWorkbenchSource.includes('empty="Ошибок не найдено. Можно запускать импорт."'), false)
+  assert.equal(importerWorkbenchSource.includes('empty="Ошибок не найдено. Можно запускать тестовый импорт."'), true)
 })
 
 test('validation and execution persist pending dedup changes automatically', () => {
@@ -2872,7 +3179,8 @@ test('validation and execution persist pending dedup changes automatically', () 
     'utf8',
   )
 
-  assert.equal(importerWorkbenchSource.includes('const hasPendingDedupChanges = computed(() => JSON.stringify({'), true)
+  assert.equal(importerWorkbenchSource.includes('const hasPendingDedupChanges = computed(() => ('), true)
+  assert.equal(importerWorkbenchSource.includes('normalizeDedupPayloadForCompare(currentDedupSettingsPayload.value)'), true)
   assert.equal(importerWorkbenchSource.includes('async function persistDedupSettingsIfNeeded()'), true)
   assert.equal(importerWorkbenchSource.includes('await persistDedupSettingsIfNeeded()'), true)
 })
@@ -2931,7 +3239,7 @@ test('long background import keeps running status instead of fake timeout error'
   assert.equal(importerWorkbenchSource.includes('Фоновый импорт не завершился за ожидаемое время.'), false)
 })
 
-test('background dry run is polled separately and shows progress on step 6', () => {
+test('step 6 uses one full test run and does not show sample-preview wording', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
     'utf8',
@@ -2939,11 +3247,179 @@ test('background dry run is polled separately and shows progress on step 6', () 
 
   assert.equal(importerWorkbenchSource.includes('const sessionJobMode = computed(() => String(session.value?.summary?.job?.mode || \'\').trim())'), true)
   assert.equal(importerWorkbenchSource.includes('async function waitForDryRunExecutionResult(sessionId: string)'), true)
-  assert.equal(importerWorkbenchSource.includes('async function resolveDryRunExecutionResult(sessionId: string, responseItem: Record<string, any> | null | undefined)'), true)
+  assert.equal(importerWorkbenchSource.includes('async function resolveDryRunExecutionResult('), true)
+  assert.equal(importerWorkbenchSource.includes("jobMode === 'preimport_scan'"), true)
   assert.equal(importerWorkbenchSource.includes("['run', 'retry'].includes(String(busyAction.value || '').trim())"), true)
   assert.equal(importerWorkbenchSource.includes('const showsDedupProgress = computed(() => ('), true)
-  assert.equal(importerWorkbenchSource.includes('Проверяем дубли и готовим следующий шаг'), true)
-  assert.equal(importerWorkbenchSource.includes('Проверка дублей и тестовый импорт'), false)
+  assert.equal(importerWorkbenchSource.includes('Тестовый импорт по выборке'), false)
+  assert.equal(importerWorkbenchSource.includes('Выборка и запуск'), false)
+  assert.equal(importerWorkbenchSource.includes('Полный поиск дублей перед импортом'), false)
+  assert.equal(importerWorkbenchSource.includes('Тестовый импорт проверяет весь файл'), true)
+})
+
+test('waitForDryRunExecutionResult avoids duplicate jobMode declarations in the same scope', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const functionStart = importerWorkbenchSource.indexOf('async function waitForDryRunExecutionResult(sessionId: string)')
+  const functionEnd = importerWorkbenchSource.indexOf('async function waitForImportExecutionResult(sessionId: string)')
+  const functionSource = importerWorkbenchSource.slice(functionStart, functionEnd)
+
+  assert.equal((functionSource.match(/const jobMode =/g) || []).length, 2)
+})
+
+test('step 5 only configures duplicate settings and step 6 owns the single full test run', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const stepFiveStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 5"')
+  const stepSixStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 6"')
+  const stepFiveSource = importerWorkbenchSource.slice(stepFiveStart, stepSixStart)
+
+  assert.equal(importerWorkbenchSource.includes('async function runSamplePreview('), true)
+  assert.equal(importerWorkbenchSource.includes('async function runPreimportScanBeforeImport('), false)
+  assert.equal(importerWorkbenchSource.includes("mode: 'preimport_scan'"), true)
+  assert.equal(stepFiveSource.includes('label="Проверить дубли"'), false)
+  assert.equal(stepFiveSource.includes('@click="runPreimportScanBeforeImport"'), false)
+  assert.equal(stepFiveSource.includes('label="Сохранить правила дублей"'), true)
+})
+
+test('linked imports render separate duplicate rule editors for each entity on step 5', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('buildLinkedImportEntityGroups'), true)
+  assert.equal(importerWorkbenchSource.includes('linkedDedupSettings'), true)
+  assert.equal(importerWorkbenchSource.includes('Правила для сущности'), true)
+})
+
+test('saving duplicate rules on step 5 moves the wizard to step 6', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const functionStart = importerWorkbenchSource.indexOf('async function saveDedupSettings() {')
+  const functionEnd = importerWorkbenchSource.indexOf('async function persistDedupSettings() {')
+  const functionSource = importerWorkbenchSource.slice(functionStart, functionEnd)
+
+  assert.equal(functionSource.includes('await persistDedupSettings()'), true)
+  assert.equal(functionSource.includes('currentStep.value = 6'), true)
+})
+
+test('step 6 keeps full test results and duplicate decisions in one place', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const stepFiveStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 5"')
+  const stepSixStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 6"')
+  const stepSevenStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 7"')
+  const stepFiveSource = importerWorkbenchSource.slice(stepFiveStart, stepSixStart)
+  const stepSixSource = importerWorkbenchSource.slice(stepSixStart, stepSevenStart)
+
+  assert.equal(stepFiveSource.includes("importExecutionStage === 'duplicate-decisions'"), false)
+  assert.equal(stepSixSource.includes('label="Тестовый импорт"'), true)
+  assert.equal(stepSixSource.includes('@click="runSamplePreview"'), true)
+  assert.equal(stepSixSource.includes("importExecutionStage === 'duplicate-decisions'"), true)
+  assert.equal(stepSixSource.includes("requiresPerRowDedupDecision && dryRunData && pendingDecisionRows.length"), true)
+  assert.equal(importerWorkbenchSource.includes('const stepSixFlowCards = computed(() => (['), false)
+  assert.equal(stepSixSource.includes('v-for="card in stepSixFlowCards"'), false)
+})
+
+test('step 6 explains that the test import checks the full file and waits for manual final launch', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('Это пример по первым'), false)
+  assert.equal(importerWorkbenchSource.includes('Пропущено в примере'), false)
+  assert.equal(importerWorkbenchSource.includes('Полный поиск дублей будет выполнен автоматически перед реальным импортом.'), false)
+  assert.equal(importerWorkbenchSource.includes('async function resumeImportAfterDuplicateDecisions()'), false)
+  assert.equal(importerWorkbenchSource.includes("watch(hasUnresolvedPendingDedupDecisions, async (nextValue, previousValue) => {"), false)
+  assert.equal(importerWorkbenchSource.includes('После проверки можно выбрать решения по дублям и отдельно запустить реальный импорт.'), true)
+  assert.equal(importerWorkbenchSource.includes('Продолжаем импорт автоматически.'), false)
+  assert.equal(importerWorkbenchSource.includes('Теперь можно запускать импорт.'), true)
+})
+
+test('duplicate decisions stay on step 6 and reuse the main import action', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const stepFiveStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 5"')
+  const stepSixStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 6"')
+  const stepSevenStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 7"')
+  const stepFiveSource = importerWorkbenchSource.slice(stepFiveStart, stepSixStart)
+  const stepSixSource = importerWorkbenchSource.slice(stepSixStart, stepSevenStart)
+
+  assert.equal(stepFiveSource.includes('Найдены дубли — выберите действие'), false)
+  assert.equal(importerWorkbenchSource.includes('async function handleRunImportAction()'), false)
+  assert.equal(stepSixSource.includes('label="Запустить импорт"'), true)
+  assert.equal(stepSixSource.includes('@click="runImport"'), true)
+  assert.equal(stepSixSource.includes('Продолжить импорт сейчас'), false)
+})
+
+test('test import progress and duplicate decisions use full file totals', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const executionProgressTotalRows = computed(() =>'), true)
+  assert.equal(importerWorkbenchSource.includes('const executionProgressProcessedRows = computed(() =>'), true)
+  assert.equal(importerWorkbenchSource.includes('const executionProgressPercent = computed(() =>'), true)
+  assert.equal(importerWorkbenchSource.includes('dryRunData.value?.full_total_rows'), true)
+  assert.equal(importerWorkbenchSource.includes("строк файла"), true)
+})
+
+test('test import and real import expose explicit cancel controls without a separate scan action', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const stepSixStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 6"')
+  const stepSevenStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 7"')
+  const stepSixSource = importerWorkbenchSource.slice(stepSixStart, stepSevenStart)
+
+  assert.equal(importerWorkbenchSource.includes("['run', 'retry', 'sample-preview'].includes(String(busyAction.value || '').trim())"), true)
+  assert.equal(stepSixSource.includes('label="Остановить тестовый импорт"'), true)
+  assert.equal(stepSixSource.includes('label="Остановить поиск дублей"'), false)
+})
+
+test('linked duplicate decision table uses russian field labels and bulk actions', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const stepSixStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 6"')
+  const stepSevenStart = importerWorkbenchSource.indexOf('<section v-if="currentStep === 7"')
+  const stepSixSource = importerWorkbenchSource.slice(stepSixStart, stepSevenStart)
+
+  assert.equal(importerWorkbenchSource.includes('function getPendingDecisionMatchFieldsLabel('), true)
+  assert.equal(importerWorkbenchSource.includes('function applyBulkPerRowDedupDecision('), true)
+  assert.equal(stepSixSource.includes('getPendingDecisionMatchFieldsLabel(row)'), true)
+  assert.equal(stepSixSource.includes('getPendingDecisionMatchFieldsLabel(row, entityId)'), true)
+  assert.equal(stepSixSource.includes('row.duplicate_match_fields.join(\', \')'), false)
+  assert.equal(stepSixSource.includes('row.linked[entityId].duplicate_match_fields.map((fieldId) =>'), false)
+  assert.equal(stepSixSource.includes('Всё создать'), true)
+  assert.equal(stepSixSource.includes('Всё обновить'), true)
+  assert.equal(stepSixSource.includes('Всё пропустить'), true)
+})
+
+test('real import progress is split into scan new-record and duplicate phases', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  assert.equal(importerWorkbenchSource.includes('const importExecutionStage = ref<'), true)
+  assert.equal(importerWorkbenchSource.includes('Полный поиск дублей'), false)
+  assert.equal(importerWorkbenchSource.includes('Импорт новых записей'), true)
+  assert.equal(importerWorkbenchSource.includes('Обработка дублей'), true)
 })
 
 test('importer workbench enables duplicate step for smart processes', () => {

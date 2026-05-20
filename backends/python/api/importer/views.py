@@ -1,6 +1,7 @@
 import csv
 import logging
 import os
+import posixpath
 import re
 from datetime import timedelta
 from io import StringIO, TextIOWrapper
@@ -69,6 +70,9 @@ XLSX_REL_NS = {"rel": "http://schemas.openxmlformats.org/package/2006/relationsh
 CELL_REF_RE = re.compile(r"([A-Z]+)")
 
 MAX_IMPORT_ROWS = 100_000
+SAMPLE_PREVIEW_ROW_LIMIT = 30
+DRY_RUN_MODE_SAMPLE_PREVIEW = "sample_preview"
+DRY_RUN_MODE_PREIMPORT_SCAN = "preimport_scan"
 
 _ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 _XLSX_MAGIC = b"PK\x03\x04"          # ZIP / OOXML
@@ -148,6 +152,28 @@ IMPORT_RUN_STATUS_LABELS = {
     "pending_decision": "Ожидает решения",
     "cancelled": "Остановлено",
 }
+
+
+def normalize_dry_run_mode(value: object) -> str:
+    normalized_value = str(value or "").strip().lower()
+    if normalized_value == DRY_RUN_MODE_SAMPLE_PREVIEW:
+        return DRY_RUN_MODE_SAMPLE_PREVIEW
+    return DRY_RUN_MODE_PREIMPORT_SCAN
+
+
+def get_dry_run_summary_key(mode: str) -> str:
+    return "sample_preview" if mode == DRY_RUN_MODE_SAMPLE_PREVIEW else "preimport_scan"
+
+
+def resolve_dry_run_dedup_settings(entity_type: str, dedup_settings: object, *, mode: str) -> dict:
+    normalized_dedup_settings = normalize_entity_dedup_settings(entity_type, dedup_settings)
+    if normalize_dry_run_mode(mode) == DRY_RUN_MODE_SAMPLE_PREVIEW:
+        return {
+            **normalized_dedup_settings,
+            "strategy": "create",
+            "fields": [],
+        }
+    return normalized_dedup_settings
 
 
 def serialize_session(session: ImportSession) -> dict:
@@ -415,10 +441,12 @@ def build_import_result_summary(results: list[dict], checked_rows: int | None = 
 
         if status == "created":
             created_rows += 1
-            created_ids.append(record_id)
+            if record_id is not None and record_id != "":
+                created_ids.append(record_id)
         elif status == "updated":
             updated_rows += 1
-            updated_ids.append(record_id)
+            if record_id is not None and record_id != "":
+                updated_ids.append(record_id)
         elif status == "cancelled":
             cancelled_rows += 1
 
@@ -530,12 +558,71 @@ def merge_import_run_results(previous_import_run: dict, retry_result: dict) -> d
 def normalize_per_row_decisions(raw: object) -> dict:
     if not isinstance(raw, dict):
         return {}
+
+    def _normalize_decision_value(value: object) -> str:
+        normalized_value = str(value or "").strip().lower()
+        return normalized_value if normalized_value in ("create", "update", "skip") else ""
+
     result = {}
     for row_num, decision in raw.items():
-        d = str(decision or "").strip().lower()
-        if d in ("create", "update", "skip"):
-            result[str(row_num)] = d
+        normalized_row_number = str(row_num)
+        normalized_decision = _normalize_decision_value(decision)
+        if normalized_decision:
+            result[normalized_row_number] = normalized_decision
+            continue
+
+        if not isinstance(decision, dict):
+            continue
+
+        entity_decisions = {}
+        for entity_id, entity_decision in decision.items():
+            normalized_entity_decision = _normalize_decision_value(entity_decision)
+            normalized_entity_id = str(entity_id or "").strip().lower()
+            if normalized_entity_id and normalized_entity_decision:
+                entity_decisions[normalized_entity_id] = normalized_entity_decision
+
+        if entity_decisions:
+            result[normalized_row_number] = entity_decisions
     return result
+
+
+def collect_pending_decision_requirements(dedup_settings: object, summary: object) -> dict[int, list[str]]:
+    if not isinstance(summary, dict):
+        return {}
+
+    results = summary.get("results")
+    if not isinstance(results, list):
+        return {}
+
+    normalized_dedup_settings = dedup_settings if isinstance(dedup_settings, dict) else {}
+    pending_requirements = {}
+
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "").strip() != "pending_decision":
+            continue
+        try:
+            row_number = int(item.get("row_number"))
+        except (TypeError, ValueError):
+            continue
+
+        linked_summary = item.get("linked") if isinstance(item.get("linked"), dict) else {}
+        linked_entity_requirements = [
+            entity_id
+            for entity_id, entity_settings in normalized_dedup_settings.items()
+            if isinstance(entity_settings, dict)
+            and str(entity_settings.get("strategy") or "").strip().lower() == "ask"
+            and isinstance(linked_summary.get(entity_id), dict)
+            and (
+                linked_summary[entity_id].get("record_id") is not None
+                or bool(linked_summary[entity_id].get("duplicate_match_fields"))
+            )
+        ]
+
+        pending_requirements[row_number] = linked_entity_requirements
+
+    return pending_requirements
 
 
 def collect_pending_decision_row_numbers(dry_run_summary: object) -> list[int]:
@@ -578,13 +665,209 @@ def get_missing_pending_decision_rows(dedup_settings: object, summary: object, p
     if not isinstance(summary, dict):
         return None
 
+    preimport_scan_summary = summary.get("preimport_scan")
+    if not isinstance(preimport_scan_summary, dict):
+        dry_run_summary = summary.get("dry_run")
+        if not isinstance(dry_run_summary, dict):
+            return None
+        dry_run_mode = normalize_dry_run_mode(dry_run_summary.get("mode"))
+        if dry_run_mode == DRY_RUN_MODE_SAMPLE_PREVIEW:
+            return None
+        preimport_scan_summary = dry_run_summary
+
+    normalized_decisions = normalize_per_row_decisions(per_row_decisions)
+    pending_requirements = collect_pending_decision_requirements(dedup_settings, preimport_scan_summary)
+    if pending_requirements:
+        missing_rows = []
+        for row_number, linked_entity_requirements in pending_requirements.items():
+            row_decision = normalized_decisions.get(str(row_number))
+            if isinstance(row_decision, str) and row_decision:
+                continue
+
+            if linked_entity_requirements:
+                if not isinstance(row_decision, dict):
+                    missing_rows.append(row_number)
+                    continue
+
+                if any(
+                    str(row_decision.get(entity_id) or "").strip().lower() not in ("create", "update", "skip")
+                    for entity_id in linked_entity_requirements
+                ):
+                    missing_rows.append(row_number)
+                continue
+
+            if str(row_number) not in normalized_decisions:
+                missing_rows.append(row_number)
+
+        return missing_rows
+
+    pending_row_numbers = collect_pending_decision_row_numbers(preimport_scan_summary)
+    return [row_number for row_number in pending_row_numbers if str(row_number) not in normalized_decisions]
+
+
+def build_import_phase_items(
+    *,
+    create_phase_total: int,
+    duplicate_phase_total: int,
+    create_phase_processed: int,
+    duplicate_phase_processed: int,
+    active_phase: str,
+) -> list[dict]:
+    normalized_active_phase = str(active_phase or "").strip()
+    phase_items = [
+        {
+            "id": "new_records",
+            "label": "Импорт новых записей",
+            "total_rows": max(0, int(create_phase_total or 0)),
+            "processed_rows": max(0, min(int(create_phase_processed or 0), max(0, int(create_phase_total or 0)))),
+        },
+        {
+            "id": "duplicates",
+            "label": "Обработка дублей",
+            "total_rows": max(0, int(duplicate_phase_total or 0)),
+            "processed_rows": max(0, min(int(duplicate_phase_processed or 0), max(0, int(duplicate_phase_total or 0)))),
+        },
+    ]
+    any_active = False
+    for index, item in enumerate(phase_items):
+        if item["total_rows"] <= 0:
+            item["status"] = "skipped"
+            continue
+        if item["processed_rows"] >= item["total_rows"]:
+            item["status"] = "completed"
+            continue
+        if not any_active and normalized_active_phase == item["id"]:
+            item["status"] = "current"
+            any_active = True
+            continue
+        if not any_active and normalized_active_phase not in {"new_records", "duplicates"} and index == 0:
+            item["status"] = "current"
+            any_active = True
+            continue
+        item["status"] = "upcoming"
+
+    if not any_active:
+        for item in phase_items:
+            if item.get("status") == "upcoming":
+                item["status"] = "current"
+                any_active = True
+                break
+
+    return phase_items
+
+
+def summarize_import_phase_progress(
+    *,
+    create_phase_total: int,
+    duplicate_phase_total: int,
+    create_phase_processed: int,
+    duplicate_phase_processed: int,
+    active_phase: str,
+) -> dict:
+    phase_items = build_import_phase_items(
+        create_phase_total=create_phase_total,
+        duplicate_phase_total=duplicate_phase_total,
+        create_phase_processed=create_phase_processed,
+        duplicate_phase_processed=duplicate_phase_processed,
+        active_phase=active_phase,
+    )
+    total_rows = sum(int(item.get("total_rows") or 0) for item in phase_items)
+    processed_rows = sum(int(item.get("processed_rows") or 0) for item in phase_items)
+    current_phase = next((item for item in phase_items if item.get("status") == "current"), None)
+    completed = total_rows > 0 and processed_rows >= total_rows
+    current_phase = current_phase or {}
+
+    return {
+        "phase": "completed" if completed else str(current_phase.get("id") or active_phase or "").strip(),
+        "phase_label": "Импорт завершён" if completed else str(current_phase.get("label") or "").strip(),
+        "total_rows": total_rows,
+        "processed_rows": processed_rows,
+        "phases": phase_items,
+    }
+
+
+def collect_preimport_scan_stage_row_numbers(preimport_scan_summary: object) -> tuple[list[int], list[int]]:
+    if not isinstance(preimport_scan_summary, dict):
+        return [], []
+
+    create_phase_row_numbers = []
+    duplicate_phase_row_numbers = []
+    seen_create_rows = set()
+    seen_duplicate_rows = set()
+
+    for item in preimport_scan_summary.get("results", []) if isinstance(preimport_scan_summary.get("results"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            row_number = int(item.get("row_number"))
+        except (TypeError, ValueError):
+            continue
+
+        status = str(item.get("status") or "").strip()
+        if status in {"ready_update", "pending_decision", "skipped_duplicate"}:
+            if row_number not in seen_duplicate_rows:
+                seen_duplicate_rows.add(row_number)
+                duplicate_phase_row_numbers.append(row_number)
+            continue
+
+        if row_number not in seen_create_rows:
+            seen_create_rows.add(row_number)
+            create_phase_row_numbers.append(row_number)
+
+    return sorted(create_phase_row_numbers), sorted(duplicate_phase_row_numbers)
+
+
+def merge_import_execution_results(*results: dict) -> dict:
+    merged_results = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        if isinstance(result.get("results"), list):
+            merged_results.extend(result["results"])
+
+    merged_results.sort(key=lambda item: (int(item.get("row_number") or 0), str(item.get("status") or "")))
+    return build_import_result_summary(merged_results)
+
+
+def store_import_phase_progress(
+    session: ImportSession,
+    *,
+    create_phase_total: int,
+    duplicate_phase_total: int,
+    create_phase_processed: int,
+    duplicate_phase_processed: int,
+    active_phase: str,
+) -> None:
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    summary = {
+        **summary,
+        "import_progress": summarize_import_phase_progress(
+            create_phase_total=create_phase_total,
+            duplicate_phase_total=duplicate_phase_total,
+            create_phase_processed=create_phase_processed,
+            duplicate_phase_processed=duplicate_phase_processed,
+            active_phase=active_phase,
+        ),
+    }
+    session.summary = summary
+
+
+def get_preimport_scan_summary(summary: object) -> dict | None:
+    if not isinstance(summary, dict):
+        return None
+
+    preimport_scan_summary = summary.get("preimport_scan")
+    if isinstance(preimport_scan_summary, dict):
+        return preimport_scan_summary
+
     dry_run_summary = summary.get("dry_run")
     if not isinstance(dry_run_summary, dict):
         return None
 
-    pending_row_numbers = collect_pending_decision_row_numbers(dry_run_summary)
-    normalized_decisions = normalize_per_row_decisions(per_row_decisions)
-    return [row_number for row_number in pending_row_numbers if str(row_number) not in normalized_decisions]
+    if normalize_dry_run_mode(dry_run_summary.get("mode")) == DRY_RUN_MODE_SAMPLE_PREVIEW:
+        return None
+
+    return dry_run_summary
 
 
 def is_session_cancel_requested(session_id) -> bool:
@@ -786,7 +1069,7 @@ def read_xlsx_archive(session: ImportSession):
             sheets.append(
                 {
                     "name": sheet_name,
-                    "path": f"xl/{target}",
+                    "path": normalize_xlsx_part_path(target),
                 }
             )
 
@@ -794,6 +1077,17 @@ def read_xlsx_archive(session: ImportSession):
         raise ValueError("Workbook does not contain sheets")
 
     return sheets, worksheet_files, shared_strings_xml, styles_xml
+
+
+def normalize_xlsx_part_path(target: str) -> str:
+    normalized_target = str(target or "").replace("\\", "/").strip()
+    if not normalized_target:
+        return ""
+
+    normalized_target = normalized_target.lstrip("/")
+    if normalized_target.startswith("xl/"):
+        return posixpath.normpath(normalized_target)
+    return posixpath.normpath(posixpath.join("xl", normalized_target))
 
 
 def parse_shared_strings(shared_strings_xml: bytes | None) -> list[str]:
@@ -2187,7 +2481,12 @@ def import_session_validate(request: AuthorizedRequest, session_id):
     )
 
 
-def execute_import_session_dry_run_now(session: ImportSession, account) -> dict:
+def execute_import_session_dry_run_now(
+    session: ImportSession,
+    account,
+    *,
+    mode: str = DRY_RUN_MODE_PREIMPORT_SCAN,
+) -> dict:
     preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
     columns = preview_data.get("columns")
     selected_sheet_name = preview_data.get("selected_sheet_name") or session.source_sheet_name
@@ -2202,7 +2501,6 @@ def execute_import_session_dry_run_now(session: ImportSession, account) -> dict:
         session.entity_type,
         normalize_task_defaults(import_settings.get("task_defaults", {})),
     )
-    saved_dedup = normalize_entity_dedup_settings(session.entity_type, import_settings.get("dedup", {}))
 
     summary = session.summary if isinstance(session.summary, dict) else {}
     validation_summary = summary.get("validation")
@@ -2210,11 +2508,27 @@ def execute_import_session_dry_run_now(session: ImportSession, account) -> dict:
         raise ValueError("Validation is required before dry run")
 
     fields = fetch_session_entity_fields(account, session)
-    _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
+    normalized_mode = normalize_dry_run_mode(mode)
+    saved_dedup = resolve_dry_run_dedup_settings(
+        session.entity_type,
+        import_settings.get("dedup", {}),
+        mode=normalized_mode,
+    )
+    summary_key = get_dry_run_summary_key(normalized_mode)
+    preview_limit = None
+    full_total_rows = 0
+    if normalized_mode == DRY_RUN_MODE_SAMPLE_PREVIEW:
+        full_row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)[2]
+        full_total_rows = sum(1 for row_number in full_row_numbers if row_number >= session.data_start_row)
+        preview_limit = max(0, int(session.data_start_row or 1) - 1) + SAMPLE_PREVIEW_ROW_LIMIT
+    _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=preview_limit)
     total_rows = sum(1 for row_number in row_numbers if row_number >= session.data_start_row)
+    if normalized_mode != DRY_RUN_MODE_SAMPLE_PREVIEW:
+        full_total_rows = total_rows
     session.summary = {
         **summary,
         "dry_run": None,
+        summary_key: None,
     }
     session.status = ImportSession.Status.RUNNING
     session.total_rows = total_rows
@@ -2252,17 +2566,26 @@ def execute_import_session_dry_run_now(session: ImportSession, account) -> dict:
         validation_summary=validation_summary,
         fields=fields,
         dedup_settings=saved_dedup,
+        should_cancel=lambda: is_session_cancel_requested(session.id),
         default_field_values=task_default_field_values,
         progress_callback=_save_progress,
         entity_config=get_session_entity_config(session),
     )
+    dry_run_result = {
+        **dry_run_result,
+        "mode": normalized_mode,
+        "is_partial": normalized_mode == DRY_RUN_MODE_SAMPLE_PREVIEW and (full_total_rows or total_rows) > total_rows,
+        "sample_limit": SAMPLE_PREVIEW_ROW_LIMIT if normalized_mode == DRY_RUN_MODE_SAMPLE_PREVIEW else None,
+        "full_total_rows": full_total_rows or total_rows,
+    }
 
     summary = session.summary if isinstance(session.summary, dict) else {}
     session.summary = {
         **summary,
         "dry_run": dry_run_result,
+        summary_key: dry_run_result,
     }
-    session.status = ImportSession.Status.VALIDATED
+    session.status = ImportSession.Status.CANCELLED if dry_run_result.get("cancelled") else ImportSession.Status.VALIDATED
     session.processed_rows = dry_run_result["checked_rows"]
     session.successful_rows = dry_run_result["ready_rows"]
     session.failed_rows = dry_run_result["skipped_rows"]
@@ -2323,6 +2646,8 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
     validation_summary = summary.get("validation")
     if not isinstance(validation_summary, dict):
         return JsonResponse({"error": "Validation is required before dry run"}, status=400)
+    mode = normalize_dry_run_mode((request.data or {}).get("mode") if isinstance(request.data, dict) else None)
+    summary_key = get_dry_run_summary_key(mode)
 
     if is_import_queue_enabled():
         if getattr(account, "id", None) is None:
@@ -2333,9 +2658,12 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
             for row_number in extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)[2]
             if row_number >= session.data_start_row
         )
+        if mode == DRY_RUN_MODE_SAMPLE_PREVIEW:
+            total_rows = min(total_rows or SAMPLE_PREVIEW_ROW_LIMIT, SAMPLE_PREVIEW_ROW_LIMIT)
         session.summary = {
             **summary,
             "dry_run": None,
+            summary_key: None,
         }
         session.status = ImportSession.Status.RUNNING
         session.total_rows = total_rows
@@ -2356,7 +2684,7 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
             ]
         )
         try:
-            enqueue_import_session_dry_run(session, account)
+            enqueue_import_session_dry_run(session, account, mode=mode)
         except KombuOperationalError as error:
             logging.warning("Import queue is unavailable, falling back to synchronous dry run: %s", error)
         else:
@@ -2364,7 +2692,7 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
             return JsonResponse({"item": serialize_session_response_item(session)}, status=202)
 
     try:
-        dry_run_item = execute_import_session_dry_run_now(session=session, account=account)
+        dry_run_item = execute_import_session_dry_run_now(session=session, account=account, mode=mode)
     except Exception as error:
         return JsonResponse({"error": safe_format_import_error(error)}, status=400)
 
@@ -2396,6 +2724,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
 
     summary = session.summary if isinstance(session.summary, dict) else {}
     validation_summary = summary.get("validation")
+    preimport_scan_summary = get_preimport_scan_summary(summary)
     if not isinstance(validation_summary, dict):
         raise ValueError("Validation is required before import execution")
     missing_pending_decision_rows = get_missing_pending_decision_rows(
@@ -2412,12 +2741,6 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
     session.successful_rows = 0
     session.failed_rows = 0
     session.save(update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
-
-    def _save_progress(*, checked_rows, created_rows, updated_rows, failed_rows):
-        session.processed_rows = checked_rows
-        session.successful_rows = created_rows + updated_rows
-        session.failed_rows = failed_rows
-        session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
 
     try:
         fields, rows, row_numbers, preflight = load_session_preflight_context(
@@ -2439,12 +2762,55 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
                 f"Файл содержит слишком много строк данных ({session.total_rows:,}). "
                 f"Максимум: {MAX_IMPORT_ROWS:,} строк за один импорт."
             )
-        session.save(update_fields=["total_rows", "updated_at"])
-        import_result = execute_import(
+        create_phase_row_numbers, duplicate_phase_row_numbers = collect_preimport_scan_stage_row_numbers(preimport_scan_summary)
+        if not create_phase_row_numbers and not duplicate_phase_row_numbers:
+            create_phase_row_numbers = [rn for rn in row_numbers if rn >= session.data_start_row]
+
+        create_phase_rows, create_phase_row_numbers = filter_rows_by_row_numbers(rows, row_numbers, create_phase_row_numbers)
+        duplicate_phase_rows, duplicate_phase_row_numbers = filter_rows_by_row_numbers(rows, row_numbers, duplicate_phase_row_numbers)
+        create_phase_total = len(create_phase_row_numbers)
+        duplicate_phase_total = len(duplicate_phase_row_numbers)
+
+        store_import_phase_progress(
+            session,
+            create_phase_total=create_phase_total,
+            duplicate_phase_total=duplicate_phase_total,
+            create_phase_processed=0,
+            duplicate_phase_processed=0,
+            active_phase="new_records" if create_phase_total > 0 else "duplicates",
+        )
+        session.save(update_fields=["summary", "total_rows", "updated_at"])
+
+        create_phase_progress = {
+            "checked_rows": 0,
+            "created_rows": 0,
+            "updated_rows": 0,
+            "failed_rows": 0,
+        }
+
+        def _save_create_phase_progress(*, checked_rows, created_rows, updated_rows, failed_rows):
+            create_phase_progress["checked_rows"] = checked_rows
+            create_phase_progress["created_rows"] = created_rows
+            create_phase_progress["updated_rows"] = updated_rows
+            create_phase_progress["failed_rows"] = failed_rows
+            session.processed_rows = checked_rows
+            session.successful_rows = created_rows + updated_rows
+            session.failed_rows = failed_rows
+            store_import_phase_progress(
+                session,
+                create_phase_total=create_phase_total,
+                duplicate_phase_total=duplicate_phase_total,
+                create_phase_processed=checked_rows,
+                duplicate_phase_processed=0,
+                active_phase="new_records",
+            )
+            session.save(update_fields=["summary", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+
+        create_phase_result = execute_import(
             account=account,
             entity_type=session.entity_type,
-            rows=rows,
-            row_numbers=row_numbers,
+            rows=create_phase_rows,
+            row_numbers=create_phase_row_numbers,
             columns=columns,
             data_start_row=session.data_start_row,
             mapping=saved_mapping,
@@ -2454,18 +2820,96 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
             should_cancel=lambda: is_session_cancel_requested(session.id),
             default_field_values=task_default_field_values,
             per_row_decisions=normalized_per_row_decisions,
-            progress_callback=_save_progress,
+            progress_callback=_save_create_phase_progress,
             entity_config=get_session_entity_config(session),
         )
+        _save_create_phase_progress(
+            checked_rows=create_phase_result["checked_rows"],
+            created_rows=create_phase_result["created_rows"],
+            updated_rows=create_phase_result.get("updated_rows", 0),
+            failed_rows=create_phase_result["failed_rows"],
+        )
+
+        duplicate_phase_result = {
+            "checked_rows": 0,
+            "created_rows": 0,
+            "updated_rows": 0,
+            "failed_rows": 0,
+            "skipped_rows": 0,
+            "cancelled": False,
+            "cancelled_rows": 0,
+            "remaining_rows": 0,
+            "created_ids": [],
+            "updated_ids": [],
+            "results": [],
+            "auth_error": "",
+        }
+
+        if not create_phase_result.get("cancelled") and duplicate_phase_total > 0:
+            def _save_duplicate_phase_progress(*, checked_rows, created_rows, updated_rows, failed_rows):
+                session.processed_rows = create_phase_result["checked_rows"] + checked_rows
+                session.successful_rows = (
+                    create_phase_result["created_rows"]
+                    + create_phase_result.get("updated_rows", 0)
+                    + created_rows
+                    + updated_rows
+                )
+                session.failed_rows = create_phase_result["failed_rows"] + failed_rows
+                store_import_phase_progress(
+                    session,
+                    create_phase_total=create_phase_total,
+                    duplicate_phase_total=duplicate_phase_total,
+                    create_phase_processed=create_phase_result["checked_rows"],
+                    duplicate_phase_processed=checked_rows,
+                    active_phase="duplicates",
+                )
+                session.save(update_fields=["summary", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+
+            duplicate_phase_result = execute_import(
+                account=account,
+                entity_type=session.entity_type,
+                rows=duplicate_phase_rows,
+                row_numbers=duplicate_phase_row_numbers,
+                columns=columns,
+                data_start_row=session.data_start_row,
+                mapping=saved_mapping,
+                validation_summary=validation_summary,
+                fields=fields,
+                dedup_settings=saved_dedup,
+                should_cancel=lambda: is_session_cancel_requested(session.id),
+                default_field_values=task_default_field_values,
+                per_row_decisions=normalized_per_row_decisions,
+                progress_callback=_save_duplicate_phase_progress,
+                entity_config=get_session_entity_config(session),
+            )
+            _save_duplicate_phase_progress(
+                checked_rows=duplicate_phase_result["checked_rows"],
+                created_rows=duplicate_phase_result["created_rows"],
+                updated_rows=duplicate_phase_result.get("updated_rows", 0),
+                failed_rows=duplicate_phase_result["failed_rows"],
+            )
+
+        import_result = merge_import_execution_results(create_phase_result, duplicate_phase_result)
+        import_result["auth_error"] = str(create_phase_result.get("auth_error") or duplicate_phase_result.get("auth_error") or "")
     except Exception as error:
         session.status = ImportSession.Status.FAILED
         session.last_error = safe_format_import_error(error)
         session.save(update_fields=["status", "last_error", "updated_at"])
         raise
 
+    store_import_phase_progress(
+        session,
+        create_phase_total=create_phase_total,
+        duplicate_phase_total=duplicate_phase_total,
+        create_phase_processed=create_phase_result["checked_rows"],
+        duplicate_phase_processed=duplicate_phase_result["checked_rows"],
+        active_phase="completed",
+    )
+
     session.summary = {
         **summary,
         "import_run": import_result,
+        "import_progress": (session.summary if isinstance(session.summary, dict) else {}).get("import_progress"),
     }
     auth_error = import_result.get("auth_error") or ""
     session.status = ImportSession.Status.CANCELLED if import_result.get("cancelled") else ImportSession.Status.COMPLETED
@@ -2588,7 +3032,7 @@ def import_session_run(request: AuthorizedRequest, session_id):
             update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"]
         )
         try:
-            enqueue_import_session_run(session, account)
+            enqueue_import_session_run(session, account, per_row_decisions=per_row_decisions)
         except KombuOperationalError as error:
             logging.warning("Import queue is unavailable, falling back to synchronous run: %s", error)
         else:

@@ -11,7 +11,7 @@ const IMPORT_MODE_OPTIONS = [
   {
     value: 'advanced',
     label: 'Расширенный импорт',
-    description: 'Полный сценарий с шаблонами, правилами сопоставления и расширенной настройкой дублей.',
+    description: 'Шаблоны сопоставления, расширенная настройка дублей и детальный отчёт по каждой строке.',
   },
 ]
 const IMPORT_MODE_META = {
@@ -25,7 +25,7 @@ const IMPORT_MODE_META = {
   advanced: {
     value: 'advanced',
     label: 'Расширенный импорт',
-    description: 'Полный сценарий с шаблонами, правилами сопоставления и расширенной настройкой дублей.',
+    description: 'Шаблоны сопоставления, расширенная настройка дублей и детальный отчёт по каждой строке.',
     hidesAdvancedTools: false,
     allowsPerRowDedupDecisions: true,
   },
@@ -206,7 +206,7 @@ const CRM_IMPORT_SCENARIO_GUIDES = {
     highlights: [
       'Название компании в обычном импорте контактов не создаёт связь автоматически.',
       'Для привязки к существующей компании используйте поле COMPANY_ID и передавайте Bitrix24 ID компании.',
-      'Если в исходном файле есть только название компании, используйте сценарий «Компания + Контакт».',
+      'Если в исходном файле есть только название компании, используйте тип импорта «Компания + Контакт».',
     ],
     exampleColumns: ['NAME', 'LAST_NAME', 'PHONE', 'EMAIL', 'COMPANY_ID'],
   },
@@ -911,7 +911,7 @@ export function buildFieldGuidanceHints(field) {
 
   if (fieldId === 'COMPANY_ID') {
     hints.push('Укажите Bitrix24 ID компании, чтобы привязать запись к существующей компании.')
-    hints.push('Если у вас есть только название компании, используйте сценарий «Компания + Контакт».')
+    hints.push('Если у вас есть только название компании, используйте тип импорта «Компания + Контакт».')
     return hints
   }
 
@@ -1373,28 +1373,14 @@ export function buildDedupPayload(settings) {
   )
 
   if (hasLinkedEntitySettings) {
-    let sharedStrategy = ''
-    let sharedCondition = ''
-    const linkedFields = []
-
-    for (const entityId of linkedEntityIds) {
-      const entityPayload = buildDedupPayload(settings?.[entityId] || {})
-      if (!sharedStrategy) {
-        sharedStrategy = entityPayload.strategy
-        sharedCondition = entityPayload.condition
+    return linkedEntityIds.reduce((payload, entityId) => {
+      if (!settings?.[entityId] || typeof settings[entityId] !== 'object') {
+        return payload
       }
 
-      const prefix = LINKED_ENTITY_FIELD_PREFIXES[entityId] || ''
-      for (const fieldId of entityPayload.fields) {
-        linkedFields.push(prefix ? `${prefix}${fieldId}` : fieldId)
-      }
-    }
-
-    return {
-      strategy: sharedStrategy || 'create',
-      fields: (sharedStrategy || 'create') === 'create' ? [] : Array.from(new Set(linkedFields)),
-      condition: sharedCondition || 'any',
-    }
+      payload[entityId] = buildDedupPayload(settings[entityId])
+      return payload
+    }, {})
   }
 
   const strategy = SUPPORTED_DEDUP_STRATEGIES.includes(String(settings?.strategy || ''))
@@ -1529,7 +1515,7 @@ export function buildValidationIssueRows(validationData) {
   }))
 }
 
-export function buildImportRunRows(importRunData) {
+function buildFlatImportRunRows(importRunData) {
   const statusLabels = IMPORT_RUN_STATUS_LABELS
 
   return (Array.isArray(importRunData?.results) ? importRunData.results : []).map((item) => {
@@ -1557,6 +1543,407 @@ export function buildImportRunRows(importRunData) {
       ].filter(Boolean).join(' · ') || '—',
     }
   })
+}
+
+function getLinkedScenarioEntityGroups(entityType = '', fallbackEntityIds = []) {
+  const normalizedEntityType = String(entityType || '').trim()
+  const scenario = LINKED_IMPORT_SCENARIOS[normalizedEntityType]
+  if (scenario && Array.isArray(scenario.linkedEntities) && scenario.linkedEntities.length > 0) {
+    return scenario.linkedEntities.map((entity) => ({
+      id: String(entity?.id || '').trim().toLowerCase(),
+      label: String(entity?.label || getLinkedEntityDisplayMeta(entity?.id).singular || '').trim(),
+      prefix: String(entity?.prefix || LINKED_ENTITY_FIELD_PREFIXES[String(entity?.id || '').trim().toLowerCase()] || '').trim(),
+    })).filter((entity) => entity.id)
+  }
+
+  return (Array.isArray(fallbackEntityIds) ? fallbackEntityIds : [])
+    .map((entityId) => String(entityId || '').trim().toLowerCase())
+    .filter(Boolean)
+    .map((entityId) => ({
+      id: entityId,
+      label: getLinkedEntityDisplayMeta(entityId).singular,
+      prefix: String(LINKED_ENTITY_FIELD_PREFIXES[entityId] || '').trim(),
+    }))
+}
+
+function extractLinkedFieldDisplayValue(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (item && typeof item === 'object') {
+          return String(item.VALUE || item.value || '').trim()
+        }
+        return String(item || '').trim()
+      })
+      .filter(Boolean)
+      .join(', ')
+  }
+
+  return String(value || '').trim()
+}
+
+function buildLinkedEntityTitleFromFields(entityId, fields) {
+  const safeFields = fields && typeof fields === 'object' ? fields : {}
+  if (entityId === 'company' || entityId === 'deal') {
+    return extractLinkedFieldDisplayValue(safeFields.TITLE) || getLinkedEntityDisplayMeta(entityId).emptyTitle
+  }
+
+  if (entityId === 'contact') {
+    const nameParts = [
+      extractLinkedFieldDisplayValue(safeFields.NAME),
+      extractLinkedFieldDisplayValue(safeFields.LAST_NAME),
+    ].filter(Boolean)
+    if (nameParts.length > 0) {
+      return nameParts.join(' ')
+    }
+
+    const fallback = extractLinkedFieldDisplayValue(safeFields.EMAIL) || extractLinkedFieldDisplayValue(safeFields.PHONE)
+    return fallback || getLinkedEntityDisplayMeta(entityId).emptyTitle
+  }
+
+  return getLinkedEntityDisplayMeta(entityId).emptyTitle
+}
+
+function buildLinkedEntityExtraDetails(entityId, fields, prefix = '') {
+  const safeFields = fields && typeof fields === 'object' ? fields : {}
+  const hiddenFieldIds = new Set(
+    entityId === 'contact'
+      ? ['NAME', 'LAST_NAME']
+      : ['TITLE'],
+  )
+
+  return Object.entries(safeFields)
+    .map(([fieldId, value]) => [String(fieldId || '').trim(), extractLinkedFieldDisplayValue(value)])
+    .filter(([fieldId, value]) => fieldId && value && !hiddenFieldIds.has(fieldId))
+    .map(([fieldId, value]) => `${prefix}${fieldId}: ${value}`)
+    .join(' · ')
+}
+
+function buildLinkedMatchDetails(entityId, entityMeta, prefix = '') {
+  const duplicateMatchFields = Array.isArray(entityMeta?.duplicate_match_fields) ? entityMeta.duplicate_match_fields : []
+  const dedupMissingFields = Array.isArray(entityMeta?.dedup_missing_fields) ? entityMeta.dedup_missing_fields : []
+  const matchDetails = duplicateMatchFields.length > 0
+    ? `Совпадение: ${duplicateMatchFields.map((fieldId) => formatImporterFieldLabel(`${prefix}${String(fieldId || '').trim()}`)).join(', ')}`
+    : ''
+  const missingDetails = dedupMissingFields.length > 0
+    ? `Неполный поиск дублей: ${dedupMissingFields.map((fieldId) => formatImporterFieldLabel(`${prefix}${String(fieldId || '').trim()}`)).join(', ')}`
+    : ''
+
+  return [matchDetails, missingDetails].filter(Boolean).join(' · ')
+}
+
+function splitLinkedFieldsByEntity(fields, entityGroups) {
+  const safeFields = fields && typeof fields === 'object' ? fields : {}
+  return entityGroups.reduce((result, group) => {
+    const normalizedPrefix = String(group?.prefix || '').trim().toUpperCase()
+    result[group.id] = Object.entries(safeFields).reduce((entityFields, [fieldId, value]) => {
+      const normalizedFieldId = String(fieldId || '').trim()
+      if (!normalizedPrefix || !normalizedFieldId.toUpperCase().startsWith(normalizedPrefix)) {
+        return entityFields
+      }
+      entityFields[normalizedFieldId.slice(normalizedPrefix.length)] = value
+      return entityFields
+    }, {})
+    return result
+  }, {})
+}
+
+function resolveLinkedPrimaryGroupKey(entityId, entityFields, linkedRecord = null) {
+  const normalizedEntityId = String(entityId || '').trim().toLowerCase()
+  const normalizedLinkedRecord = normalizeLinkedRecord(linkedRecord)
+  if (normalizedLinkedRecord?.id) {
+    return `${normalizedEntityId}:${normalizedLinkedRecord.id}`
+  }
+
+  const safeFields = entityFields && typeof entityFields === 'object' ? entityFields : {}
+  const externalKey = extractLinkedFieldDisplayValue(safeFields.EXTERNAL_KEY)
+  if (externalKey) {
+    return `${normalizedEntityId}:${externalKey}`
+  }
+
+  const explicitId = extractLinkedFieldDisplayValue(safeFields.ID)
+  if (explicitId) {
+    return `${normalizedEntityId}:${explicitId}`
+  }
+
+  const title = buildLinkedEntityTitleFromFields(normalizedEntityId, safeFields)
+  if (title && title !== getLinkedEntityDisplayMeta(normalizedEntityId).emptyTitle) {
+    return `${normalizedEntityId}:${title}`
+  }
+
+  return ''
+}
+
+function buildLinkedDryRunEntityStatus(itemStatus, entityMeta) {
+  const normalizedStatus = String(itemStatus || '').trim()
+  const hasDuplicateMatch = Array.isArray(entityMeta?.duplicate_match_fields) && entityMeta.duplicate_match_fields.length > 0
+
+  if (normalizedStatus === 'pending_decision') {
+    return hasDuplicateMatch ? 'pending_decision' : 'ready'
+  }
+  if (normalizedStatus === 'ready_update') {
+    return hasDuplicateMatch ? 'ready_update' : 'ready'
+  }
+  if (normalizedStatus === 'skipped_duplicate') {
+    return hasDuplicateMatch ? 'skipped_duplicate' : 'skipped'
+  }
+
+  return normalizedStatus || 'ready'
+}
+
+function getDryRunStatusLabel(status) {
+  return {
+    ready: 'Готово',
+    ready_update: 'Готово к обновлению',
+    skipped: 'Пропущено',
+    skipped_duplicate: 'Дубль пропущен',
+    pending_decision: 'Ожидает решения',
+    cancelled: 'Остановлено',
+  }[String(status || '').trim()] || String(status || '').trim() || '—'
+}
+
+function getLinkedImportEntityStatusLabel(status) {
+  return {
+    created: 'Создано',
+    updated: 'Обновлено',
+    existing: 'Найдено',
+    skipped: 'Пропущено',
+    failed: 'Ошибка',
+    cancelled: 'Остановлено',
+  }[String(status || '').trim()] || String(status || '').trim() || '—'
+}
+
+function resolveGroupedPrimaryStatus(currentStatus, nextStatus) {
+  const normalizedCurrent = String(currentStatus || '').trim()
+  const normalizedNext = String(nextStatus || '').trim()
+  const priority = ['failed', 'skipped', 'cancelled', 'updated', 'created', 'ready_update', 'ready', 'pending_decision', 'existing']
+  const currentPriority = priority.indexOf(normalizedCurrent)
+  const nextPriority = priority.indexOf(normalizedNext)
+  if (nextPriority === -1) {
+    return normalizedCurrent || normalizedNext
+  }
+  if (currentPriority === -1) {
+    return normalizedNext
+  }
+  return nextPriority < currentPriority ? normalizedNext : normalizedCurrent
+}
+
+function buildGroupedLinkedDryRunRows(dryRunData, entityType) {
+  const results = Array.isArray(dryRunData?.results) ? dryRunData.results : []
+  const entityGroups = getLinkedScenarioEntityGroups(entityType, Object.keys(LINKED_ENTITY_FIELD_PREFIXES))
+  const primaryEntity = entityGroups[0]
+  if (!primaryEntity) {
+    return []
+  }
+
+  const groups = []
+  const groupsByKey = new Map()
+  const fallbackRows = []
+
+  results.forEach((item, index) => {
+    const entityFieldsById = splitLinkedFieldsByEntity(item?.fields, entityGroups)
+    const primaryFields = entityFieldsById[primaryEntity.id]
+    if (!primaryFields || Object.keys(primaryFields).length === 0) {
+      const flatRow = buildFlatDryRunRows({ results: [item] })[0]
+      if (flatRow) {
+        fallbackRows.push(flatRow)
+      }
+      return
+    }
+
+    const groupKey = resolveLinkedPrimaryGroupKey(primaryEntity.id, primaryFields) || `${primaryEntity.id}:row:${Number(item?.row_number || index + 1)}`
+    const primaryMeta = item?.linked?.[primaryEntity.id] && typeof item.linked[primaryEntity.id] === 'object' ? item.linked[primaryEntity.id] : {}
+    const primaryStatus = buildLinkedDryRunEntityStatus(item?.status, primaryMeta)
+    const primaryDetails = ''
+
+    let groupedRow = groupsByKey.get(groupKey)
+    if (!groupedRow) {
+      groupedRow = {
+        key: groupKey,
+        rowNumber: Number(item?.row_number || 0),
+        rowNumberLabel: String(item?.row_number || '—'),
+        status: primaryStatus,
+        statusLabel: getDryRunStatusLabel(primaryStatus),
+        details: '—',
+        entityTree: {
+          primary: {
+            key: `${groupKey}:primary`,
+            entityId: primaryEntity.id,
+            entityLabel: primaryEntity.label,
+            title: buildLinkedEntityTitleFromFields(primaryEntity.id, primaryFields),
+            recordId: '—',
+            status: primaryStatus,
+            statusLabel: getDryRunStatusLabel(primaryStatus),
+            rowNumbers: [Number(item?.row_number || 0)].filter((rowNumber) => rowNumber > 0),
+            details: primaryDetails,
+          },
+          linkedItems: [],
+        },
+      }
+      groupsByKey.set(groupKey, groupedRow)
+      groups.push(groupedRow)
+    } else {
+      const nextRowNumber = Number(item?.row_number || 0)
+      if (nextRowNumber > 0 && !groupedRow.entityTree.primary.rowNumbers.includes(nextRowNumber)) {
+        groupedRow.entityTree.primary.rowNumbers.push(nextRowNumber)
+      }
+      groupedRow.rowNumber = Math.min(groupedRow.rowNumber, Number(item?.row_number || groupedRow.rowNumber || 0))
+      groupedRow.status = resolveGroupedPrimaryStatus(groupedRow.status, primaryStatus)
+      groupedRow.statusLabel = getDryRunStatusLabel(groupedRow.status)
+      groupedRow.entityTree.primary.status = groupedRow.status
+      groupedRow.entityTree.primary.statusLabel = groupedRow.statusLabel
+      groupedRow.entityTree.primary.details = groupedRow.entityTree.primary.details || primaryDetails
+    }
+
+    entityGroups.slice(1).forEach((group) => {
+      const entityFields = entityFieldsById[group.id]
+      if (!entityFields || Object.keys(entityFields).length === 0) {
+        return
+      }
+
+      const entityMeta = item?.linked?.[group.id] && typeof item.linked[group.id] === 'object' ? item.linked[group.id] : {}
+      const entityStatus = buildLinkedDryRunEntityStatus(item?.status, entityMeta)
+      const entityTitle = buildLinkedEntityTitleFromFields(group.id, entityFields)
+      const entityRecordId = '—'
+      const entityIdentity = extractLinkedFieldDisplayValue(entityFields.EXTERNAL_KEY)
+        || extractLinkedFieldDisplayValue(entityFields.ID)
+        || extractLinkedFieldDisplayValue(entityFields.EMAIL)
+        || extractLinkedFieldDisplayValue(entityFields.PHONE)
+        || entityTitle
+      const itemKey = `${groupKey}:${group.id}:${entityIdentity || index}:${groupedRow.entityTree.linkedItems.length}`
+      groupedRow.entityTree.linkedItems.push({
+        key: itemKey,
+        entityId: group.id,
+        entityLabel: group.label,
+        title: entityTitle,
+        recordId: entityRecordId,
+        status: entityStatus,
+        statusLabel: getDryRunStatusLabel(entityStatus),
+        rowNumbers: [Number(item?.row_number || 0)].filter((rowNumber) => rowNumber > 0),
+        details: '',
+      })
+    })
+  })
+
+  groups.forEach((group) => {
+    group.entityTree.primary.rowNumbers.sort((left, right) => left - right)
+    group.rowNumberLabel = group.entityTree.primary.rowNumbers.join(', ') || String(group.rowNumber || '—')
+  })
+
+  return [...groups, ...fallbackRows].sort((left, right) => Number(left?.rowNumber || 0) - Number(right?.rowNumber || 0))
+}
+
+function buildGroupedLinkedImportRunRows(importRunData, entityType) {
+  const results = Array.isArray(importRunData?.results) ? importRunData.results : []
+  const discoveredEntityIds = Array.from(new Set(
+    results.flatMap((item) => getLinkedRecordSectionIds(item?.linked_records)),
+  ))
+  const entityGroups = getLinkedScenarioEntityGroups(entityType, discoveredEntityIds)
+  const primaryEntity = entityGroups[0]
+  if (!primaryEntity) {
+    return []
+  }
+
+  const groups = []
+  const groupsByKey = new Map()
+  const fallbackRows = []
+
+  results.forEach((item, index) => {
+    const linkedRecords = item?.linked_records && typeof item.linked_records === 'object' ? item.linked_records : null
+    const primaryRecord = normalizeLinkedRecord(linkedRecords?.[primaryEntity.id])
+    if (!primaryRecord) {
+      const flatRow = buildFlatImportRunRows({ results: [item] })[0]
+      if (flatRow) {
+        fallbackRows.push(flatRow)
+      }
+      return
+    }
+
+    const groupKey = resolveLinkedPrimaryGroupKey(primaryEntity.id, {}, primaryRecord) || `${primaryEntity.id}:row:${Number(item?.row_number || index + 1)}`
+    const primaryStatus = String(primaryRecord.status || item?.status || '').trim() || 'created'
+    let groupedRow = groupsByKey.get(groupKey)
+    if (!groupedRow) {
+      groupedRow = {
+        key: groupKey,
+        rowNumber: Number(item?.row_number || 0),
+        rowNumberLabel: String(item?.row_number || '—'),
+        status: primaryStatus,
+        statusLabel: getLinkedImportEntityStatusLabel(primaryStatus),
+        createdAt: buildImportRunCreatedAt(item),
+        entityLabel: primaryEntity.label,
+        title: primaryRecord.title || getLinkedEntityDisplayMeta(primaryEntity.id).emptyTitle,
+        recordId: primaryRecord.id || '—',
+        details: '—',
+        hasProblem: IMPORT_RUN_PROBLEM_STATUSES.has(normalizeImportRunStatus(item?.status)),
+        hasDedupRisk: Array.isArray(item?.dedup_missing_fields) && item.dedup_missing_fields.length > 0,
+        entityTree: {
+          primary: {
+            key: `${groupKey}:primary`,
+            entityId: primaryEntity.id,
+            entityLabel: primaryEntity.label,
+            title: primaryRecord.title || getLinkedEntityDisplayMeta(primaryEntity.id).emptyTitle,
+            recordId: primaryRecord.id || '—',
+            status: primaryStatus,
+            statusLabel: getLinkedImportEntityStatusLabel(primaryStatus),
+            rowNumbers: [Number(item?.row_number || 0)].filter((rowNumber) => rowNumber > 0),
+            details: '',
+          },
+          linkedItems: [],
+        },
+      }
+      groupsByKey.set(groupKey, groupedRow)
+      groups.push(groupedRow)
+    } else {
+      const nextRowNumber = Number(item?.row_number || 0)
+      if (nextRowNumber > 0 && !groupedRow.entityTree.primary.rowNumbers.includes(nextRowNumber)) {
+        groupedRow.entityTree.primary.rowNumbers.push(nextRowNumber)
+      }
+      groupedRow.rowNumber = Math.min(groupedRow.rowNumber, Number(item?.row_number || groupedRow.rowNumber || 0))
+      groupedRow.status = resolveGroupedPrimaryStatus(groupedRow.status, primaryStatus)
+      groupedRow.statusLabel = getLinkedImportEntityStatusLabel(groupedRow.status)
+      groupedRow.entityTree.primary.status = groupedRow.status
+      groupedRow.entityTree.primary.statusLabel = groupedRow.statusLabel
+      groupedRow.hasProblem = groupedRow.hasProblem || IMPORT_RUN_PROBLEM_STATUSES.has(normalizeImportRunStatus(item?.status))
+      groupedRow.hasDedupRisk = groupedRow.hasDedupRisk || (Array.isArray(item?.dedup_missing_fields) && item.dedup_missing_fields.length > 0)
+    }
+
+    entityGroups.slice(1).forEach((group) => {
+      const linkedRecord = normalizeLinkedRecord(linkedRecords?.[group.id])
+      if (!linkedRecord) {
+        return
+      }
+      const itemKey = `${groupKey}:${group.id}:${linkedRecord.id || linkedRecord.title || index}:${groupedRow.entityTree.linkedItems.length}`
+      groupedRow.entityTree.linkedItems.push({
+        key: itemKey,
+        entityId: group.id,
+        entityLabel: group.label,
+        title: linkedRecord.title || getLinkedEntityDisplayMeta(group.id).emptyTitle,
+        recordId: linkedRecord.id || '—',
+        status: linkedRecord.status || 'created',
+        statusLabel: getLinkedImportEntityStatusLabel(linkedRecord.status || 'created'),
+        rowNumbers: [Number(item?.row_number || 0)].filter((rowNumber) => rowNumber > 0),
+        details: '',
+      })
+    })
+  })
+
+  groups.forEach((group) => {
+    group.entityTree.primary.rowNumbers.sort((left, right) => left - right)
+    group.rowNumberLabel = group.entityTree.primary.rowNumbers.join(', ') || String(group.rowNumber || '—')
+  })
+
+  return [...groups, ...fallbackRows].sort((left, right) => Number(left?.rowNumber || 0) - Number(right?.rowNumber || 0))
+}
+
+export function buildImportRunRows(importRunData, entityType = '') {
+  if (isLinkedImportEntityType(entityType)) {
+    const groupedRows = buildGroupedLinkedImportRunRows(importRunData, entityType)
+    if (groupedRows.length > 0) {
+      return groupedRows
+    }
+  }
+
+  return buildFlatImportRunRows(importRunData)
 }
 
 const IMPORT_RUN_STATUS_LABELS = {
@@ -1632,8 +2019,10 @@ function normalizeImportRunReason(item) {
   return String(item?.error || '').trim() || 'Без описания'
 }
 
-export function buildImportRunStatusFilters(importRunData) {
-  const results = Array.isArray(importRunData?.results) ? importRunData.results : []
+export function buildImportRunStatusFilters(importRunData, entityType = '') {
+  const groupedRows = isLinkedImportEntityType(entityType) ? buildImportRunRows(importRunData, entityType) : []
+  const hasGroupedRows = groupedRows.length > 0
+  const results = hasGroupedRows ? groupedRows : (Array.isArray(importRunData?.results) ? importRunData.results : [])
   const counts = {
     all: results.length,
     problem: 0,
@@ -1647,12 +2036,18 @@ export function buildImportRunStatusFilters(importRunData) {
 
   for (const item of results) {
     const status = normalizeImportRunStatus(item?.status)
+    const hasProblem = hasGroupedRows
+      ? Boolean(item?.hasProblem)
+      : IMPORT_RUN_PROBLEM_STATUSES.has(status)
+    const hasDedupRisk = hasGroupedRows
+      ? Boolean(item?.hasDedupRisk)
+      : (Array.isArray(item?.dedup_missing_fields) && item.dedup_missing_fields.length > 0)
 
-    if (IMPORT_RUN_PROBLEM_STATUSES.has(status)) {
+    if (hasProblem) {
       counts.problem += 1
     }
 
-    if (Array.isArray(item?.dedup_missing_fields) && item.dedup_missing_fields.length > 0) {
+    if (hasDedupRisk) {
       counts.dedup_risk += 1
     }
 
@@ -1681,8 +2076,8 @@ export function buildImportRunStatusFilters(importRunData) {
   ]
 }
 
-export function resolveImportRunFilterId(importRunData, requestedFilterId = '') {
-  const filters = buildImportRunStatusFilters(importRunData)
+export function resolveImportRunFilterId(importRunData, requestedFilterId = '', entityType = '') {
+  const filters = buildImportRunStatusFilters(importRunData, entityType)
   const availableFilterIds = new Set(filters.filter((item) => Number(item?.count || 0) > 0).map((item) => item.id))
   const normalizedRequestedFilterId = String(requestedFilterId || '').trim()
 
@@ -1706,7 +2101,10 @@ export function filterImportRunRows(rows, filterId = 'all') {
   }
 
   if (normalizedFilterId === 'problem') {
-    return safeRows.filter((row) => IMPORT_RUN_PROBLEM_STATUSES.has(normalizeImportRunStatus(row?.status)))
+    return safeRows.filter((row) => (
+      row?.hasProblem === true
+        || IMPORT_RUN_PROBLEM_STATUSES.has(normalizeImportRunStatus(row?.status))
+    ))
   }
 
   if (normalizedFilterId === 'skipped') {
@@ -1714,7 +2112,10 @@ export function filterImportRunRows(rows, filterId = 'all') {
   }
 
   if (normalizedFilterId === 'dedup_risk') {
-    return safeRows.filter((row) => String(row?.details || '').includes(DEDUP_RISK_DETAILS_PREFIX))
+    return safeRows.filter((row) => (
+      row?.hasDedupRisk === true
+        || String(row?.details || '').includes(DEDUP_RISK_DETAILS_PREFIX)
+    ))
   }
 
   return safeRows.filter((row) => normalizeImportRunStatus(row?.status) === normalizedFilterId)
@@ -1959,12 +2360,19 @@ export function shouldWaitForDryRunExecutionSnapshot(snapshot) {
   const jobMode = String(job?.mode || '').trim().toLowerCase()
   const jobState = String(job?.state || '').trim().toLowerCase()
 
-  return jobMode === 'dry_run' && ['queued', 'running'].includes(jobState)
+  return ['dry_run', 'sample_preview', 'preimport_scan'].includes(jobMode) && ['queued', 'running'].includes(jobState)
 }
 
-export function buildDryRunSummaryFromSessionSnapshot(snapshot) {
+export function buildDryRunSummaryFromSessionSnapshot(snapshot, options = {}) {
   const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
-  const rawDryRun = summary?.dry_run
+  const preferredMode = String(options?.preferredMode || '').trim().toLowerCase()
+  const rawDryRun = (
+    preferredMode === 'sample_preview'
+      ? summary?.sample_preview || summary?.dry_run
+      : preferredMode === 'preimport_scan'
+        ? summary?.preimport_scan || summary?.dry_run
+        : summary?.dry_run
+  )
   const dryRun = rawDryRun && typeof rawDryRun === 'object' ? rawDryRun : null
 
   if (!dryRun) {
@@ -1975,6 +2383,151 @@ export function buildDryRunSummaryFromSessionSnapshot(snapshot) {
     session_id: String(snapshot?.session_id || snapshot?.id || ''),
     status: String(snapshot?.status || ''),
     ...dryRun,
+  }
+}
+
+function normalizePerRowDedupDecision(value) {
+  const normalizedValue = String(value || '').trim().toLowerCase()
+  return ['create', 'update', 'skip'].includes(normalizedValue) ? normalizedValue : ''
+}
+
+function normalizePerRowDedupDecisionMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+
+  return Object.entries(value).reduce((result, [entityId, entityDecision]) => {
+    const normalizedDecision = normalizePerRowDedupDecision(entityDecision)
+    const normalizedEntityId = String(entityId || '').trim().toLowerCase()
+    if (normalizedEntityId && normalizedDecision) {
+      result[normalizedEntityId] = normalizedDecision
+    }
+    return result
+  }, {})
+}
+
+function resolvePendingLinkedEntityIds(item) {
+  if (!item || typeof item !== 'object') {
+    return []
+  }
+
+  const linkedSummary = item?.linked && typeof item.linked === 'object' ? item.linked : {}
+  return Object.entries(linkedSummary)
+    .filter(([, entityMeta]) => (
+      entityMeta
+      && typeof entityMeta === 'object'
+      && Array.isArray(entityMeta.duplicate_match_fields)
+      && entityMeta.duplicate_match_fields.length > 0
+    ))
+    .map(([entityId]) => String(entityId || '').trim().toLowerCase())
+    .filter(Boolean)
+}
+
+export function buildResolvedDryRunSummary(dryRunData, perRowDecisions = {}) {
+  if (!dryRunData || typeof dryRunData !== 'object') {
+    return null
+  }
+
+  const normalizedDecisions = perRowDecisions && typeof perRowDecisions === 'object' ? perRowDecisions : {}
+  const rawResults = Array.isArray(dryRunData?.results) ? dryRunData.results : []
+  const results = rawResults.map((item) => {
+    if (!item || typeof item !== 'object' || String(item?.status || '').trim() !== 'pending_decision') {
+      return item
+    }
+
+    const rowNumberKey = String(item?.row_number || '')
+    const rowDecision = normalizedDecisions[rowNumberKey]
+    const decision = normalizePerRowDedupDecision(rowDecision)
+    const entityDecisions = normalizePerRowDedupDecisionMap(rowDecision)
+    const pendingLinkedEntityIds = resolvePendingLinkedEntityIds(item)
+
+    if (!decision && pendingLinkedEntityIds.length > 0) {
+      const unresolvedEntityIds = pendingLinkedEntityIds.filter((entityId) => !entityDecisions[entityId])
+      if (unresolvedEntityIds.length > 0) {
+        return item
+      }
+
+      if (pendingLinkedEntityIds.some((entityId) => entityDecisions[entityId] === 'skip')) {
+        return {
+          ...item,
+          status: 'skipped_duplicate',
+          error: 'Duplicate skipped by user decision',
+        }
+      }
+
+      if (pendingLinkedEntityIds.some((entityId) => entityDecisions[entityId] === 'update')) {
+        return {
+          ...item,
+          status: 'ready_update',
+        }
+      }
+
+      return {
+        ...item,
+        status: 'ready',
+      }
+    }
+
+    if (!decision) {
+      return item
+    }
+
+    if (decision === 'update') {
+      return {
+        ...item,
+        status: 'ready_update',
+      }
+    }
+
+    if (decision === 'skip') {
+      return {
+        ...item,
+        status: 'skipped_duplicate',
+        error: 'Duplicate skipped by user decision',
+      }
+    }
+
+    return {
+      ...item,
+      status: 'ready',
+    }
+  })
+
+  let readyRows = 0
+  let readyCreateRows = 0
+  let readyUpdateRows = 0
+  let skippedRows = 0
+  let pendingDecisionRows = 0
+
+  for (const item of results) {
+    const status = String(item?.status || '').trim()
+    if (status === 'ready') {
+      readyRows += 1
+      readyCreateRows += 1
+      continue
+    }
+    if (status === 'ready_update') {
+      readyRows += 1
+      readyUpdateRows += 1
+      continue
+    }
+    if (status === 'pending_decision') {
+      pendingDecisionRows += 1
+      continue
+    }
+    if (['skipped', 'skipped_duplicate'].includes(status)) {
+      skippedRows += 1
+    }
+  }
+
+  return {
+    ...dryRunData,
+    ready_rows: readyRows,
+    ready_create_rows: readyCreateRows,
+    ready_update_rows: readyUpdateRows,
+    skipped_rows: skippedRows,
+    pending_decision_rows: pendingDecisionRows,
+    results,
   }
 }
 
@@ -2188,15 +2741,7 @@ function buildDedupMissingDetails(item) {
   return `Неполный поиск дублей: ${fields.map((field) => formatImporterFieldLabel(field)).join(', ')}`
 }
 
-export function buildDryRunRows(dryRunData) {
-  const statusLabels = {
-    ready: 'Готово',
-    ready_update: 'Готово к обновлению',
-    skipped: 'Пропущено',
-    skipped_duplicate: 'Дубль пропущен',
-    pending_decision: 'Ожидает решения',
-  }
-
+function buildFlatDryRunRows(dryRunData) {
   return (Array.isArray(dryRunData?.results) ? dryRunData.results : []).map((item) => {
     const fields = item?.fields && typeof item.fields === 'object' ? item.fields : {}
     const details = Object.entries(fields)
@@ -2214,10 +2759,21 @@ export function buildDryRunRows(dryRunData) {
       key: `${Number(item?.row_number || 0)}:${String(item?.status || '')}`,
       rowNumber: Number(item?.row_number || 0),
       status: String(item?.status || ''),
-      statusLabel: statusLabels[String(item?.status || '')] || String(item?.status || '') || '—',
+      statusLabel: getDryRunStatusLabel(item?.status),
       details: [details || errorDetails, duplicateMatchDetails, dedupMissingDetails].filter(Boolean).join(' · ') || '—',
     }
   })
+}
+
+export function buildDryRunRows(dryRunData, entityType = '') {
+  if (isLinkedImportEntityType(entityType)) {
+    const groupedRows = buildGroupedLinkedDryRunRows(dryRunData, entityType)
+    if (groupedRows.length > 0) {
+      return groupedRows
+    }
+  }
+
+  return buildFlatDryRunRows(dryRunData)
 }
 
 export function buildSessionHistoryRows(sessions) {
@@ -2286,24 +2842,49 @@ export function buildSessionHistoryRows(sessions) {
     return 'Открыть'
   }
 
-  const buildCountersLabel = (session) => {
+  const buildCounters = (session) => {
     const importRun = session?.summary && typeof session.summary === 'object' ? session.summary.import_run : null
     if (importRun && typeof importRun === 'object') {
-      return [
-        `Созд. ${Number(importRun.created_rows || 0)}`,
-        `Обн. ${Number(importRun.updated_rows || 0)}`,
-        `Проп. ${Number(importRun.skipped_rows || 0)}`,
-        `Ош. ${Number(importRun.failed_rows || 0)}`,
-      ].join(' · ')
+      return {
+        created: Number(importRun.created_rows || 0),
+        updated: Number(importRun.updated_rows || 0),
+        skipped: Number(importRun.skipped_rows || 0),
+        failed: Number(importRun.failed_rows || 0),
+        total: Number(importRun.total_rows || session?.total_rows || 0),
+        hasData: true,
+      }
     }
+    const fallbackTotal = Number(session?.total_rows || 0)
+    const fallbackSuccess = Number(session?.successful_rows || 0)
+    const fallbackFailed = Number(session?.failed_rows || 0)
+    if (fallbackTotal > 0 || fallbackSuccess > 0 || fallbackFailed > 0) {
+      return {
+        created: fallbackSuccess,
+        updated: 0,
+        skipped: 0,
+        failed: fallbackFailed,
+        total: fallbackTotal || fallbackSuccess + fallbackFailed,
+        hasData: true,
+      }
+    }
+    return { created: 0, updated: 0, skipped: 0, failed: 0, total: 0, hasData: false }
+  }
 
-    return `${Number(session?.successful_rows || 0)} / ${Number(session?.failed_rows || 0)}`
+  const buildSourceFormat = (session) => {
+    const raw = String(session?.source_format || session?.file_type || '').trim().toLowerCase()
+    if (raw === 'csv') return { sourceFormat: 'csv', sourceFormatLabel: 'CSV' }
+    if (raw === 'xlsx' || raw === 'excel') return { sourceFormat: 'xlsx', sourceFormatLabel: 'Excel' }
+    const filename = String(session?.original_filename || '').toLowerCase()
+    if (filename.endsWith('.csv')) return { sourceFormat: 'csv', sourceFormatLabel: 'CSV' }
+    return { sourceFormat: 'xlsx', sourceFormatLabel: 'Excel' }
   }
 
   return (Array.isArray(sessions) ? sessions : []).map((session) => {
     const status = String(session?.status || '').trim()
     const resultMeta = buildResultMeta(status)
     const updatedAt = String(session?.updated_at || '').trim() || '—'
+    const counters = buildCounters(session)
+    const { sourceFormat, sourceFormatLabel } = buildSourceFormat(session)
 
     return {
       key: String(session?.id || ''),
@@ -2314,7 +2895,9 @@ export function buildSessionHistoryRows(sessions) {
       resultLabel: resultMeta.resultLabel,
       resultTone: resultMeta.resultTone,
       actionLabel: buildActionLabel(status),
-      counters: buildCountersLabel(session),
+      counters,
+      sourceFormat,
+      sourceFormatLabel,
       updatedAt,
       updatedAtLabel: formatUpdatedAtLabel(updatedAt),
     }

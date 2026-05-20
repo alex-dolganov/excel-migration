@@ -2342,10 +2342,10 @@ class ImportExecutionApiTest(TestCase):
             HTTP_AUTHORIZATION="Bearer test-token",
         )
 
-    def run_session_dry_run(self, session):
+    def run_session_dry_run(self, session, data=None):
         return self.client.post(
             reverse("importer:session-dry-run", kwargs={"session_id": session.id}),
-            data={},
+            data={} if data is None else data,
             content_type="application/json",
             HTTP_AUTHORIZATION="Bearer test-token",
         )
@@ -2678,6 +2678,121 @@ class ImportExecutionApiTest(TestCase):
         session.refresh_from_db()
         self.assertEqual(session.status, ImportSession.Status.RUNNING)
         self.assertEqual(session.summary["job"]["state"], "queued")
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @patch("importer.views.enqueue_import_session_run")
+    def test_run_enqueues_background_job_with_linked_per_row_duplicate_decisions(
+        self,
+        enqueue_import_session_run,
+        get_from_jwt_token,
+    ):
+        account = self.create_linked_company_contact_account(
+            company_duplicates_by_filter={
+                (("TITLE", "ООО Альфа"),): [{"ID": 601}],
+            }
+        )
+        account.id = "linked-company-contact-queue-account"
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_linked_company_contact_session(
+            [
+                [
+                    "Название компании",
+                    "Телефон компании",
+                    "Имя контакта",
+                    "Фамилия контакта",
+                    "Email контакта",
+                ],
+                [
+                    "ООО Альфа",
+                    "+78005550101",
+                    "Алиса",
+                    "Иванова",
+                    "alice@example.ru",
+                ],
+            ]
+        )
+        self.prepare_linked_company_contact_session(
+            session,
+            validate=True,
+            dedup={
+                "company": {
+                    "strategy": "ask",
+                    "fields": ["TITLE"],
+                },
+                "contact": {
+                    "strategy": "create",
+                    "fields": [],
+                },
+            },
+        )
+
+        dry_run_response = self.run_session_dry_run(session)
+        self.assertEqual(dry_run_response.status_code, 200, dry_run_response.json())
+        self.assertEqual(dry_run_response.json()["item"]["pending_decision_rows"], 1)
+
+        decisions = {"2": {"company": "update", "contact": "create"}}
+        with patch.dict("os.environ", {"ENABLE_RABBITMQ": "1"}, clear=False):
+            response = self.client.post(
+                reverse("importer:session-run", kwargs={"session_id": session.id}),
+                data={"per_row_decisions": decisions},
+                content_type="application/json",
+                HTTP_AUTHORIZATION="Bearer test-token",
+            )
+
+        self.assertEqual(response.status_code, 202, response.content)
+        enqueue_import_session_run.assert_called_once()
+        self.assertEqual(enqueue_import_session_run.call_args.kwargs["per_row_decisions"], decisions)
+
+    @patch("importer.tasks.execute_import_session_run_background")
+    def test_run_import_session_task_forwards_per_row_duplicate_decisions(self, execute_import_session_run_background):
+        from importer.tasks import run_import_session_task
+
+        decisions = {"2": {"company": "update", "contact": "create"}}
+
+        run_import_session_task("session-1", "account-1", decisions)
+
+        execute_import_session_run_background.assert_called_once_with(
+            session_id="session-1",
+            account_id="account-1",
+            per_row_decisions=decisions,
+        )
+
+    @patch("importer.services.background_jobs._send_import_completion_notify")
+    @patch("importer.views.execute_import_session_run_now")
+    @patch("importer.services.background_jobs._load_background_context")
+    @patch("importer.services.background_jobs._update_session_job_state")
+    def test_execute_import_session_run_background_forwards_per_row_duplicate_decisions(
+        self,
+        _update_session_job_state,
+        _load_background_context,
+        execute_import_session_run_now,
+        _send_import_completion_notify,
+    ):
+        from importer.services.background_jobs import execute_import_session_run_background
+
+        account = self.create_account()
+        session = self.create_uploaded_session(
+            [
+                ["Lead title", "Email", "Phone"],
+                ["Alice", "alice@example.com", "+123456789"],
+            ]
+        )
+        decisions = {"2": {"company": "update", "contact": "create"}}
+        _load_background_context.return_value = (session, account)
+        execute_import_session_run_now.return_value = {"session_id": str(session.id), "status": "completed"}
+
+        execute_import_session_run_background(
+            session_id=str(session.id),
+            account_id=str(account.id),
+            per_row_decisions=decisions,
+        )
+
+        execute_import_session_run_now.assert_called_once_with(
+            session=session,
+            account=account,
+            per_row_decisions=decisions,
+        )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     @patch("importer.views.enqueue_import_session_retry")
@@ -3970,6 +4085,52 @@ class ImportExecutionApiTest(TestCase):
             {
                 "error": "Run a dry run and choose an action for each duplicate before import execution",
                 "pending_decision_rows": [2],
+            },
+        )
+        self.assertEqual(account.created_fields, [])
+        self.assertEqual(account.updated_records, [])
+
+    @patch("importer.views.SAMPLE_PREVIEW_ROW_LIMIT", 1)
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_requires_full_preimport_scan_after_sample_preview_when_dedup_strategy_is_ask(self, get_from_jwt_token):
+        account = self.create_deal_account(
+            duplicates_by_filter={
+                (("TITLE", "Редизайн сайта"),): [{"ID": 903}],
+            }
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_deal_session(
+            [
+                ["Deal title", "Amount", "Currency", "Stage"],
+                ["Редизайн сайта", "150000", "Рубли", "Новая"],
+                ["Новый проект", "200000", "Рубли", "Новая"],
+            ]
+        )
+        self.prepare_deal_session(session, validate=True)
+        session.refresh_from_db()
+        session.import_settings = {
+            **session.import_settings,
+            "dedup": {
+                "strategy": "ask",
+                "fields": ["TITLE"],
+            },
+        }
+        session.save(update_fields=["import_settings", "updated_at"])
+
+        sample_preview_response = self.run_session_dry_run(session, data={"mode": "sample_preview"})
+
+        self.assertEqual(sample_preview_response.status_code, 200, sample_preview_response.json())
+        self.assertEqual(sample_preview_response.json()["item"]["mode"], "sample_preview")
+        self.assertEqual(sample_preview_response.json()["item"]["checked_rows"], 1)
+
+        response = self.run_session_import(session)
+
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertEqual(
+            response.json(),
+            {
+                "error": "Run a dry run and choose an action for each duplicate before import execution",
             },
         )
         self.assertEqual(account.created_fields, [])
@@ -5788,3 +5949,109 @@ class ImportExecutionApiTest(TestCase):
                 }
             ],
         )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_uses_entity_scoped_duplicate_decisions_for_linked_import_when_both_entities_are_ask(
+        self,
+        get_from_jwt_token,
+    ):
+        account = self.create_linked_company_contact_account(
+            company_duplicates_by_filter={
+                (("TITLE", "ООО Альфа"),): [{"ID": 601}],
+            },
+            contact_duplicates_by_filter={
+                (("EMAIL", "alice@example.ru"),): [{"ID": 701}],
+            },
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_linked_company_contact_session(
+            [
+                [
+                    "Название компании",
+                    "Телефон компании",
+                    "Имя контакта",
+                    "Фамилия контакта",
+                    "Email контакта",
+                ],
+                [
+                    "ООО Альфа",
+                    "+78005550101",
+                    "Алиса",
+                    "Иванова",
+                    "alice@example.ru",
+                ],
+            ]
+        )
+        self.prepare_linked_company_contact_session(
+            session,
+            validate=True,
+            dedup={
+                "company": {
+                    "strategy": "ask",
+                    "fields": ["TITLE"],
+                },
+                "contact": {
+                    "strategy": "ask",
+                    "fields": ["EMAIL"],
+                },
+            },
+        )
+
+        dry_run_response = self.run_session_dry_run(session)
+        self.assertEqual(dry_run_response.status_code, 200, dry_run_response.json())
+        self.assertEqual(dry_run_response.json()["item"]["pending_decision_rows"], 1)
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={"per_row_decisions": {"2": {"company": "update", "contact": "create"}}},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 0)
+        self.assertEqual(response.json()["item"]["updated_rows"], 1)
+        self.assertEqual(response.json()["item"]["skipped_rows"], 0)
+        result_row = self._strip_report_meta(response.json()["item"]["results"])[0]
+        self.assertEqual(result_row["row_number"], 2)
+        self.assertEqual(result_row["status"], "updated")
+        self.assertEqual(
+            result_row["linked"],
+            {
+                "company": {
+                    "duplicate_match_fields": ["TITLE"],
+                },
+                "contact": {
+                    "duplicate_match_fields": ["EMAIL"],
+                },
+            },
+        )
+        self.assertEqual(result_row["linked_records"]["company"]["id"], 601)
+        self.assertEqual(result_row["linked_records"]["company"]["status"], "updated")
+        self.assertEqual(result_row["linked_records"]["contact"]["status"], "created")
+        self.assertEqual(account.company_created_fields, [])
+        self.assertEqual(
+            account.company_updated_records,
+            [
+                {
+                    "id": 601,
+                    "fields": {
+                        "TITLE": "ООО Альфа",
+                        "PHONE": [{"VALUE": "+78005550101", "VALUE_TYPE": "WORK"}],
+                    },
+                }
+            ],
+        )
+        self.assertEqual(
+            account.contact_created_fields,
+            [
+                {
+                    "NAME": "Алиса",
+                    "LAST_NAME": "Иванова",
+                    "EMAIL": [{"VALUE": "alice@example.ru", "VALUE_TYPE": "WORK"}],
+                    "COMPANY_ID": 601,
+                }
+            ],
+        )
+        self.assertEqual(account.contact_updated_records, [])

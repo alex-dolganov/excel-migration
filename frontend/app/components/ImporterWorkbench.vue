@@ -20,10 +20,12 @@ import {
   buildImportRunRows,
   buildImportRunSummaryFromSessionSnapshot,
   buildLinkedImportRunSummary,
+  buildLinkedImportEntityGroups,
   buildImportRunStatusFilters,
   buildImportRunRetryState,
   buildLinkedPrimaryEntityOptions,
   buildLinkedSecondaryEntityOptions,
+  buildResolvedDryRunSummary,
   isLinkedImportEntityType,
   resolveLinkedStrategyEntityType,
   resolveLinkedStrategyPair,
@@ -101,6 +103,7 @@ type ValidationIssueRow = {
 type ImportRunRow = {
   key: string
   rowNumber: number
+  rowNumberLabel?: string
   status: string
   statusLabel: string
   createdAt: string
@@ -108,6 +111,26 @@ type ImportRunRow = {
   title: string
   recordId: string
   details: string
+  hasProblem?: boolean
+  hasDedupRisk?: boolean
+  entityTree?: LinkedEntityTree
+}
+
+type LinkedEntityTreeItem = {
+  key: string
+  entityId: string
+  entityLabel: string
+  title: string
+  recordId: string
+  status: string
+  statusLabel: string
+  rowNumbers: number[]
+  details: string
+}
+
+type LinkedEntityTree = {
+  primary: LinkedEntityTreeItem
+  linkedItems: LinkedEntityTreeItem[]
 }
 
 type LinkedImportSummaryItem = {
@@ -145,9 +168,11 @@ type ImportRunProblemGroup = {
 type DryRunRow = {
   key: string
   rowNumber: number
+  rowNumberLabel?: string
   status: string
   statusLabel: string
   details: string
+  entityTree?: LinkedEntityTree
 }
 
 type ImportTemplateItem = {
@@ -186,12 +211,14 @@ const taskDefaultCreatorId = ref('')
 const taskDefaultCommentAuthorId = ref('')
 const dedupStrategy = ref('create')
 const dedupCondition = ref<'any' | 'all'>('any')
-const perRowDedupDecisions = ref<Record<string, string>>({})
+const linkedDedupSettings = ref<Record<string, { strategy: string, condition: 'any' | 'all', fields: string[] }>>({})
+const perRowDedupDecisions = ref<Record<string, any>>({})
 const mappingDragSourceIndex = ref<number | null>(null)
 const mappingDragOverIndex = ref<number | null>(null)
 const dedupFields = ref<string[]>([])
 const validationData = ref<Record<string, any> | null>(null)
 const dryRunData = ref<Record<string, any> | null>(null)
+const preimportScanData = ref<Record<string, any> | null>(null)
 const importRunData = ref<Record<string, any> | null>(null)
 const importTemplates = ref<ImportTemplateItem[]>([])
 const importAliasRules = ref<Record<string, any>[]>([])
@@ -205,9 +232,11 @@ const activeDryRunDedupRiskOnly = ref(false)
 const dryRunPage = ref(1)
 const importRunPage = ref(1)
 const linkedSummaryPage = ref(1)
+const isStepSevenDryRunExpanded = ref(false)
 const busyAction = ref('')
 const cancelRequested = ref(false)
 const skippedDedupStep = ref(false)
+const importExecutionStage = ref<'idle' | 'sample-preview' | 'duplicate-decisions' | 'running'>('idle')
 const errorMessage = ref('')
 const successMessage = ref('')
 const expandedTextBlocks = ref<Record<string, boolean>>({})
@@ -224,6 +253,221 @@ const restoringHistorySessionId = ref('')
 
 function isValidPerRowDedupDecision(value: unknown): value is string {
   return PER_ROW_DEDUP_DECISION_VALUES.has(String(value || '').trim().toLowerCase())
+}
+
+function createDefaultDedupState(): { strategy: string, condition: 'any' | 'all', fields: string[] } {
+  return {
+    strategy: 'create',
+    condition: 'any',
+    fields: [],
+  }
+}
+
+function normalizeDedupState(input: Record<string, any> | null | undefined) {
+  const normalizedStrategy = String(input?.strategy || 'create').trim().toLowerCase()
+  return {
+    strategy: ['create', 'update', 'skip', 'ask'].includes(normalizedStrategy) ? normalizedStrategy : 'create',
+    condition: String(input?.condition || 'any').trim().toLowerCase() === 'all' ? 'all' as const : 'any' as const,
+    fields: Array.from(new Set(
+      (Array.isArray(input?.fields) ? input.fields : [])
+        .map((field) => String(field || '').trim())
+        .filter(Boolean),
+    )),
+  }
+}
+
+function normalizePerRowEntityDecision(value: unknown): string {
+  return isValidPerRowDedupDecision(value) ? String(value || '').trim().toLowerCase() : ''
+}
+
+function getPendingDecisionLinkedEntityIds(row: Record<string, any> | null | undefined) {
+  const linkedSummary = row?.linked && typeof row.linked === 'object' ? row.linked : {}
+  return Object.entries(linkedSummary)
+    .filter(([, meta]) => (
+      meta
+      && typeof meta === 'object'
+      && Array.isArray((meta as Record<string, any>).duplicate_match_fields)
+      && (meta as Record<string, any>).duplicate_match_fields.length > 0
+    ))
+    .map(([entityId]) => String(entityId || '').trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function getPerRowDedupDecision(rowNumber: string, entityId = ''): string {
+  const rowDecision = perRowDedupDecisions.value[String(rowNumber || '')]
+  const normalizedEntityId = String(entityId || '').trim().toLowerCase()
+
+  if (!normalizedEntityId) {
+    return normalizePerRowEntityDecision(rowDecision)
+  }
+
+  if (rowDecision && typeof rowDecision === 'object' && !Array.isArray(rowDecision)) {
+    return normalizePerRowEntityDecision((rowDecision as Record<string, any>)[normalizedEntityId])
+  }
+
+  return normalizePerRowEntityDecision(rowDecision)
+}
+
+function getPendingDecisionMatchFieldsLabel(row: Record<string, any> | null | undefined, entityId = ''): string {
+  const normalizedEntityId = String(entityId || '').trim().toLowerCase()
+  const rawFieldIds = normalizedEntityId
+    ? (Array.isArray(row?.linked?.[normalizedEntityId]?.duplicate_match_fields) ? row.linked[normalizedEntityId].duplicate_match_fields : [])
+    : (Array.isArray(row?.duplicate_match_fields) ? row.duplicate_match_fields : [])
+
+  if (!rawFieldIds.length) {
+    return normalizedEntityId ? 'Совпадение найдено' : '—'
+  }
+
+  const linkedEntityGroup = normalizedEntityId
+    ? linkedDedupEntityGroups.value.find((item) => item.id === normalizedEntityId)
+    : null
+  const prefix = String(linkedEntityGroup?.prefix || '').trim().toUpperCase()
+  const labels = rawFieldIds
+    .map((fieldId) => String(fieldId || '').trim())
+    .filter(Boolean)
+    .map((fieldId) => resolveImporterFieldLabel(prefix ? `${prefix}${fieldId}` : fieldId))
+    .filter(Boolean)
+
+  return labels.length ? labels.join(', ') : (normalizedEntityId ? 'Совпадение найдено' : '—')
+}
+
+function setPerRowDedupDecision(rowNumber: string, entityId: string, decision: string) {
+  const normalizedRowNumber = String(rowNumber || '').trim()
+  const normalizedEntityId = String(entityId || '').trim().toLowerCase()
+  const normalizedDecision = normalizePerRowEntityDecision(decision)
+  if (!normalizedRowNumber || !normalizedEntityId || !normalizedDecision) {
+    return
+  }
+
+  const currentRowDecision = perRowDedupDecisions.value[normalizedRowNumber]
+  const nextRowDecision = currentRowDecision && typeof currentRowDecision === 'object' && !Array.isArray(currentRowDecision)
+    ? { ...(currentRowDecision as Record<string, any>) }
+    : {}
+
+  nextRowDecision[normalizedEntityId] = normalizedDecision
+  perRowDedupDecisions.value = {
+    ...perRowDedupDecisions.value,
+    [normalizedRowNumber]: nextRowDecision,
+  }
+}
+
+function applyBulkPerRowDedupDecision(decision: string) {
+  const normalizedDecision = normalizePerRowEntityDecision(decision)
+  if (!normalizedDecision) {
+    return
+  }
+
+  const nextDecisions = { ...perRowDedupDecisions.value }
+  pendingDecisionRows.value.forEach((row: Record<string, any>) => {
+    const rowNumber = String(row?.row_number || '').trim()
+    if (!rowNumber) {
+      return
+    }
+
+    const linkedEntityIds = getPendingDecisionLinkedEntityIds(row)
+    if (linkedEntityIds.length) {
+      const currentRowDecision = nextDecisions[rowNumber]
+      const nextRowDecision = currentRowDecision && typeof currentRowDecision === 'object' && !Array.isArray(currentRowDecision)
+        ? { ...(currentRowDecision as Record<string, any>) }
+        : {}
+
+      linkedEntityIds.forEach((entityId) => {
+        nextRowDecision[entityId] = normalizedDecision
+      })
+      nextDecisions[rowNumber] = nextRowDecision
+      return
+    }
+
+    nextDecisions[rowNumber] = normalizedDecision
+  })
+
+  perRowDedupDecisions.value = nextDecisions
+}
+
+function rowHasUnresolvedPendingDedupDecision(row: Record<string, any> | null | undefined) {
+  const rowNumber = String(row?.row_number || '').trim()
+  if (!rowNumber) {
+    return false
+  }
+
+  const linkedEntityIds = getPendingDecisionLinkedEntityIds(row)
+  if (linkedEntityIds.length > 0) {
+    return linkedEntityIds.some((entityId) => !getPerRowDedupDecision(rowNumber, entityId))
+  }
+
+  return !getPerRowDedupDecision(rowNumber)
+}
+
+function getRowNumberDisplayValue(row: { rowNumber?: number, rowNumberLabel?: string } | null | undefined) {
+  return String(row?.rowNumberLabel || row?.rowNumber || '—')
+}
+
+function hasLinkedEntityTree(row: DryRunRow | ImportRunRow | null | undefined) {
+  return Boolean(row?.entityTree?.primary)
+}
+
+function getLinkedEntityTreeStatusClass(status: string) {
+  const normalizedStatus = String(status || '').trim().toLowerCase()
+  if (['created', 'ready'].includes(normalizedStatus)) {
+    return 'border-[#cfe5d8] bg-[#edf7f0] text-[#1a7f3c]'
+  }
+  if (['updated', 'ready_update', 'existing'].includes(normalizedStatus)) {
+    return 'border-[#d7e7ff] bg-[#edf5ff] text-[#2e6bd9]'
+  }
+  if (['pending_decision'].includes(normalizedStatus)) {
+    return 'border-[#ffe1c7] bg-[#fff7ef] text-[#c77d2b]'
+  }
+  if (['failed', 'skipped', 'skipped_duplicate', 'cancelled'].includes(normalizedStatus)) {
+    return 'border-[#f1d4d7] bg-[#fff5f5] text-[#c24b53]'
+  }
+
+  return 'border-[#d9e2ec] bg-[#f4f7fa] text-[#516478]'
+}
+
+function getLinkedEntityTreeRowNumbersLabel(item: LinkedEntityTreeItem | null | undefined) {
+  return Array.isArray(item?.rowNumbers) && item.rowNumbers.length
+    ? item.rowNumbers.join(', ')
+    : '—'
+}
+
+function hasExecutionRowHeading(row: DryRunRow | ImportRunRow | null | undefined) {
+  return Boolean(String((row as any)?.entityLabel || '').trim() || String((row as any)?.title || '').trim())
+}
+
+function buildCurrentDedupPayload() {
+  if (isLinkedImportEntityType(entityType.value)) {
+    return buildDedupPayload(linkedDedupSettings.value)
+  }
+
+  return buildDedupPayload({
+    strategy: dedupStrategy.value,
+    fields: effectiveDedupFields.value,
+    condition: dedupCondition.value,
+  })
+}
+
+function normalizeDedupPayloadForCompare(payload: Record<string, any> | null | undefined): Record<string, any> {
+  if (!payload || typeof payload !== 'object') {
+    return {}
+  }
+
+  const linkedEntityGroups = buildLinkedImportEntityGroups(entityType.value)
+  const linkedEntityIds = linkedEntityGroups.map((item) => String(item.id || '').trim()).filter(Boolean)
+  if (linkedEntityIds.length > 0 && linkedEntityIds.some((entityId) => payload[entityId] && typeof payload[entityId] === 'object')) {
+    return linkedEntityIds.reduce((result, entityId) => {
+      result[entityId] = normalizeDedupPayloadForCompare(payload[entityId])
+      return result
+    }, {} as Record<string, any>)
+  }
+
+  return {
+    strategy: String(payload.strategy || '').trim(),
+    condition: String(payload.condition || '').trim(),
+    fields: [...(Array.isArray(payload.fields) ? payload.fields : [])]
+      .map((field) => String(field || '').trim())
+      .filter(Boolean)
+      .sort(),
+  }
 }
 
 const importerPermissionState = computed(() => buildImporterPermissionState({
@@ -264,6 +508,7 @@ const DEDUP_NONAPPLICABLE_TYPES = new Set([
   'crm_activity', 'crm_note',
 ])
 const isDedupApplicable = computed(() => !DEDUP_NONAPPLICABLE_TYPES.has(entityType.value))
+const linkedDedupEntityGroups = computed(() => buildLinkedImportEntityGroups(entityType.value))
 const simpleDedupPreset = computed(() => buildSimpleDedupPreset({
   entityType: entityType.value,
   mappingRows: mappingRows.value,
@@ -338,6 +583,10 @@ const requiredFieldSummary = computed(() => buildRequiredFieldSummary({
   ignoreFieldIds: entityType.value === 'contact' ? ['SECOND_NAME'] : [],
 }))
 const effectiveDedupFields = computed(() => {
+  if (isLinkedImportEntityType(entityType.value)) {
+    return []
+  }
+
   if (!isSimpleImportMode.value) {
     return dedupFields.value
   }
@@ -353,6 +602,17 @@ const simpleDedupFieldLabels = computed(() => (
     .map((fieldId) => resolveImporterFieldLabel(fieldId))
     .filter(Boolean)
 ))
+const linkedDedupFieldOptions = computed(() => linkedDedupEntityGroups.value.reduce((result, group) => {
+  const prefix = String(group.prefix || '').trim().toUpperCase()
+  result[group.id] = dedupFieldOptions.value
+    .filter((item) => String(item.id || '').trim().toUpperCase().startsWith(prefix))
+    .map((item) => ({
+      id: String(item.id || '').trim().slice(prefix.length),
+      label: String(item.label || '').trim(),
+      hint: item.hint,
+    }))
+  return result
+}, {} as Record<string, Array<{ id: string, label: string, hint?: string }>>))
 const requiredFieldMissingIds = computed(() => new Set(
   requiredFieldSummary.value.missingRequired.map((field) => field.id),
 ))
@@ -383,14 +643,19 @@ const validationIssueCount = computed(() => Number(validationData.value?.issue_c
 const validationCheckedRows = computed(() => Number(validationData.value?.checked_rows || 0))
 const validationValidRows = computed(() => Number(validationData.value?.valid_rows || 0))
 const validationInvalidRows = computed(() => Number(validationData.value?.invalid_rows || 0))
-const dryRunCheckedRows = computed(() => Number(dryRunData.value?.checked_rows || 0))
-const dryRunReadyRows = computed(() => Number(dryRunData.value?.ready_rows || 0))
-const dryRunSkippedRows = computed(() => Number(dryRunData.value?.skipped_rows || 0))
-const dryRunPendingDecisionRows = computed(() => Number(dryRunData.value?.pending_decision_rows || 0))
+const resolvedDryRunData = computed(() => buildResolvedDryRunSummary(dryRunData.value, perRowDedupDecisions.value))
+const dryRunCheckedRows = computed(() => Number(resolvedDryRunData.value?.checked_rows || 0))
+const dryRunReadyRows = computed(() => Number(resolvedDryRunData.value?.ready_rows || 0))
+const dryRunSkippedRows = computed(() => Number(resolvedDryRunData.value?.skipped_rows || 0))
+const dryRunPendingDecisionRows = computed(() => Number(resolvedDryRunData.value?.pending_decision_rows || 0))
 const requiresPerRowDedupDecision = computed(() => (
   isDedupApplicable.value
   && importModeMeta.value.allowsPerRowDedupDecisions
-  && dedupStrategy.value === 'ask'
+  && (
+    isLinkedImportEntityType(entityType.value)
+      ? linkedDedupEntityGroups.value.some((group) => linkedDedupSettings.value[group.id]?.strategy === 'ask')
+      : dedupStrategy.value === 'ask'
+  )
 ))
 const pendingDecisionRows = computed(() =>
   (Array.isArray(dryRunData.value?.results) ? dryRunData.value.results : []).filter(
@@ -398,7 +663,7 @@ const pendingDecisionRows = computed(() =>
   )
 )
 const hasUnresolvedPendingDedupDecisions = computed(() => pendingDecisionRows.value.some((row: any) => (
-  !isValidPerRowDedupDecision(perRowDedupDecisions.value[String(row?.row_number)])
+  rowHasUnresolvedPendingDedupDecision(row)
 )))
 const importRunCheckedRows = computed(() => Number(importRunData.value?.checked_rows || 0))
 const importRunCreatedRows = computed(() => Number(importRunData.value?.created_rows || 0))
@@ -456,27 +721,12 @@ const canApplyTemplate = computed(() => (
   && Boolean(mappingData.value)
   && !busyAction.value
 ))
-const currentDedupSettingsPayload = computed(() => buildDedupPayload({
-  strategy: dedupStrategy.value,
-  fields: effectiveDedupFields.value,
-  condition: dedupCondition.value,
-}))
+const currentDedupSettingsPayload = computed(() => buildCurrentDedupPayload())
 const savedDedupSettingsPayload = computed(() => buildDedupPayload(mappingData.value?.saved_dedup || {}))
-const hasPendingDedupChanges = computed(() => JSON.stringify({
-  strategy: String(currentDedupSettingsPayload.value.strategy || ''),
-  condition: String(currentDedupSettingsPayload.value.condition || ''),
-  fields: [...(Array.isArray(currentDedupSettingsPayload.value.fields) ? currentDedupSettingsPayload.value.fields : [])]
-    .map((field) => String(field || '').trim())
-    .filter(Boolean)
-    .sort(),
-}) !== JSON.stringify({
-  strategy: String(savedDedupSettingsPayload.value.strategy || ''),
-  condition: String(savedDedupSettingsPayload.value.condition || ''),
-  fields: [...(Array.isArray(savedDedupSettingsPayload.value.fields) ? savedDedupSettingsPayload.value.fields : [])]
-    .map((field) => String(field || '').trim())
-    .filter(Boolean)
-    .sort(),
-}))
+const hasPendingDedupChanges = computed(() => (
+  JSON.stringify(normalizeDedupPayloadForCompare(currentDedupSettingsPayload.value))
+    !== JSON.stringify(normalizeDedupPayloadForCompare(savedDedupSettingsPayload.value))
+))
 const canRunValidation = computed(() => (
   importerPermissionState.value.canRunSessions
   && Boolean(session.value?.id)
@@ -486,16 +736,11 @@ const canRunValidation = computed(() => (
   && !hasBlockingPreflightIssues.value
   && !busyAction.value
 ))
-const canRunDryRun = computed(() => (
-  importerPermissionState.value.canRunSessions
-  && Boolean(session.value?.id)
-  && (Boolean(validationData.value) || skippedDedupStep.value)
-  && !busyAction.value
-))
 const canRunImport = computed(() => (
   importerPermissionState.value.canRunSessions
   && Boolean(session.value?.id)
-  && (Boolean(validationData.value) || skippedDedupStep.value)
+  && Boolean(validationData.value)
+  && Boolean(preimportScanData.value)
   && !hasBlockingPreflightIssues.value
   && !busyAction.value
 ))
@@ -503,7 +748,7 @@ const canCancelActiveImport = computed(() => (
   importerPermissionState.value.canCancelSessions
   && Boolean(session.value?.id)
   && !cancelRequested.value
-  && ['run', 'retry'].includes(String(busyAction.value || '').trim())
+  && ['run', 'retry', 'sample-preview'].includes(String(busyAction.value || '').trim())
 ))
 const canRetryFailedRows = computed(() => (
   importerPermissionState.value.canRunSessions
@@ -523,7 +768,7 @@ const maxAvailableStep = computed(() => {
     return 7
   }
 
-  if (validationData.value) {
+  if (dryRunData.value || (!isDedupApplicable.value && validationData.value)) {
     return 6
   }
 
@@ -546,27 +791,77 @@ const importJobState = computed(() => String(session.value?.summary?.job?.state 
 const showsSessionProgress = computed(() => (
   ['run', 'retry'].includes(String(busyAction.value || '').trim())
 ))
+const sessionProgressPercent = computed(() => (
+  session.value?.total_rows
+    ? Math.min(100, Math.round(((session.value?.processed_rows ?? 0) / session.value.total_rows) * 100))
+    : 0
+))
 const sessionProgressTitle = computed(() => (
   busyAction.value === 'retry'
     ? 'Повтор импорта'
     : 'Выполнение импорта'
 ))
+const executionProgressProcessedRows = computed(() => (
+  importExecutionStage.value === 'duplicate-decisions' && dryRunData.value
+    ? Number(dryRunData.value?.checked_rows || 0)
+    : Number(session.value?.processed_rows || 0)
+))
+const executionProgressTotalRows = computed(() => {
+  if (busyAction.value === 'retry') {
+    return retryTotalRows.value
+  }
+
+  if (importExecutionStage.value === 'duplicate-decisions' && dryRunData.value) {
+    return Number(dryRunData.value?.full_total_rows || dryRunData.value?.checked_rows || session.value?.total_rows || 0)
+  }
+
+  return Number(session.value?.total_rows || 0)
+})
+const executionProgressPercent = computed(() => (
+  executionProgressTotalRows.value > 0
+    ? Math.min(100, Math.round((executionProgressProcessedRows.value / executionProgressTotalRows.value) * 100))
+    : 0
+))
+const executionProgressTitle = computed(() => {
+  if (showsSessionProgress.value) {
+    return sessionProgressTitle.value
+  }
+
+  if (importExecutionStage.value === 'duplicate-decisions') {
+    return 'Тестовый импорт завершён'
+  }
+
+  return dedupProgressTitle.value
+})
+const executionProgressCounterLabel = computed(() => (
+  busyAction.value === 'sample-preview'
+    ? `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк файла`
+    : importExecutionStage.value === 'duplicate-decisions'
+      ? `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк файла`
+      : `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк`
+))
 const showsDedupProgress = computed(() => (
-  ['dedup', 'dedup-skip', 'validation'].includes(String(busyAction.value || '').trim())
+  ['dedup', 'validation', 'sample-preview'].includes(String(busyAction.value || '').trim())
 ))
 const dedupProgressTitle = computed(() => {
+  if (busyAction.value === 'sample-preview') {
+    return 'Тестовый импорт'
+  }
   if (busyAction.value === 'dedup') {
     return 'Сохраняем правила дублей'
   }
 
-  return 'Проверяем дубли и готовим следующий шаг'
+  return 'Проверяем данные перед следующим шагом'
 })
 const dedupProgressDescription = computed(() => {
+  if (busyAction.value === 'sample-preview') {
+    return 'Тестовый импорт проверяет весь файл и заранее показывает, что будет создано, обновлено или потребует решения по дублям.'
+  }
   if (busyAction.value === 'dedup') {
     return 'Сохраняем текущие правила, чтобы следующий запуск использовал актуальные настройки.'
   }
 
-  return 'На больших файлах проверка может занять время. После завершения сразу откроется шаг проверки.'
+  return 'На больших файлах проверка может занять время. После завершения обновим экран автоматически.'
 })
 const currentStepMeta = computed(() => {
   const items: Record<number, { eyebrow: string, title: string }> = {
@@ -591,8 +886,8 @@ const currentStepMeta = computed(() => {
       title: 'Обработка дублей',
     },
     6: {
-      eyebrow: 'Шаг 6 · Проверка',
-      title: 'Проверка данных',
+      eyebrow: 'Шаг 6 · Тестовый импорт',
+      title: 'Тестовый импорт и запуск',
     },
     7: {
       eyebrow: 'Шаг 7 · Результат',
@@ -604,9 +899,15 @@ const currentStepMeta = computed(() => {
 })
 const canGoBack = computed(() => currentStep.value > 1)
 const wizardAdvanceMode = computed(() => getWizardAdvanceMode(currentStep.value, maxAvailableStep.value))
-const canGoNext = computed(() => canAdvanceWizard(currentStep.value, maxAvailableStep.value, {
-  hasMissingRequiredFields: requiredFieldSummary.value.hasMissingRequired,
-}))
+const canGoNext = computed(() => {
+  if (currentStep.value === 5 && hasUnresolvedPendingDedupDecisions.value) {
+    return false
+  }
+
+  return canAdvanceWizard(currentStep.value, maxAvailableStep.value, {
+    hasMissingRequiredFields: requiredFieldSummary.value.hasMissingRequired,
+  })
+})
 const nextStepLabel = computed(() => getWizardNextLabel(currentStep.value))
 function normalizeMappingPayloadForCompare(payload: Record<string, any> | null | undefined) {
   const safePayload = payload && typeof payload === 'object' ? payload : {}
@@ -710,8 +1011,8 @@ const importSteps = computed(() => {
     },
     {
       id: 6,
-      title: 'Проверка',
-      description: 'Проверка и тест',
+      title: 'Тестовый импорт',
+      description: 'Проверка и запуск',
       state: stepState(6),
     },
     {
@@ -727,7 +1028,7 @@ const importSteps = computed(() => {
 })
 const sidebarFacts = computed(() => {
   return [
-    { label: currentScenarioSummary.value.family === 'task' ? 'Сценарий' : 'Назначение', value: currentScenarioSummary.value.selectedLabel },
+    { label: 'Назначение', value: currentScenarioSummary.value.selectedLabel },
     { label: 'Файл', value: fileName.value || 'Не выбран' },
     { label: 'Колонки', value: previewColumnsSource.value.length ? String(previewColumnsSource.value.length) : '—' },
     { label: 'Строки', value: previewRows.value.length ? String(previewRows.value.length) : '—' },
@@ -775,7 +1076,7 @@ const dedupStrategyItems = computed(() => {
     { value: 'create', label: 'Всегда создавать' },
   ]
 
-  if (isSimpleImportMode.value && !simpleDedupPreset.value.available) {
+  if (!isLinkedImportEntityType(entityType.value) && isSimpleImportMode.value && !simpleDedupPreset.value.available) {
     return baseItems
   }
 
@@ -865,17 +1166,21 @@ const valueMappingRows = computed<ValueMappingRow[]>(() => buildValueMappingRows
 const valueMappingStatus = computed(() => buildValueMappingStatus(valueMappingRows.value))
 const valueMappingExpanded = ref(false)
 const validationIssueRows = computed<ValidationIssueRow[]>(() => buildValidationIssueRows(validationData.value))
-const dryRunRows = computed<DryRunRow[]>(() => buildDryRunRows(dryRunData.value))
-const importRunRows = computed<ImportRunRow[]>(() => buildImportRunRows(importRunData.value))
+const dryRunRows = computed<DryRunRow[]>(() => buildDryRunRows(resolvedDryRunData.value, entityType.value))
+const importRunRows = computed<ImportRunRow[]>(() => buildImportRunRows(importRunData.value, entityType.value))
 const linkedImportRunSummary = computed(() => buildLinkedImportRunSummary(importRunData.value))
 const linkedSummaryPageCount = computed(() => (
   linkedImportRunSummary.value.sections.reduce((maxPageCount, section) => Math.max(maxPageCount, section.pageCount || 1), 1)
 ))
-const dryRunDedupWeakeningNotice = computed(() => buildDedupWeakeningNotice(dryRunData.value))
+const dryRunDedupWeakeningNotice = computed(() => buildDedupWeakeningNotice(resolvedDryRunData.value))
 const importRunDedupWeakeningNotice = computed(() => buildDedupWeakeningNotice(importRunData.value))
 const filteredDryRunRows = computed<DryRunRow[]>(() => (
   activeDryRunDedupRiskOnly.value
-    ? dryRunRows.value.filter((row) => dryRunDedupWeakeningNotice.value.rowNumbers.includes(row.rowNumber))
+    ? dryRunRows.value.filter((row) => (
+      hasLinkedEntityTree(row)
+        ? (row.entityTree?.primary.rowNumbers || []).some((rowNumber) => dryRunDedupWeakeningNotice.value.rowNumbers.includes(rowNumber))
+        : dryRunDedupWeakeningNotice.value.rowNumbers.includes(row.rowNumber)
+    ))
     : dryRunRows.value
 ))
 const dryRunPageCount = computed(() => (
@@ -897,7 +1202,7 @@ const dryRunPageRangeEnd = computed(() => (
     : 0
 ))
 const importRunStatusFilters = computed<ImportRunFilterItem[]>(() => (
-  buildImportRunStatusFilters(importRunData.value).filter((item) => item.count > 0)
+  buildImportRunStatusFilters(importRunData.value, entityType.value).filter((item) => item.count > 0)
 ))
 const importRunProblemGroups = computed<ImportRunProblemGroup[]>(() => buildImportRunProblemGroups(importRunData.value))
 const filteredImportRunRows = computed<ImportRunRow[]>(() => (
@@ -922,15 +1227,22 @@ const importRunPageRangeEnd = computed(() => (
     : 0
 ))
 const isLinkedEntityImport = computed(() => isLinkedImportEntityType(entityType.value))
-const isLinkedCompanyContactImport = computed(() => entityType.value === 'linked_company_contact')
+const importPhaseSummary = computed<Record<string, any>>(() => (
+  session.value?.summary?.import_progress && typeof session.value.summary.import_progress === 'object'
+    ? session.value.summary.import_progress
+    : { phases: [] }
+))
 const stepSixStatusLabel = computed(() => {
-  if (dryRunData.value) {
-    if (dryRunPendingDecisionRows.value > 0) {
-      return `Ожидают решения: ${dryRunPendingDecisionRows.value}`
-    }
-    return dryRunSkippedRows.value > 0
-      ? `Пропусков: ${dryRunSkippedRows.value}`
-      : `Готово строк: ${dryRunReadyRows.value}`
+  if (importExecutionStage.value === 'duplicate-decisions' && pendingDecisionRows.value.length) {
+    return dryRunPendingDecisionRows.value > 0
+      ? `Ожидают решения: ${dryRunPendingDecisionRows.value}`
+      : `Решения выбраны: ${pendingDecisionRows.value.length}`
+  }
+  if (resolvedDryRunData.value) {
+    const fullTotalRows = Number(resolvedDryRunData.value?.full_total_rows || dryRunCheckedRows.value || 0)
+    return fullTotalRows > dryRunCheckedRows.value
+      ? `Проверено: ${dryRunCheckedRows.value} из ${fullTotalRows}`
+      : `Проверено строк: ${dryRunCheckedRows.value}`
   }
 
   return validationIssueCount.value > 0
@@ -938,14 +1250,25 @@ const stepSixStatusLabel = computed(() => {
     : 'Ошибок не найдено'
 })
 const stepSixMetricCards = computed(() => {
-  if (dryRunData.value) {
+  if (importExecutionStage.value === 'duplicate-decisions' && dryRunData.value) {
+    return [
+      { label: 'Проверено строк', value: Number(dryRunData.value?.checked_rows || 0) },
+      { label: 'Найдено дублей', value: pendingDecisionRows.value.length },
+      dryRunPendingDecisionRows.value > 0
+        ? { label: 'Осталось решить', value: dryRunPendingDecisionRows.value }
+        : { label: 'Готово к импорту', value: dryRunReadyRows.value },
+    ]
+  }
+  if (resolvedDryRunData.value) {
     const cards = [
-      { label: 'Проверено', value: dryRunCheckedRows.value },
-      { label: 'К записи', value: dryRunReadyRows.value },
-      { label: 'Пропущено', value: dryRunSkippedRows.value },
+      { label: 'Проверено строк', value: dryRunCheckedRows.value },
+      { label: 'Всего строк в файле', value: Number(resolvedDryRunData.value?.full_total_rows || dryRunCheckedRows.value) },
+      { label: 'Готово к импорту', value: dryRunReadyRows.value },
     ]
     if (dryRunPendingDecisionRows.value > 0) {
       cards.push({ label: 'Ожидают решения', value: dryRunPendingDecisionRows.value })
+    } else if (dryRunSkippedRows.value > 0) {
+      cards.push({ label: 'Будет пропущено', value: dryRunSkippedRows.value })
     }
     return cards
   }
@@ -955,6 +1278,22 @@ const stepSixMetricCards = computed(() => {
     { label: 'Без ошибок', value: validationValidRows.value },
     { label: 'С ошибками', value: validationInvalidRows.value },
   ]
+})
+const importExecutionPhaseCards = computed(() => {
+  const phaseItems = Array.isArray(importPhaseSummary.value?.phases) ? importPhaseSummary.value.phases : []
+  return phaseItems.map((item: any) => ({
+      id: String(item?.id || ''),
+      label: String(
+        item?.label
+        || (String(item?.id || '') === 'new_records'
+          ? 'Импорт новых записей'
+          : String(item?.id || '') === 'duplicates'
+            ? 'Обработка дублей'
+            : ''),
+      ),
+      description: `${Number(item?.processed_rows || 0)} из ${Number(item?.total_rows || 0)} строк`,
+      status: String(item?.status || 'upcoming'),
+    }))
 })
 const validationTableColumns = computed(() => [
   {
@@ -994,98 +1333,44 @@ const validationTableColumns = computed(() => [
     header: 'Значение',
   },
 ])
-const importRunTableColumns = computed(() => [
-  {
-    accessorKey: 'rowNumber',
-    header: 'Строка',
-    meta: {
-      class: {
-        th: 'w-[92px]',
-        td: 'font-medium text-(--ui-color-base-60)',
-      },
-    },
-  },
-  {
-    accessorKey: 'statusLabel',
-    header: 'Статус',
-    meta: {
-      class: {
-        th: 'w-[140px]',
-      },
-    },
-  },
-  {
-    accessorKey: 'createdAt',
-    header: 'Дата и время',
-    meta: {
-      class: {
-        th: 'w-[170px]',
-      },
-    },
-  },
-  {
-    accessorKey: 'entityLabel',
-    header: 'Сущность',
-    meta: {
-      class: {
-        th: 'w-[150px]',
-      },
-    },
-  },
-  {
-    accessorKey: 'title',
-    header: 'Название',
-    meta: {
-      class: {
-        th: 'min-w-[220px]',
-      },
-    },
-  },
-  {
-    accessorKey: 'recordId',
-    header: 'ID в Bitrix24',
-    meta: {
-      class: {
-        th: 'w-[140px]',
-      },
-    },
-  },
-  {
-    accessorKey: 'details',
-    header: 'Детали',
-    meta: {
-      class: {
-        th: 'min-w-[320px]',
-      },
-    },
-  },
-])
 const dryRunTableColumns = computed(() => [
-  {
-    accessorKey: 'rowNumber',
-    header: 'Строка',
-    meta: {
-      class: {
-        th: 'w-[92px]',
-        td: 'font-medium text-(--ui-color-base-60)',
-      },
-    },
-  },
-  {
-    accessorKey: 'statusLabel',
-    header: 'Статус',
-    meta: {
-      class: {
-        th: 'w-[140px]',
-      },
-    },
-  },
   {
     accessorKey: 'details',
     header: 'Что уйдет в Bitrix24',
     meta: {
       class: {
         th: 'min-w-[360px]',
+      },
+    },
+  },
+  {
+    accessorKey: 'rowNumber',
+    header: 'Строка',
+    meta: {
+      class: {
+        th: 'w-[92px]',
+        td: 'font-medium text-(--ui-color-base-60)',
+      },
+    },
+  },
+])
+const importRunTableColumns = computed(() => [
+  {
+    accessorKey: 'details',
+    header: 'Что попало в Bitrix24',
+    meta: {
+      class: {
+        th: 'min-w-[360px]',
+      },
+    },
+  },
+  {
+    accessorKey: 'rowNumber',
+    header: 'Строка',
+    meta: {
+      class: {
+        th: 'w-[110px]',
+        td: 'font-medium text-(--ui-color-base-60)',
       },
     },
   },
@@ -1098,7 +1383,7 @@ watch(maxAvailableStep, (value) => {
 })
 
 watch(importRunData, (value) => {
-  activeImportRunFilter.value = resolveImportRunFilterId(value, activeImportRunFilter.value)
+  activeImportRunFilter.value = resolveImportRunFilterId(value, activeImportRunFilter.value, entityType.value)
 }, { immediate: true })
 
 watch(dryRunData, (value) => {
@@ -1107,13 +1392,33 @@ watch(dryRunData, (value) => {
   }
 
   if (value && requiresPerRowDedupDecision.value) {
-    const decisions: Record<string, string> = {}
+    const decisions: Record<string, any> = {}
     for (const row of (Array.isArray(value.results) ? value.results : [])) {
       if (row?.status === 'pending_decision') {
         const rowNumber = String(row.row_number || '')
         const previousDecision = perRowDedupDecisions.value[rowNumber]
         if (rowNumber && isValidPerRowDedupDecision(previousDecision)) {
           decisions[rowNumber] = previousDecision
+          continue
+        }
+
+        if (
+          rowNumber
+          && previousDecision
+          && typeof previousDecision === 'object'
+          && !Array.isArray(previousDecision)
+        ) {
+          const linkedEntityIds = getPendingDecisionLinkedEntityIds(row)
+          const filteredDecision = linkedEntityIds.reduce((result, entityId) => {
+            const entityDecision = normalizePerRowEntityDecision((previousDecision as Record<string, any>)[entityId])
+            if (entityDecision) {
+              result[entityId] = entityDecision
+            }
+            return result
+          }, {} as Record<string, string>)
+          if (Object.keys(filteredDecision).length > 0) {
+            decisions[rowNumber] = filteredDecision
+          }
         }
       }
     }
@@ -1197,12 +1502,14 @@ function resetFlowState() {
   preview.value = null
   mappingData.value = null
   mappingRows.value = []
+  linkedDedupSettings.value = {}
   dedupStrategy.value = 'create'
   dedupCondition.value = 'any'
   dedupFields.value = []
   perRowDedupDecisions.value = {}
   validationData.value = null
   dryRunData.value = null
+  preimportScanData.value = null
   importRunData.value = null
   importTemplates.value = []
   importAliasRules.value = []
@@ -1213,6 +1520,7 @@ function resetFlowState() {
   activeImportRunFilter.value = 'all'
   linkedSummaryPage.value = 1
   cancelRequested.value = false
+  importExecutionStage.value = 'idle'
 }
 
 function finishImporterFlow() {
@@ -1236,10 +1544,25 @@ function finishImporterFlow() {
 }
 
 function syncDedupSettings() {
-  const payload = buildDedupPayload(mappingData.value?.saved_dedup || {})
-  dedupStrategy.value = payload.strategy
-  dedupFields.value = payload.fields
-  dedupCondition.value = payload.condition as 'any' | 'all'
+  const savedDedup = mappingData.value?.saved_dedup
+  if (isLinkedImportEntityType(entityType.value)) {
+    linkedDedupSettings.value = linkedDedupEntityGroups.value.reduce((result, group) => {
+      result[group.id] = normalizeDedupState(
+        savedDedup && typeof savedDedup === 'object' ? savedDedup[group.id] : null,
+      )
+      return result
+    }, {} as Record<string, { strategy: string, condition: 'any' | 'all', fields: string[] }>)
+    dedupStrategy.value = 'create'
+    dedupFields.value = []
+    dedupCondition.value = 'any'
+    return
+  }
+
+  linkedDedupSettings.value = {}
+  const payload = buildDedupPayload(savedDedup || {})
+  dedupStrategy.value = String(payload.strategy || 'create')
+  dedupFields.value = Array.isArray(payload.fields) ? payload.fields.map((field) => String(field || '').trim()).filter(Boolean) : []
+  dedupCondition.value = String(payload.condition || 'any') === 'all' ? 'all' : 'any'
 }
 
 function syncMappingRows() {
@@ -1249,6 +1572,7 @@ function syncMappingRows() {
     taskDefaultResponsibleId.value = ''
     taskDefaultCreatorId.value = ''
     taskDefaultCommentAuthorId.value = ''
+    linkedDedupSettings.value = {}
     dedupStrategy.value = 'create'
     dedupCondition.value = 'any'
     dedupFields.value = []
@@ -1423,6 +1747,10 @@ function getTextBlockDisplayValue(key: string, value: unknown) {
 }
 
 watch(dedupStrategy, (value, previousValue) => {
+  if (isLinkedImportEntityType(entityType.value)) {
+    return
+  }
+
   if (value === 'create') {
     dedupFields.value = []
   }
@@ -1433,6 +1761,10 @@ watch(dedupStrategy, (value, previousValue) => {
 })
 
 watch([isSimpleImportMode, simpleDedupPreset], ([simpleModeEnabled, preset]) => {
+  if (isLinkedImportEntityType(entityType.value)) {
+    return
+  }
+
   if (!simpleModeEnabled) {
     return
   }
@@ -1452,6 +1784,7 @@ watch([isSimpleImportMode, simpleDedupPreset], ([simpleModeEnabled, preset]) => 
 
 watch(isDedupApplicable, (applicable) => {
   if (!applicable) {
+    linkedDedupSettings.value = {}
     dedupStrategy.value = 'create'
     dedupFields.value = []
     skippedDedupStep.value = false
@@ -1459,6 +1792,10 @@ watch(isDedupApplicable, (applicable) => {
 })
 
 watch(dedupCondition, (value, previousValue) => {
+  if (isLinkedImportEntityType(entityType.value)) {
+    return
+  }
+
   if (previousValue !== undefined && value !== previousValue && busyAction.value !== 'dedup-skip') {
     skippedDedupStep.value = false
   }
@@ -1528,6 +1865,10 @@ watch(selectedCrmEntityType, async (value) => {
 })
 
 watch(dedupFieldOptions, (options) => {
+  if (isLinkedImportEntityType(entityType.value)) {
+    return
+  }
+
   const allowed = new Set(options.map((option) => option.id))
   dedupFields.value = dedupFields.value.filter((field) => allowed.has(field))
 })
@@ -1721,6 +2062,17 @@ function goBackFromBulkAttach() {
   resetMessages()
 }
 
+function finishToEntitySelection() {
+  resetFlowState()
+  clearSelectedFile()
+  goBackToFamilySelection()
+}
+
+function finishBulkAttachToEntitySelection() {
+  bulkAttachResumeSessionId.value = ''
+  finishToEntitySelection()
+}
+
 function updateDedupStrategySelection(value: string) {
   const normalizedValue = String(value || 'create').trim()
   if (
@@ -1733,6 +2085,71 @@ function updateDedupStrategySelection(value: string) {
   }
 
   dedupStrategy.value = normalizedValue
+}
+
+function updateLinkedDedupStrategySelection(entityId: string, value: string) {
+  const normalizedEntityId = String(entityId || '').trim().toLowerCase()
+  if (!normalizedEntityId) {
+    return
+  }
+
+  const nextState = normalizeDedupState({
+    ...createDefaultDedupState(),
+    ...(linkedDedupSettings.value[normalizedEntityId] || {}),
+    strategy: value,
+  })
+
+  if (nextState.strategy === 'create') {
+    nextState.fields = []
+  }
+
+  linkedDedupSettings.value = {
+    ...linkedDedupSettings.value,
+    [normalizedEntityId]: nextState,
+  }
+  skippedDedupStep.value = false
+}
+
+function toggleLinkedDedupField(entityId: string, fieldId: string) {
+  const normalizedEntityId = String(entityId || '').trim().toLowerCase()
+  const normalizedFieldId = String(fieldId || '').trim()
+  if (!normalizedEntityId || !normalizedFieldId) {
+    return
+  }
+
+  const currentState = normalizeDedupState(linkedDedupSettings.value[normalizedEntityId] || createDefaultDedupState())
+  if (currentState.strategy === 'create') {
+    return
+  }
+
+  const nextFields = currentState.fields.includes(normalizedFieldId)
+    ? currentState.fields.filter((value) => value !== normalizedFieldId)
+    : [...currentState.fields, normalizedFieldId]
+
+  linkedDedupSettings.value = {
+    ...linkedDedupSettings.value,
+    [normalizedEntityId]: {
+      ...currentState,
+      fields: nextFields,
+    },
+  }
+  skippedDedupStep.value = false
+}
+
+function updateLinkedDedupCondition(entityId: string, value: 'any' | 'all') {
+  const normalizedEntityId = String(entityId || '').trim().toLowerCase()
+  if (!normalizedEntityId) {
+    return
+  }
+
+  linkedDedupSettings.value = {
+    ...linkedDedupSettings.value,
+    [normalizedEntityId]: {
+      ...normalizeDedupState(linkedDedupSettings.value[normalizedEntityId] || createDefaultDedupState()),
+      condition: value === 'all' ? 'all' : 'any',
+    },
+  }
+  skippedDedupStep.value = false
 }
 
 async function toggleDepartments() {
@@ -1879,7 +2296,9 @@ async function refreshMapping() {
   mappingData.value = response.item
   validationData.value = null
   dryRunData.value = null
+  preimportScanData.value = null
   importRunData.value = null
+  importExecutionStage.value = 'idle'
   syncMappingRows()
   await Promise.all([
     refreshTemplates(),
@@ -1926,7 +2345,9 @@ function handleFileChange(event: Event) {
   const target = event.target as HTMLInputElement
   resetMessages()
   dryRunData.value = null
+  preimportScanData.value = null
   importRunData.value = null
+  importExecutionStage.value = 'idle'
 
   const nextFile = target.files?.[0] || null
   if (nextFile && nextFile.size > MAX_IMPORT_FILE_SIZE_BYTES) {
@@ -2047,7 +2468,9 @@ function applyCandidateMapping() {
   mappingRows.value = newRows
   validationData.value = null
   dryRunData.value = null
+  preimportScanData.value = null
   importRunData.value = null
+  importExecutionStage.value = 'idle'
   setSuccess(`Расставлено ${mappedCount} соответствий автоматически. Проверьте результат перед сохранением.`)
 }
 
@@ -2200,11 +2623,7 @@ async function saveMapping() {
     const response = await apiStore.saveImportMapping(
       String(session.value.id),
       buildMappingPayload(mappingRows.value),
-      buildDedupPayload({
-        strategy: dedupStrategy.value,
-        fields: effectiveDedupFields.value,
-        condition: dedupCondition.value,
-      }),
+      currentDedupSettingsPayload.value,
       {
         default_responsible_id: taskDefaultResponsibleId.value,
         default_creator_id: taskDefaultCreatorId.value,
@@ -2214,7 +2633,9 @@ async function saveMapping() {
     mappingData.value = response.item
     validationData.value = null
     dryRunData.value = null
+    preimportScanData.value = null
     importRunData.value = null
+    importExecutionStage.value = 'idle'
     syncMappingRows()
     setSuccess(
       Number(response.item?.unmapped_value_count || 0) > 0
@@ -2238,6 +2659,7 @@ async function saveDedupSettings() {
 
   try {
     await persistDedupSettings()
+    currentStep.value = 6
     setSuccess('Правила обработки дублей сохранены.')
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
@@ -2254,11 +2676,7 @@ async function persistDedupSettings() {
   const response = await apiStore.saveImportMapping(
     String(session.value.id),
     buildMappingPayload(mappingRows.value),
-    buildDedupPayload({
-      strategy: dedupStrategy.value,
-      fields: effectiveDedupFields.value,
-      condition: dedupCondition.value,
-    }),
+    currentDedupSettingsPayload.value,
     {
       default_responsible_id: taskDefaultResponsibleId.value,
       default_creator_id: taskDefaultCreatorId.value,
@@ -2268,7 +2686,9 @@ async function persistDedupSettings() {
   mappingData.value = response.item
   validationData.value = null
   dryRunData.value = null
+  preimportScanData.value = null
   importRunData.value = null
+  importExecutionStage.value = 'idle'
   syncMappingRows()
   return response.item
 }
@@ -2286,25 +2706,17 @@ async function skipDedupStep() {
     return
   }
 
-  resetMessages()
+  if (isLinkedImportEntityType(entityType.value)) {
+    linkedDedupSettings.value = linkedDedupEntityGroups.value.reduce((result, group) => {
+      result[group.id] = createDefaultDedupState()
+      return result
+    }, {} as Record<string, { strategy: string, condition: 'any' | 'all', fields: string[] }>)
+  }
   dedupStrategy.value = 'create'
   dedupFields.value = []
   dedupCondition.value = 'any'
-  busyAction.value = 'dedup-skip'
-
-  try {
-    await persistDedupSettings()
-    skippedDedupStep.value = true
-    busyAction.value = ''
-    currentStep.value = 6
-    setSuccess('Шаг дублей пропущен. При необходимости запустите проверку или тестовый импорт на следующем шаге.')
-  } catch (error) {
-    setError(error instanceof Error ? error.message : String(error))
-  } finally {
-    if (busyAction.value === 'dedup-skip') {
-      busyAction.value = ''
-    }
-  }
+  skippedDedupStep.value = true
+  await runDedupCheck({ skippedDedup: true })
 }
 
 async function saveTemplate() {
@@ -2320,11 +2732,7 @@ async function saveTemplate() {
       String(session.value.id),
       templateNameInput.value.trim(),
       buildMappingPayload(mappingRows.value),
-      buildDedupPayload({
-        strategy: dedupStrategy.value,
-        fields: effectiveDedupFields.value,
-        condition: dedupCondition.value,
-      }),
+      currentDedupSettingsPayload.value,
     )
     await refreshTemplates()
     selectedTemplateId.value = String(response.item?.id || '')
@@ -2372,10 +2780,12 @@ async function executeValidation({
   persistDedup = true,
   resetStatus = true,
   busyState = 'validation',
+  nextStep = 6,
 }: {
   persistDedup?: boolean
   resetStatus?: boolean
   busyState?: string
+  nextStep?: number | null
 } = {}) {
   if (!session.value?.id) {
     return null
@@ -2398,9 +2808,13 @@ async function executeValidation({
     const response = await apiStore.validateImportSession(String(session.value.id))
     validationData.value = response.item
     dryRunData.value = null
+    preimportScanData.value = null
     activeDryRunDedupRiskOnly.value = false
     importRunData.value = null
-    currentStep.value = 6
+    importExecutionStage.value = 'idle'
+    if (typeof nextStep === 'number') {
+      currentStep.value = nextStep
+    }
     setSuccess(
       validationIssueCount.value > 0
         ? 'Проверка завершена. Исправьте строки с ошибками перед следующим этапом.'
@@ -2431,16 +2845,18 @@ async function ensureValidationBeforeExecution() {
     persistDedup: false,
     resetStatus: false,
     busyState: 'validation',
+    nextStep: null,
   })
 }
 
-async function runDryRun() {
+async function runSamplePreview({ skippedDedup = false }: { skippedDedup?: boolean } = {}) {
   if (!session.value?.id) {
     return
   }
 
   resetMessages()
-  busyAction.value = 'dry-run'
+  busyAction.value = 'sample-preview'
+  importExecutionStage.value = 'sample-preview'
 
   try {
     await persistDedupSettingsIfNeeded()
@@ -2448,19 +2864,84 @@ async function runDryRun() {
     if (!validationResult && !validationData.value) {
       return
     }
-    skippedDedupStep.value = false
-    busyAction.value = 'dry-run'
-    const dryRunResult = await executeDryRunRequest(String(session.value.id))
+    if (!skippedDedup) {
+      skippedDedupStep.value = false
+    }
+    busyAction.value = 'sample-preview'
+    const dryRunResult = await executeDryRunRequest(String(session.value.id), {
+      mode: 'preimport_scan',
+      target: 'full',
+      runningStep: 6,
+      resolvedStep: 6,
+      cancelledStep: 6,
+    })
+    if (dryRunResult?.status === 'cancelled' || dryRunResult?.cancelled) {
+      importExecutionStage.value = 'idle'
+      setSuccess('Тестовый импорт остановлен. Можно скорректировать настройки и запустить его повторно.')
+      return
+    }
+    importExecutionStage.value = Number(dryRunResult?.pending_decision_rows || 0) > 0 ? 'duplicate-decisions' : 'idle'
     setSuccess(
-      requiresPerRowDedupDecision.value && Number(dryRunResult?.pending_decision_rows || 0) > 0
-        ? 'Тестовый импорт завершен. Выберите действие для каждой строки с найденным дублем.'
+      Number(dryRunResult?.pending_decision_rows || 0) > 0
+        ? 'Тестовый импорт завершён. Выберите действие для найденных дублей, затем отдельно запустите реальный импорт.'
         : Number(dryRunResult?.skipped_rows || 0) > 0
-        ? 'Тестовый импорт завершен. Часть строк будет пропущена.'
-        : 'Тестовый импорт завершен. Можно запускать импорт.',
+        ? 'Тестовый импорт завершён. Полный файл проверен, часть строк будет пропущена.'
+        : skippedDedup
+        ? 'Шаг дублей пропущен. Тестовый импорт проверил весь файл по правилу «Всегда создавать».'
+        : 'Тестовый импорт завершён. Полный файл проверен, можно запускать реальный импорт.',
     )
   } catch (error) {
+    importExecutionStage.value = 'idle'
     setError(error instanceof Error ? error.message : String(error))
   } finally {
+    busyAction.value = ''
+  }
+}
+
+async function runDedupCheck({ skippedDedup = false }: { skippedDedup?: boolean } = {}) {
+  await runSamplePreview({ skippedDedup })
+}
+
+async function executeImportRunRequest() {
+  if (!session.value?.id) {
+    return
+  }
+
+  try {
+    if (requiresPerRowDedupDecision.value && hasUnresolvedPendingDedupDecisions.value) {
+      importExecutionStage.value = 'duplicate-decisions'
+      currentStep.value = 6
+      setError('Выберите действие для каждой строки с найденным дублем.')
+      return
+    }
+
+    if (!await confirmMassCreateImport()) {
+      setError('Импорт остановлен. Подтвердите массовое создание новых CRM-записей, если это ожидаемое действие.')
+      return
+    }
+
+    busyAction.value = 'run'
+    importExecutionStage.value = 'running'
+    session.value = session.value ? { ...session.value, status: 'running' } : session.value
+    const response = await apiStore.runImportSession(String(session.value.id), perRowDedupDecisions.value)
+    const queuedImportRun = await resolveImportExecutionResult(String(session.value.id), response.item)
+    importRunData.value = queuedImportRun
+    currentStep.value = 7
+    importExecutionStage.value = 'idle'
+    setSuccess(
+      queuedImportRun?.status === 'running'
+        ? `Импорт продолжает выполняться в фоне. Уже обработано ${Number(queuedImportRun?.checked_rows || 0).toLocaleString('ru-RU')} строк.`
+        : queuedImportRun?.status === 'cancelled'
+        ? `Импорт остановлен. Не запущено строк: ${Number(queuedImportRun?.remaining_rows || 0)}.`
+        : importRunFailedRows.value > 0
+        ? 'Импорт завершен. Часть строк требует внимания.'
+        : 'Импорт завершен. Все строки обработаны.',
+    )
+  } catch (error) {
+    importExecutionStage.value = 'idle'
+    setError(error instanceof Error ? error.message : String(error))
+  } finally {
+    cancelRequested.value = false
     busyAction.value = ''
   }
 }
@@ -2474,69 +2955,66 @@ async function runImport() {
   cancelRequested.value = false
 
   try {
-    busyAction.value = 'run'
     await persistDedupSettingsIfNeeded()
     const validationResult = await ensureValidationBeforeExecution()
     if (!validationResult && !validationData.value) {
       return
     }
-    busyAction.value = 'run'
 
-    if (isDirectCrmEntityImport.value && dedupStrategy.value === 'create' && !dryRunData.value && !skippedDedupStep.value) {
-      busyAction.value = 'dry-run'
-      await executeDryRunRequest(String(session.value.id))
-    }
-
-    if (requiresPerRowDedupDecision.value && !dryRunData.value) {
-      busyAction.value = 'dry-run'
-      const dryRunResult = await executeDryRunRequest(String(session.value.id))
-      if (Number(dryRunResult?.pending_decision_rows || 0) > 0) {
-        setSuccess('Найдены дубли. Выберите действие для каждой строки и затем снова запустите импорт.')
-        return
-      }
-    }
-
-    if (requiresPerRowDedupDecision.value && hasUnresolvedPendingDedupDecisions.value) {
-      setError('Выберите действие для каждой строки с найденным дублем.')
+    if (!preimportScanData.value) {
+      currentStep.value = 6
+      importExecutionStage.value = 'idle'
+      setError('Сначала запустите тестовый импорт по всему файлу.')
       return
     }
 
-    if (!await confirmMassCreateImport()) {
-      setError('Импорт остановлен. Подтвердите массовое создание новых CRM-записей, если это ожидаемое действие.')
-      return
-    }
-
-    busyAction.value = 'run'
-    session.value = session.value ? { ...session.value, status: 'running' } : session.value
-    const response = await apiStore.runImportSession(String(session.value.id), perRowDedupDecisions.value)
-    const queuedImportRun = await resolveImportExecutionResult(String(session.value.id), response.item)
-    importRunData.value = queuedImportRun
-    currentStep.value = 7
-    setSuccess(
-      queuedImportRun?.status === 'running'
-        ? `Импорт продолжает выполняться в фоне. Уже обработано ${Number(queuedImportRun?.checked_rows || 0).toLocaleString('ru-RU')} строк.`
-        : queuedImportRun?.status === 'cancelled'
-        ? `Импорт остановлен. Не запущено строк: ${Number(queuedImportRun?.remaining_rows || 0)}.`
-        : importRunFailedRows.value > 0
-        ? 'Импорт завершен. Часть строк требует внимания.'
-        : 'Импорт завершен. Все строки обработаны.',
-    )
+    await executeImportRunRequest()
   } catch (error) {
+    importExecutionStage.value = 'idle'
     setError(error instanceof Error ? error.message : String(error))
   } finally {
     cancelRequested.value = false
-    busyAction.value = ''
   }
 }
 
-async function executeDryRunRequest(sessionId: string) {
-  const response = await apiStore.dryRunImportSession(sessionId)
-  dryRunData.value = null
+async function executeDryRunRequest(
+  sessionId: string,
+  {
+    mode = 'sample_preview',
+    target = 'sample',
+    runningStep = 6,
+    resolvedStep = 6,
+    cancelledStep = runningStep,
+  }: {
+    mode?: string
+    target?: 'sample' | 'scan' | 'full'
+    runningStep?: number
+    resolvedStep?: number
+    cancelledStep?: number
+  } = {},
+) {
+  const response = await apiStore.dryRunImportSession(sessionId, { mode })
+  if (target === 'sample') {
+    dryRunData.value = null
+  } else if (target === 'scan') {
+    preimportScanData.value = null
+  } else {
+    dryRunData.value = null
+    preimportScanData.value = null
+  }
   activeDryRunDedupRiskOnly.value = false
   importRunData.value = null
-  currentStep.value = 6
-  const dryRunResult = await resolveDryRunExecutionResult(sessionId, response.item)
-  dryRunData.value = dryRunResult
+  currentStep.value = runningStep
+  const dryRunResult = await resolveDryRunExecutionResult(sessionId, response.item, mode)
+  if (target === 'sample') {
+    dryRunData.value = dryRunResult
+  } else if (target === 'scan') {
+    preimportScanData.value = dryRunResult
+  } else {
+    dryRunData.value = dryRunResult
+    preimportScanData.value = dryRunResult
+  }
+  currentStep.value = dryRunResult?.status === 'cancelled' || dryRunResult?.cancelled ? cancelledStep : resolvedStep
   return dryRunResult
 }
 
@@ -2605,7 +3083,11 @@ async function cancelActiveImport() {
   try {
     const response = await apiStore.cancelImportSession(String(session.value.id))
     session.value = session.value ? { ...session.value, ...response.item } : response.item
-    setSuccess('Остановка запрошена. Текущая строка завершится, после чего импорт остановится.')
+    setSuccess(
+      busyAction.value === 'sample-preview'
+        ? 'Остановка запрошена. Текущая строка завершится, после чего тестовый импорт остановится.'
+        : 'Остановка запрошена. Текущая строка завершится, после чего импорт остановится.',
+    )
   } catch (error) {
     cancelRequested.value = false
     setError(error instanceof Error ? error.message : String(error))
@@ -2741,7 +3223,19 @@ function resolveRestoredCurrentStep(snapshot: Record<string, any> | null | undef
     return 6
   }
 
-  if (dryRunData.value || validationData.value || shouldWaitForDryRunExecutionSnapshot(snapshot)) {
+  if (shouldWaitForDryRunExecutionSnapshot(snapshot)) {
+    return 5
+  }
+
+  if (dryRunData.value) {
+    return 6
+  }
+
+  if (preimportScanData.value) {
+    return 6
+  }
+
+  if (validationData.value && !isDedupApplicable.value) {
     return 6
   }
 
@@ -2773,9 +3267,11 @@ function syncRestoredExecutionState(snapshot: Record<string, any> | null | undef
   validationData.value = summary.validation && typeof summary.validation === 'object'
     ? summary.validation
     : null
-  dryRunData.value = buildDryRunSummaryFromSessionSnapshot(snapshot)
+  preimportScanData.value = buildDryRunSummaryFromSessionSnapshot(snapshot, { preferredMode: 'preimport_scan' })
+  dryRunData.value = preimportScanData.value || buildDryRunSummaryFromSessionSnapshot(snapshot, { preferredMode: 'sample_preview' })
   importRunData.value = buildImportRunSummaryFromSessionSnapshot(snapshot)
   skippedDedupStep.value = false
+  importExecutionStage.value = pendingDecisionRows.value.length ? 'duplicate-decisions' : 'idle'
 
   const job = summary.job && typeof summary.job === 'object' ? summary.job : {}
   const jobMode = String(job.mode || '').trim().toLowerCase()
@@ -2783,11 +3279,11 @@ function syncRestoredExecutionState(snapshot: Record<string, any> | null | undef
   const sessionStatus = String(snapshot?.status || '').trim().toLowerCase()
   const isTerminalSessionStatus = ['completed', 'failed', 'cancelled'].includes(sessionStatus)
   if (!isTerminalSessionStatus && ['queued', 'running'].includes(jobState)) {
-    busyAction.value = jobMode === 'dry_run'
-      ? 'dry-run'
+    busyAction.value = jobMode === 'sample_preview' || jobMode === 'preimport_scan' || jobMode === 'dry_run'
+      ? 'sample-preview'
       : jobMode === 'retry'
         ? 'retry'
-        : jobMode === 'run'
+      : jobMode === 'run'
           ? 'run'
           : ''
   } else {
@@ -2804,16 +3300,26 @@ async function resumeHistorySessionBackground(snapshot: Record<string, any> | nu
   }
 
   if (shouldWaitForDryRunExecutionSnapshot(snapshot)) {
-    busyAction.value = 'dry-run'
+    const jobMode = String(snapshot?.summary?.job?.mode || '').trim().toLowerCase()
+    const preferredMode = jobMode === 'sample_preview' ? 'sample_preview' : 'preimport_scan'
+    busyAction.value = 'sample-preview'
     currentStep.value = 6
 
     try {
-      dryRunData.value = await resolveDryRunExecutionResult(sessionId, snapshot)
+      const resolvedDryRun = await resolveDryRunExecutionResult(sessionId, snapshot, preferredMode)
+      if (preferredMode === 'preimport_scan') {
+        dryRunData.value = resolvedDryRun
+        preimportScanData.value = resolvedDryRun
+        importExecutionStage.value = Number(resolvedDryRun?.pending_decision_rows || 0) > 0 ? 'duplicate-decisions' : 'idle'
+      } else {
+        dryRunData.value = resolvedDryRun
+        importExecutionStage.value = 'idle'
+      }
       currentStep.value = 6
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error))
     } finally {
-      if (busyAction.value === 'dry-run') {
+      if (String(busyAction.value || '').trim() === 'sample-preview') {
         busyAction.value = ''
       }
     }
@@ -2899,7 +3405,30 @@ function buildImportRunFromSnapshot(snapshot: Record<string, any> | null | undef
 }
 
 function buildDryRunFromSnapshot(snapshot: Record<string, any> | null | undefined) {
-  return buildDryRunSummaryFromSessionSnapshot(snapshot)
+  return buildDryRunSummaryFromSessionSnapshot(snapshot, { preferredMode: 'preimport_scan' })
+}
+
+function buildPreimportScanFromSnapshot(snapshot: Record<string, any> | null | undefined) {
+  return buildDryRunSummaryFromSessionSnapshot(snapshot, { preferredMode: 'preimport_scan' })
+}
+
+function buildCancelledDryRunSummary(snapshot: Record<string, any> | null | undefined) {
+  const processedRows = Number(snapshot?.processed_rows || 0)
+  const totalRows = Number(snapshot?.total_rows || 0)
+  return {
+    session_id: getSessionSnapshotId(snapshot),
+    status: 'cancelled',
+    checked_rows: processedRows,
+    ready_rows: Number(snapshot?.successful_rows || 0),
+    ready_create_rows: 0,
+    ready_update_rows: 0,
+    skipped_rows: Number(snapshot?.failed_rows || 0),
+    pending_decision_rows: 0,
+    cancelled: true,
+    cancelled_rows: Math.max(0, totalRows - processedRows),
+    remaining_rows: Math.max(0, totalRows - processedRows),
+    results: [],
+  }
 }
 
 async function waitForDryRunExecutionResult(sessionId: string) {
@@ -2910,18 +3439,25 @@ async function waitForDryRunExecutionResult(sessionId: string) {
     const snapshot = response.item
     syncSessionSnapshot(snapshot)
 
-    const resolvedDryRun = buildDryRunFromSnapshot(snapshot)
+    const jobMode = String(snapshot?.summary?.job?.mode || '').trim().toLowerCase()
+    const resolvedDryRun = jobMode === 'sample_preview'
+      ? buildDryRunSummaryFromSessionSnapshot(snapshot, { preferredMode: 'sample_preview' })
+      : buildPreimportScanFromSnapshot(snapshot)
     if (resolvedDryRun && !shouldWaitForDryRunExecutionSnapshot(snapshot)) {
       return resolvedDryRun
     }
 
     const currentStatus = String(snapshot?.status || '')
+    const runLabel = 'Тестовый импорт'
     if (currentStatus === 'failed') {
-      throw new Error(String(snapshot?.last_error || 'Тестовый импорт завершился с ошибкой в фоновом worker.'))
+      throw new Error(String(snapshot?.last_error || `${runLabel} завершился с ошибкой в фоновом worker.`))
+    }
+    if (currentStatus === 'cancelled') {
+      return resolvedDryRun || buildCancelledDryRunSummary(snapshot)
     }
 
     if (!shouldWaitForDryRunExecutionSnapshot(snapshot)) {
-      throw new Error('Тестовый импорт завершился без итогового отчета.')
+      throw new Error(`${runLabel} завершился без итогового отчета.`)
     }
 
     await sleepAction(1500)
@@ -2930,12 +3466,20 @@ async function waitForDryRunExecutionResult(sessionId: string) {
   const response = await apiStore.getImportSession(sessionId)
   const snapshot = response.item
   syncSessionSnapshot(snapshot)
-  const resolvedDryRun = buildDryRunFromSnapshot(snapshot)
+  const jobMode = String(snapshot?.summary?.job?.mode || '').trim().toLowerCase()
+  const resolvedDryRun = jobMode === 'sample_preview'
+    ? buildDryRunSummaryFromSessionSnapshot(snapshot, { preferredMode: 'sample_preview' })
+    : buildPreimportScanFromSnapshot(snapshot)
   if (resolvedDryRun) {
     return resolvedDryRun
   }
+  if (String(snapshot?.status || '') === 'cancelled') {
+    return buildCancelledDryRunSummary(snapshot)
+  }
 
-  throw new Error('Тестовый импорт запущен, но не удалось получить его текущее состояние.')
+  throw new Error(
+    'Тестовый импорт запущен, но не удалось получить его текущее состояние.',
+  )
 }
 
 async function waitForImportExecutionResult(sessionId: string) {
@@ -2974,12 +3518,19 @@ async function waitForImportExecutionResult(sessionId: string) {
   throw new Error('Импорт запущен, но не удалось получить его текущее состояние.')
 }
 
-async function resolveDryRunExecutionResult(sessionId: string, responseItem: Record<string, any> | null | undefined) {
+async function resolveDryRunExecutionResult(
+  sessionId: string,
+  responseItem: Record<string, any> | null | undefined,
+  preferredMode: string = 'sample_preview',
+) {
   if (responseItem && typeof responseItem === 'object' && Array.isArray(responseItem.results)) {
     syncSessionSnapshot({
       id: sessionId,
       status: responseItem.status,
-      summary: { dry_run: responseItem },
+      summary: {
+        dry_run: responseItem,
+        ...(preferredMode === 'sample_preview' ? { sample_preview: responseItem } : { preimport_scan: responseItem }),
+      },
     })
     await loadHistory()
     return responseItem
@@ -3121,63 +3672,84 @@ onUnmounted(() => {
           <div
             v-for="row in historyRows"
             :key="row.key"
-            class="rounded-[20px] border border-[#e3e9f0] bg-[#fbfcfe] px-5 py-4"
+            class="overflow-hidden rounded-[20px] border bg-white"
+            :class="{
+              'border-[#b8e6cc]': row.resultTone === 'success',
+              'border-[#f5c2c7]': row.resultTone === 'danger',
+              'border-[#f5dfa0]': row.resultTone === 'warning',
+              'border-[#bbd6f8]': row.resultTone === 'info',
+              'border-[#e3e9f0]': row.resultTone === 'neutral',
+            }"
           >
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="truncate text-sm font-semibold text-[#2f4254]">
-                  {{ row.fileName }}
+            <!-- color accent strip -->
+            <div
+              class="h-1 w-full"
+              :class="{
+                'bg-[#3dba6f]': row.resultTone === 'success',
+                'bg-[#d94f5c]': row.resultTone === 'danger',
+                'bg-[#e8a32a]': row.resultTone === 'warning',
+                'bg-[#2e6bd9]': row.resultTone === 'info',
+                'bg-[#c8d5e2]': row.resultTone === 'neutral',
+              }"
+            />
+
+            <div class="px-5 py-4">
+              <!-- Header row: filename + status badge -->
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="truncate text-[13px] font-semibold text-[#2f4254]">{{ row.fileName }}</div>
                 </div>
-                <div class="mt-1 text-xs text-[#8ea0b2]">
-                  {{ row.entityType }}
-                </div>
+                <span
+                  class="shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
+                  :class="{
+                    'bg-[#eefaf3] text-[#2b7a4b]': row.resultTone === 'success',
+                    'bg-[#fff1f1] text-[#c24b53]': row.resultTone === 'danger',
+                    'bg-[#fff8ec] text-[#a0610a]': row.resultTone === 'warning',
+                    'bg-[#eef6ff] text-[#2e6bd9]': row.resultTone === 'info',
+                    'bg-[#f2f5f9] text-[#6e8193]': row.resultTone === 'neutral',
+                  }"
+                >{{ row.resultLabel }}</span>
               </div>
-              <span
-                class="shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold"
-                :class="{
-                  'bg-[#eefaf3] text-[#2b7a4b]': row.resultTone === 'success',
-                  'bg-[#fff1f1] text-[#c24b53]': row.resultTone === 'danger',
-                  'bg-[#fff8ec] text-[#a0610a]': row.resultTone === 'warning',
-                  'bg-[#eef6ff] text-[#2e6bd9]': row.resultTone === 'info',
-                  'bg-[#f2f5f9] text-[#6e8193]': row.resultTone === 'neutral',
-                }"
-              >{{ row.resultLabel }}</span>
-            </div>
-            <div class="mt-3 flex flex-wrap items-center gap-4">
-              <div class="rounded-[12px] border border-[#e5ebf2] bg-white px-3 py-2">
-                <div class="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#9aa9b8]">
-                  Статус
-                </div>
-                <div class="mt-0.5 text-sm font-medium text-[#314256]">
-                  {{ row.statusLabel }}
-                </div>
+
+              <!-- Meta row: entity + format + date -->
+              <div class="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-[#8ea0b2]">
+                <span>{{ row.entityType }}</span>
+                <span class="text-[#c8d5e2]">·</span>
+                <span class="rounded-[6px] bg-[#f2f5f8] px-1.5 py-0.5 text-[11px] font-medium text-[#7a8fa0]">{{ row.sourceFormatLabel }}</span>
+                <span class="text-[#c8d5e2]">·</span>
+                <span>{{ row.updatedAtLabel }}</span>
               </div>
-              <div class="rounded-[12px] border border-[#e5ebf2] bg-white px-3 py-2">
-                <div class="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#9aa9b8]">
-                  Результат
+
+              <!-- Stats + action -->
+              <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+                <div v-if="row.counters.hasData" class="flex flex-wrap items-center gap-2">
+                  <span v-if="row.counters.total" class="rounded-[8px] border border-[#e5ebf2] bg-[#f7f9fb] px-2 py-1 text-[11px] font-medium text-[#6e8193]">
+                    Всего {{ row.counters.total }}
+                  </span>
+                  <span v-if="row.counters.created" class="rounded-[8px] border border-[#c3e8d0] bg-[#f0faf4] px-2 py-1 text-[11px] font-semibold text-[#2b7a4b]">
+                    +{{ row.counters.created }} созд.
+                  </span>
+                  <span v-if="row.counters.updated" class="rounded-[8px] border border-[#bbd6f8] bg-[#eef6ff] px-2 py-1 text-[11px] font-semibold text-[#2e6bd9]">
+                    {{ row.counters.updated }} обн.
+                  </span>
+                  <span v-if="row.counters.skipped" class="rounded-[8px] border border-[#e5ebf2] bg-[#f2f5f9] px-2 py-1 text-[11px] font-medium text-[#8ea0b2]">
+                    {{ row.counters.skipped }} проп.
+                  </span>
+                  <span v-if="row.counters.failed" class="rounded-[8px] border border-[#f5c2c7] bg-[#fff1f1] px-2 py-1 text-[11px] font-semibold text-[#c24b53]">
+                    {{ row.counters.failed }} ош.
+                  </span>
                 </div>
-                <div class="mt-0.5 text-sm font-medium text-[#314256]">
-                  {{ row.counters }}
-                </div>
+                <div v-else class="text-[12px] text-[#b0bec8]">Нет данных</div>
+
+                <B24Button
+                  :label="row.actionLabel"
+                  color="air-primary"
+                  size="md"
+                  :loading="restoringHistorySessionId === row.key"
+                  :disabled="!importerPermissionState.canViewSessions || Boolean(restoringHistorySessionId)"
+                  @click="resumeHistorySession(row.key)"
+                />
               </div>
-              <div class="rounded-[12px] border border-[#e5ebf2] bg-white px-3 py-2">
-                <div class="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#9aa9b8]">
-                  Обновлено
-                </div>
-                <div class="mt-0.5 text-sm font-medium text-[#314256]">
-                  {{ row.updatedAtLabel }}
-                </div>
-              </div>
-            </div>
-            <div class="mt-4 flex flex-wrap justify-end gap-3">
-              <B24Button
-                :label="row.actionLabel"
-                color="air-primary"
-                size="lg"
-                :loading="restoringHistorySessionId === row.key"
-                :disabled="!importerPermissionState.canViewSessions || Boolean(restoringHistorySessionId)"
-                @click="resumeHistorySession(row.key)"
-              />
             </div>
           </div>
         </div>
@@ -3199,18 +3771,12 @@ onUnmounted(() => {
               ← Назад
             </button>
             <div>
-              <div class="text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
-                Сценарий S17
-              </div>
-              <h1 class="mt-1 text-[26px] font-semibold leading-[1.1] text-[#2f4254]">
-                Массовое добавление файлов по фильтру CRM
+              <h1 class="text-[26px] font-semibold leading-[1.1] text-[#2f4254]">
+                Массовое добавление файлов
               </h1>
               <div class="mt-3 flex flex-wrap items-center gap-2">
                 <span class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
                   {{ currentScenarioSummary.selectedLabel }}
-                </span>
-                <span class="rounded-full border border-[#e5ebf2] bg-[#fbfcfe] px-3 py-1.5 text-sm text-[#627689]">
-                  Отдельный экран сценария
                 </span>
               </div>
             </div>
@@ -3226,7 +3792,7 @@ onUnmounted(() => {
           :initial-entity-type="selectedBulkAttachEntityType"
           :lock-entity-type="true"
           :resume-session-id="bulkAttachResumeSessionId"
-          @finish="goBackFromBulkAttach"
+          @finish="finishBulkAttachToEntitySelection"
         />
       </div>
     </div>
@@ -4454,13 +5020,12 @@ onUnmounted(() => {
                     label="Пропустить шаг"
                     color="air-tertiary"
                     size="lg"
-                    :loading="busyAction === 'dedup-skip'"
-                    :disabled="['dedup', 'dedup-skip', 'validation'].includes(String(busyAction || ''))"
+                    :disabled="['dedup', 'validation'].includes(String(busyAction || ''))"
                     @click="skipDedupStep"
                   />
                   <B24Button
                     v-if="isDedupApplicable"
-                    label="Сохранить правила"
+                    label="Сохранить правила дублей"
                     color="air-secondary-accent-2"
                     size="lg"
                     :loading="busyAction === 'dedup'"
@@ -4468,6 +5033,7 @@ onUnmounted(() => {
                     @click="saveDedupSettings"
                   />
                   <B24Button
+                    v-else
                     label="Проверить данные"
                     color="air-primary"
                     size="lg"
@@ -4479,7 +5045,7 @@ onUnmounted(() => {
               </div>
 
               <div
-                v-if="showsDedupProgress"
+                v-if="['dedup', 'validation'].includes(String(busyAction || ''))"
                 class="mb-5 rounded-[18px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-4"
               >
                 <div class="flex items-center justify-between gap-3">
@@ -4534,7 +5100,93 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <div v-if="isSimpleImportMode" class="space-y-4">
+                <div v-if="isLinkedImportEntityType(entityType)" class="space-y-4">
+                  <div class="text-sm text-[#5f7285]">
+                    Для связанного импорта правила дублей настраиваются отдельно по каждой сущности. Например, компанию можно обновлять по названию, а контакт создавать заново или спрашивать решение отдельно.
+                  </div>
+
+                  <div
+                    v-for="group in linkedDedupEntityGroups"
+                    :key="group.id"
+                    class="rounded-[18px] border border-[#e5ebf2] bg-white px-4 py-4"
+                  >
+                    <div class="mb-3">
+                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Правила для сущности</div>
+                      <div class="mt-1 text-base font-semibold text-[#314256]">{{ group.label }}</div>
+                    </div>
+
+                    <div class="grid gap-4 lg:grid-cols-[280px,1fr]">
+                      <B24Select
+                        :model-value="linkedDedupSettings[group.id]?.strategy || 'create'"
+                        class="w-full"
+                        size="lg"
+                        :items="dedupStrategyItems"
+                        @update:model-value="updateLinkedDedupStrategySelection(group.id, String($event || 'create'))"
+                      />
+
+                      <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
+                        <div class="font-medium text-[#314256]">Ключи поиска дубля</div>
+                        <div class="mt-1 text-xs text-[#7f92a7]">
+                          Используются только поля {{ group.label.toLowerCase() }} из текущего маппинга.
+                        </div>
+
+                        <div v-if="(linkedDedupFieldOptions[group.id] || []).length" class="mt-3 flex flex-wrap gap-3">
+                          <button
+                            v-for="item in linkedDedupFieldOptions[group.id] || []"
+                            :key="`${group.id}:${item.id}`"
+                            type="button"
+                            class="rounded-full border px-3 py-2 text-sm font-medium transition"
+                            :class="(linkedDedupSettings[group.id]?.fields || []).includes(item.id) && (linkedDedupSettings[group.id]?.strategy || 'create') !== 'create'
+                              ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
+                              : 'border-[#d9e2ec] bg-white text-[#516478]'"
+                            :disabled="(linkedDedupSettings[group.id]?.strategy || 'create') === 'create'"
+                            @click="toggleLinkedDedupField(group.id, item.id)"
+                          >
+                            {{ item.label }}
+                          </button>
+                        </div>
+
+                        <div v-else class="mt-3 text-sm text-[#7f92a7]">
+                          Сначала сопоставьте поля {{ group.label.toLowerCase() }} на шаге маппинга.
+                        </div>
+
+                        <div
+                          v-if="(linkedDedupSettings[group.id]?.strategy || 'create') !== 'create' && (linkedDedupSettings[group.id]?.fields || []).length >= 2"
+                          class="mt-4 flex items-center gap-3"
+                        >
+                          <span class="text-xs text-[#7f92a7]">Режим совпадения:</span>
+                          <div class="flex gap-1 rounded-[10px] border border-[#e5ebf2] bg-[#f4f7fa] p-1">
+                            <button
+                              type="button"
+                              class="rounded-[8px] px-3 py-1 text-xs font-medium transition"
+                              :class="(linkedDedupSettings[group.id]?.condition || 'any') === 'any' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
+                              @click="updateLinkedDedupCondition(group.id, 'any')"
+                            >
+                              Любое поле (OR)
+                            </button>
+                            <button
+                              type="button"
+                              class="rounded-[8px] px-3 py-1 text-xs font-medium transition"
+                              :class="(linkedDedupSettings[group.id]?.condition || 'any') === 'all' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
+                              @click="updateLinkedDedupCondition(group.id, 'all')"
+                            >
+                              Все поля (AND)
+                            </button>
+                          </div>
+                        </div>
+
+                        <div
+                          v-if="(linkedDedupSettings[group.id]?.strategy || 'create') !== 'create' && (linkedDedupFieldOptions[group.id] || []).length && !(linkedDedupSettings[group.id]?.fields || []).length"
+                          class="mt-3 rounded-[10px] border border-[#ffd5b3] bg-[#fff7ef] px-3 py-2 text-xs text-[#9a5a10]"
+                        >
+                          Выберите хотя бы один ключ поиска для сущности «{{ group.label }}».
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-else-if="isSimpleImportMode" class="space-y-4">
                   <div class="text-sm text-[#5f7285]">
                     В простом режиме дубли настраиваются без дополнительных опций: выбираете действие, а ключи поиска берутся автоматически из уже сопоставленных полей.
                   </div>
@@ -4668,6 +5320,7 @@ onUnmounted(() => {
                     </div>
                   </div>
                 </template>
+
               </template>
             </section>
           </section>
@@ -4677,7 +5330,7 @@ onUnmounted(() => {
               <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                   <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаг 6</div>
-                  <h2 class="mt-1 text-lg font-semibold text-[#314256]">Проверка</h2>
+                  <h2 class="mt-1 text-lg font-semibold text-[#314256]">Тестовый импорт и запуск</h2>
                 </div>
 
                 <div class="flex flex-wrap gap-3">
@@ -4692,17 +5345,26 @@ onUnmounted(() => {
                     label="Тестовый импорт"
                     color="air-secondary-accent-2"
                     size="lg"
-                    :loading="busyAction === 'dry-run'"
-                    :disabled="!canRunDryRun"
-                    @click="runDryRun"
+                    :loading="busyAction === 'sample-preview'"
+                    :disabled="!canRunValidation || busyAction === 'sample-preview'"
+                    @click="runSamplePreview"
                   />
                   <B24Button
                     label="Запустить импорт"
                     color="air-primary"
                     size="lg"
                     :loading="busyAction === 'run'"
-                    :disabled="!canRunImport"
+                    :disabled="!canRunImport || busyAction === 'sample-preview' || hasUnresolvedPendingDedupDecisions"
                     @click="runImport"
+                  />
+                  <B24Button
+                    v-if="busyAction === 'sample-preview' || cancelRequested"
+                    label="Остановить тестовый импорт"
+                    color="air-tertiary"
+                    size="lg"
+                    :loading="cancelRequested"
+                    :disabled="!canCancelActiveImport"
+                    @click="cancelActiveImport"
                   />
                   <B24Button
                     v-if="busyAction === 'run' || cancelRequested"
@@ -4717,25 +5379,42 @@ onUnmounted(() => {
               </div>
 
               <div
-                v-if="showsSessionProgress"
+                v-if="showsDedupProgress || showsSessionProgress || importExecutionStage === 'duplicate-decisions'"
                 class="mb-4 rounded-[18px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-4"
               >
                 <div class="mb-2 flex items-center justify-between text-sm">
-                  <span class="font-semibold text-[#2e6bd9]">{{ sessionProgressTitle }}</span>
+                  <span class="font-semibold text-[#2e6bd9]">
+                    {{ executionProgressTitle }}
+                  </span>
                   <span class="text-[#6f8194]">
-                    {{ session?.processed_rows ?? 0 }} из {{ session?.total_rows ?? '...' }} строк
+                    {{ executionProgressCounterLabel }}
                   </span>
                 </div>
                 <div class="mb-3 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
                   <div
                     class="h-2 rounded-full bg-[#2e6bd9] transition-all duration-500"
-                    :style="{ width: (session?.total_rows ? Math.min(100, Math.round(((session?.processed_rows ?? 0) / session.total_rows) * 100)) : 0) + '%' }"
+                    :style="{ width: executionProgressPercent + '%' }"
                   />
                 </div>
                 <div class="flex flex-wrap gap-4 text-sm text-[#5f7285]">
                   <span>Обработано: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
-                  <span>{{ busyAction === 'dry-run' ? 'К записи' : 'Успешно' }}: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
-                  <span>{{ busyAction === 'dry-run' ? 'Пропущено' : 'Ошибки' }}: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
+                  <span>{{ showsSessionProgress ? 'Успешно' : 'К записи' }}: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
+                  <span>{{ showsSessionProgress ? 'Ошибки' : 'Пропущено' }}: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
+                </div>
+                <div v-if="showsSessionProgress" class="mt-4 grid gap-3 md:grid-cols-2">
+                  <div
+                    v-for="phase in importExecutionPhaseCards"
+                    :key="phase.id"
+                    class="rounded-[16px] border px-4 py-3 text-sm"
+                    :class="phase.status === 'completed'
+                      ? 'border-[#cfe5d8] bg-white text-[#1a7a4a]'
+                      : phase.status === 'current'
+                        ? 'border-[#d7e7ff] bg-white text-[#2e6bd9]'
+                        : 'border-[#e5ebf2] bg-white text-[#6f8194]'"
+                  >
+                    <div class="font-semibold">{{ phase.label }}</div>
+                    <div class="mt-1 text-xs opacity-80">{{ phase.description }}</div>
+                  </div>
                 </div>
               </div>
 
@@ -4749,7 +5428,7 @@ onUnmounted(() => {
                   {{ stepSixStatusLabel }}
                 </div>
                 <div class="text-sm text-[#6f8194]">
-                  {{ dryRunData ? 'Тестовый импорт' : 'Проверка данных' }}
+                  {{ importExecutionStage === 'duplicate-decisions' ? 'Решения по дублям перед импортом' : (dryRunData ? 'Тестовый импорт' : 'Проверка данных') }}
                 </div>
               </div>
 
@@ -4761,6 +5440,171 @@ onUnmounted(() => {
                 >
                   <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ card.label }}</div>
                   <div class="mt-1 text-base font-semibold text-[#314256]">{{ card.value }}</div>
+                </div>
+              </div>
+
+              <div
+                v-if="dryRunData && importExecutionStage !== 'duplicate-decisions'"
+                class="mb-4 rounded-[18px] border border-[#d7e7ff] bg-[#f8fbff] px-4 py-4 text-sm text-[#5f7285]"
+              >
+                <div class="font-semibold text-[#314256]">Тестовый импорт проверяет весь файл</div>
+                <div class="mt-1">
+                  После проверки можно выбрать решения по дублям и отдельно запустить реальный импорт.
+                </div>
+              </div>
+
+              <div
+                v-if="importExecutionStage === 'duplicate-decisions' && requiresPerRowDedupDecision && dryRunData && pendingDecisionRows.length"
+                class="mb-4 rounded-[20px] border border-[#dce7f7] bg-white p-4"
+              >
+                <div class="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Решения перед импортом</div>
+                    <div class="mt-1 text-sm text-[#5f7285]">
+                      Тестовый импорт завершён. Выберите действие для каждого найденного дубля перед реальным импортом.
+                    </div>
+                    <div
+                      v-if="hasUnresolvedPendingDedupDecisions"
+                      class="mt-2 text-xs font-semibold text-[#c24b53]"
+                    >
+                      Импорт не начнётся, пока решение не выбрано для всех найденных дублей.
+                    </div>
+                    <div
+                      v-else
+                      class="mt-2 text-xs font-semibold text-[#1a7f3c]"
+                    >
+                      Все решения выбраны. Теперь можно запускать импорт.
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap gap-2 text-xs">
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#d7e7ff] bg-white px-3 py-1.5 font-medium text-[#2e6bd9] transition hover:bg-[#edf5ff]"
+                      @click="applyBulkPerRowDedupDecision('create')"
+                    >
+                      Всё создать
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#d4edda] bg-white px-3 py-1.5 font-medium text-[#1a7f3c] transition hover:bg-[#edf7f0]"
+                      @click="applyBulkPerRowDedupDecision('update')"
+                    >
+                      Всё обновить
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 font-medium text-[#6b7280] transition hover:bg-[#f3f4f6]"
+                      @click="applyBulkPerRowDedupDecision('skip')"
+                      >
+                        Всё пропустить
+                      </button>
+                  </div>
+                </div>
+
+                <div class="overflow-hidden rounded-[16px] border border-[#dce7f7] bg-white">
+                  <table class="w-full text-sm">
+                    <thead>
+                      <tr class="border-b border-[#e8eef5] bg-[#f5f8fc]">
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Строка</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">ID дубля</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Совпадение по</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Действие</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="row in pendingDecisionRows"
+                        :key="row.row_number"
+                        class="border-b border-[#eef3f8] last:border-b-0"
+                      >
+                        <td class="px-4 py-3 font-medium text-[#314256]">#{{ row.row_number }}</td>
+                        <td class="px-4 py-3 text-[#516478]">{{ row.record_id || '—' }}</td>
+                        <td class="px-4 py-3 text-[#516478]">
+                          {{ getPendingDecisionMatchFieldsLabel(row) }}
+                        </td>
+                        <td class="px-4 py-3">
+                          <div v-if="!isLinkedImportEntityType(entityType)" class="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
+                              :class="perRowDedupDecisions[String(row.row_number)] === 'create'
+                                ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
+                                : 'border-[#d9e2ec] bg-white text-[#516478]'"
+                              @click="perRowDedupDecisions[String(row.row_number)] = 'create'"
+                            >
+                              Создать
+                            </button>
+                            <button
+                              type="button"
+                              class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
+                              :class="perRowDedupDecisions[String(row.row_number)] === 'update'
+                                ? 'border-[#1a7f3c] bg-[#edf7f0] text-[#1a7f3c]'
+                                : 'border-[#d9e2ec] bg-white text-[#516478]'"
+                              @click="perRowDedupDecisions[String(row.row_number)] = 'update'"
+                            >
+                              Обновить
+                            </button>
+                            <button
+                              type="button"
+                              class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
+                              :class="perRowDedupDecisions[String(row.row_number)] === 'skip'
+                                ? 'border-[#9aa9b8] bg-[#f4f7fa] text-[#516478]'
+                                : 'border-[#d9e2ec] bg-white text-[#516478]'"
+                              @click="perRowDedupDecisions[String(row.row_number)] = 'skip'"
+                            >
+                              Пропустить
+                            </button>
+                          </div>
+                          <div v-else class="space-y-3">
+                            <div
+                              v-for="entityId in getPendingDecisionLinkedEntityIds(row)"
+                              :key="`${row.row_number}:${entityId}`"
+                              class="rounded-[14px] border border-[#e6edf6] bg-[#fafcff] px-3 py-3"
+                            >
+                              <div class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-[#7f92a7]">
+                                {{ linkedDedupEntityGroups.find((item) => item.id === entityId)?.label || entityId }}
+                              </div>
+                              <div class="mb-2 text-xs text-[#6f8194]">
+                                {{ getPendingDecisionMatchFieldsLabel(row, entityId) }}
+                              </div>
+                              <div class="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
+                                  :class="getPerRowDedupDecision(String(row.row_number), entityId) === 'create'
+                                    ? 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]'
+                                    : 'border-[#d9e2ec] bg-white text-[#516478]'"
+                                  @click="setPerRowDedupDecision(String(row.row_number), entityId, 'create')"
+                                >
+                                  Создать
+                                </button>
+                                <button
+                                  type="button"
+                                  class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
+                                  :class="getPerRowDedupDecision(String(row.row_number), entityId) === 'update'
+                                    ? 'border-[#1a7f3c] bg-[#edf7f0] text-[#1a7f3c]'
+                                    : 'border-[#d9e2ec] bg-white text-[#516478]'"
+                                  @click="setPerRowDedupDecision(String(row.row_number), entityId, 'update')"
+                                >
+                                  Обновить
+                                </button>
+                                <button
+                                  type="button"
+                                  class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
+                                  :class="getPerRowDedupDecision(String(row.row_number), entityId) === 'skip'
+                                    ? 'border-[#9aa9b8] bg-[#f4f7fa] text-[#516478]'
+                                    : 'border-[#d9e2ec] bg-white text-[#516478]'"
+                                  @click="setPerRowDedupDecision(String(row.row_number), entityId, 'skip')"
+                                >
+                                  Пропустить
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
@@ -4825,101 +5669,11 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <!-- Секция «Спросить по каждому дублю» — появляется после dry run -->
-              <div
-                v-if="isDedupApplicable && dedupStrategy === 'ask' && dryRunData && pendingDecisionRows.length"
-                class="mb-5 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
-              >
-                <div class="mb-3 flex items-center justify-between">
-                  <div>
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Найдены дубли — выберите действие</div>
-                    <div class="mt-1 text-sm text-[#5f7285]">
-                      Для каждой строки с дублем выберите: создать новую запись, обновить найденную или пропустить.
-                    </div>
-                    <div
-                      v-if="hasUnresolvedPendingDedupDecisions"
-                      class="mt-2 text-xs font-semibold text-[#c24b53]"
-                    >
-                      Импорт не запустится, пока действие не выбрано для каждой строки.
-                    </div>
-                  </div>
-                  <div class="flex gap-2 text-xs">
-                    <button
-                      type="button"
-                      class="rounded-full border border-[#d7e7ff] bg-white px-3 py-1.5 font-medium text-[#2e6bd9] transition hover:bg-[#edf5ff]"
-                      @click="pendingDecisionRows.forEach((r: any) => { perRowDedupDecisions[String(r.row_number)] = 'create' })"
-                    >
-                      Все → Создать
-                    </button>
-                    <button
-                      type="button"
-                      class="rounded-full border border-[#d4edda] bg-white px-3 py-1.5 font-medium text-[#1a7f3c] transition hover:bg-[#edf7f0]"
-                      @click="pendingDecisionRows.forEach((r: any) => { perRowDedupDecisions[String(r.row_number)] = 'update' })"
-                    >
-                      Все → Обновить
-                    </button>
-                    <button
-                      type="button"
-                      class="rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 font-medium text-[#6b7280] transition hover:bg-[#f3f4f6]"
-                      @click="pendingDecisionRows.forEach((r: any) => { perRowDedupDecisions[String(r.row_number)] = 'skip' })"
-                    >
-                      Все → Пропустить
-                    </button>
-                  </div>
-                </div>
-
-                <div class="overflow-hidden rounded-[16px] border border-[#dce7f7] bg-white">
-                  <table class="w-full text-sm">
-                    <thead>
-                      <tr class="border-b border-[#e8eef5] bg-[#f5f8fc]">
-                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Строка</th>
-                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">ID дубля</th>
-                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Совпадение по</th>
-                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Действие</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        v-for="row in pendingDecisionRows"
-                        :key="row.row_number"
-                        class="border-b border-[#f0f4f8] last:border-0"
-                      >
-                        <td class="px-4 py-2.5 font-medium text-[#314256]">{{ row.row_number }}</td>
-                        <td class="px-4 py-2.5 text-[#5f7285]">{{ row.record_id || '—' }}</td>
-                        <td class="px-4 py-2.5 text-[#5f7285]">
-                          {{ formatDedupFieldList(row.duplicate_match_fields) }}
-                        </td>
-                        <td class="px-4 py-2.5">
-                          <div class="flex gap-1.5">
-                            <button
-                              v-for="opt in [
-                                { value: 'create', label: 'Создать', activeClass: 'border-[#2e6bd9] bg-[#edf5ff] text-[#2e6bd9]' },
-                                { value: 'update', label: 'Обновить', activeClass: 'border-[#1a7f3c] bg-[#edf7f0] text-[#1a7f3c]' },
-                                { value: 'skip', label: 'Пропустить', activeClass: 'border-[#6b7280] bg-[#f3f4f6] text-[#374151]' },
-                              ]"
-                              :key="opt.value"
-                              type="button"
-                              class="rounded-full border px-2.5 py-1 text-xs font-medium transition"
-                              :class="perRowDedupDecisions[String(row.row_number)] === opt.value
-                                ? opt.activeClass
-                                : 'border-[#e5e7eb] bg-white text-[#6b7280] hover:border-[#c5cfd8]'"
-                              @click="perRowDedupDecisions[String(row.row_number)] = opt.value"
-                            >
-                              {{ opt.label }}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
               <div class="overflow-hidden rounded-[20px] border border-[#dfe5eb] bg-white">
                 <B24Table
                   v-if="dryRunData"
                   class="w-full"
-                  :loading="busyAction === 'dry-run'"
+                  :loading="busyAction === 'sample-preview'"
                   loading-color="air-primary"
                   loading-animation="loading"
                   :columns="dryRunTableColumns"
@@ -4928,19 +5682,94 @@ onUnmounted(() => {
                     ? 'Строки с риском неполного поиска дублей не найдены.'
                     : 'После тестового импорта здесь появится предварительный отчет по строкам.'"
                 >
+                  <template #rowNumber-cell="{ row }">
+                    <div class="py-1 font-medium text-[#314256]">
+                      {{ getRowNumberDisplayValue(row.original) }}
+                    </div>
+                  </template>
                   <template #details-cell="{ row }">
-                    <div class="py-1">
-                      <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
-                        {{ getTextBlockDisplayValue(makeCollapsibleKey('dry-run-row', row.original.key), row.original.details) }}
+                    <div v-if="hasLinkedEntityTree(row.original)" class="py-1">
+                      <div class="space-y-3">
+                        <div class="rounded-[18px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f8fbff_0%,#eef6ff_100%)] px-4 py-3">
+                          <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div class="min-w-0">
+                              <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                {{ row.original.entityTree?.primary.entityLabel }}
+                              </div>
+                              <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
+                                {{ row.original.entityTree?.primary.title }}
+                              </div>
+                            </div>
+                            <div
+                              class="shrink-0 rounded-full border px-3 py-1 text-xs font-semibold"
+                              :class="getLinkedEntityTreeStatusClass(row.original.entityTree?.primary.status || '')"
+                            >
+                              {{ row.original.entityTree?.primary.statusLabel }}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div
+                          v-if="row.original.entityTree?.linkedItems?.length"
+                          class="ml-4 space-y-2 border-l border-[#dce7f7] pl-4"
+                        >
+                          <div
+                            v-for="item in row.original.entityTree?.linkedItems || []"
+                            :key="item.key"
+                            class="rounded-[14px] border border-[#e6edf6] bg-white px-4 py-3"
+                          >
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                              <div class="min-w-0">
+                                <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                  {{ item.entityLabel }}
+                                </div>
+                                <div class="mt-1 truncate text-sm font-medium text-[#314256]">
+                                  {{ item.title }}
+                                </div>
+                              </div>
+                              <div
+                                class="shrink-0 rounded-full border px-3 py-1 text-xs font-semibold"
+                                :class="getLinkedEntityTreeStatusClass(item.status)"
+                              >
+                                {{ item.statusLabel }}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <button
-                        v-if="isTextCollapsible(row.original.details)"
-                        type="button"
-                        class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
-                        @click="toggleTextBlock(makeCollapsibleKey('dry-run-row', row.original.key))"
-                      >
-                        {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
-                      </button>
+                    </div>
+                    <div v-else class="py-1">
+                      <div class="rounded-[16px] border border-[#e6edf6] bg-[#fbfcfe] px-4 py-3">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                          <div class="min-w-0 flex-1">
+                            <div v-if="hasExecutionRowHeading(row.original)" class="mb-2">
+                              <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                {{ row.original.entityLabel || 'Запись' }}
+                              </div>
+                              <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
+                                {{ row.original.title || 'Без названия' }}
+                              </div>
+                            </div>
+                            <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
+                              {{ getTextBlockDisplayValue(makeCollapsibleKey('dry-run-row', row.original.key), row.original.details) }}
+                            </div>
+                            <button
+                              v-if="isTextCollapsible(row.original.details)"
+                              type="button"
+                              class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
+                              @click="toggleTextBlock(makeCollapsibleKey('dry-run-row', row.original.key))"
+                            >
+                              {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                            </button>
+                          </div>
+                          <div
+                            class="shrink-0 rounded-full border px-3 py-1 text-xs font-semibold"
+                            :class="getLinkedEntityTreeStatusClass(row.original.status || '')"
+                          >
+                            {{ row.original.statusLabel }}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </template>
                 </B24Table>
@@ -4997,12 +5826,12 @@ onUnmounted(() => {
                 <B24Table
                   v-else
                   class="w-full"
-                  :loading="busyAction === 'validation' || busyAction === 'dry-run'"
+                  :loading="busyAction === 'validation' || busyAction === 'sample-preview'"
                   loading-color="air-primary"
                   loading-animation="loading"
                   :columns="validationTableColumns"
                   :data="validationIssueRows"
-                  empty="Ошибок не найдено. Можно запускать импорт."
+                  empty="Ошибок не найдено. Можно запускать тестовый импорт."
                 >
                   <template #message-cell="{ row }">
                     <div class="py-1">
@@ -5054,6 +5883,13 @@ onUnmounted(() => {
                     size="lg"
                     :disabled="!canGoBack"
                     @click="goBack"
+                  />
+                  <B24Button
+                    v-if="!busyAction"
+                    label="Завершить"
+                    color="air-secondary"
+                    size="lg"
+                    @click="finishToEntitySelection"
                   />
                   <div
                     class="rounded-full px-4 py-2 text-sm font-semibold"
@@ -5214,9 +6050,141 @@ onUnmounted(() => {
             </section>
 
             <section
-              v-if="!isLinkedCompanyContactImport || !linkedImportRunSummary.hasSummary"
+              v-if="dryRunData"
               class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5"
             >
+              <button
+                type="button"
+                class="flex w-full flex-col gap-3 text-left md:flex-row md:items-center md:justify-between"
+                @click="isStepSevenDryRunExpanded = !isStepSevenDryRunExpanded"
+              >
+                <div>
+                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Тестовый импорт</div>
+                  <h3 class="mt-1 text-xl font-semibold text-[#314256]">Результат тестового импорта</h3>
+                </div>
+                <div class="inline-flex items-center rounded-full border border-[#d9e2ec] bg-white px-4 py-2 text-sm font-semibold text-[#516478]">
+                  {{ isStepSevenDryRunExpanded ? 'Свернуть' : 'Развернуть' }}
+                </div>
+              </button>
+
+              <div v-if="isStepSevenDryRunExpanded" class="mt-5">
+                <div class="overflow-hidden rounded-[20px] border border-[#dfe5eb] bg-white">
+                  <B24Table
+                    class="w-full"
+                    :columns="dryRunTableColumns"
+                    :data="paginatedDryRunRows"
+                    empty="После тестового импорта здесь появится предварительный отчет по строкам."
+                  >
+                    <template #rowNumber-cell="{ row }">
+                      <div class="py-1 font-medium text-[#314256]">
+                        {{ getRowNumberDisplayValue(row.original) }}
+                      </div>
+                    </template>
+                    <template #details-cell="{ row }">
+                      <div v-if="hasLinkedEntityTree(row.original)" class="py-1">
+                        <div class="space-y-3">
+                          <div class="rounded-[18px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f8fbff_0%,#eef6ff_100%)] px-4 py-3">
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                              <div class="min-w-0">
+                                <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                  {{ row.original.entityTree?.primary.entityLabel }}
+                                </div>
+                                <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
+                                  {{ row.original.entityTree?.primary.title }}
+                                </div>
+                              </div>
+                              <div
+                                class="shrink-0 rounded-full border px-3 py-1 text-xs font-semibold"
+                                :class="getLinkedEntityTreeStatusClass(row.original.entityTree?.primary.status || '')"
+                              >
+                                {{ row.original.entityTree?.primary.statusLabel }}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div
+                            v-if="row.original.entityTree?.linkedItems?.length"
+                            class="ml-4 space-y-2 border-l border-[#dce7f7] pl-4"
+                          >
+                            <div
+                              v-for="item in row.original.entityTree?.linkedItems || []"
+                              :key="item.key"
+                              class="rounded-[14px] border border-[#e6edf6] bg-white px-4 py-3"
+                            >
+                              <div class="flex flex-wrap items-center justify-between gap-3">
+                                <div class="min-w-0">
+                                  <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                    {{ item.entityLabel }}
+                                  </div>
+                                  <div class="mt-1 truncate text-sm font-medium text-[#314256]">
+                                    {{ item.title }}
+                                  </div>
+                                </div>
+                                <div
+                                  class="shrink-0 rounded-full border px-3 py-1 text-xs font-semibold"
+                                  :class="getLinkedEntityTreeStatusClass(item.status)"
+                                >
+                                  {{ item.statusLabel }}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div v-else class="py-1">
+                        <div class="rounded-[16px] border border-[#e6edf6] bg-[#fbfcfe] px-4 py-3">
+                          <div class="flex flex-wrap items-start justify-between gap-3">
+                            <div class="min-w-0 flex-1">
+                              <div v-if="hasExecutionRowHeading(row.original)" class="mb-2">
+                                <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                  {{ row.original.entityLabel || 'Запись' }}
+                                </div>
+                                <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
+                                  {{ row.original.title || 'Без названия' }}
+                                </div>
+                              </div>
+                              <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
+                                {{ getTextBlockDisplayValue(makeCollapsibleKey('step-seven-dry-run-row', row.original.key), row.original.details) }}
+                              </div>
+                              <button
+                                v-if="isTextCollapsible(row.original.details)"
+                                type="button"
+                                class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
+                                @click="toggleTextBlock(makeCollapsibleKey('step-seven-dry-run-row', row.original.key))"
+                              >
+                                {{ isTextBlockExpanded(makeCollapsibleKey('step-seven-dry-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                              </button>
+                            </div>
+                            <div
+                              class="shrink-0 rounded-full border px-3 py-1 text-xs font-semibold"
+                              :class="getLinkedEntityTreeStatusClass(row.original.status || '')"
+                            >
+                              {{ row.original.statusLabel }}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+                  </B24Table>
+                  <div
+                    v-if="dryRunData && dryRunPageCount > 1"
+                    class="border-t border-[#e8eef5] bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-4 py-4"
+                  >
+                    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div class="text-sm text-[#5f7285]">
+                        Показаны строки <span class="font-semibold text-[#314256]">{{ dryRunPageRangeStart }}-{{ dryRunPageRangeEnd }}</span>
+                        из <span class="font-semibold text-[#314256]">{{ filteredDryRunRows.length }}</span>.
+                      </div>
+                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                        Страница {{ dryRunPage }} из {{ dryRunPageCount }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
               <div class="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                   <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Детали</div>
@@ -5379,19 +6347,94 @@ onUnmounted(() => {
                     ? 'После запуска импорта здесь появится итог по строкам.'
                     : 'Для выбранного фильтра строк не найдено.'"
                 >
+                  <template #rowNumber-cell="{ row }">
+                    <div class="py-1 font-medium text-[#314256]">
+                      {{ getRowNumberDisplayValue(row.original) }}
+                    </div>
+                  </template>
                   <template #details-cell="{ row }">
-                    <div class="py-1">
-                      <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
-                        {{ getTextBlockDisplayValue(makeCollapsibleKey('import-run-row', row.original.key), row.original.details) }}
+                    <div v-if="hasLinkedEntityTree(row.original)" class="py-1">
+                      <div class="space-y-3">
+                        <div class="rounded-[18px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f8fbff_0%,#eef6ff_100%)] px-4 py-3">
+                          <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div class="min-w-0">
+                              <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                {{ row.original.entityTree?.primary.entityLabel }}
+                              </div>
+                              <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
+                                {{ row.original.entityTree?.primary.title }}
+                              </div>
+                            </div>
+                            <div
+                              class="shrink-0 rounded-full border px-3 py-1 text-xs font-semibold"
+                              :class="getLinkedEntityTreeStatusClass(row.original.entityTree?.primary.status || '')"
+                            >
+                              {{ row.original.entityTree?.primary.statusLabel }}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div
+                          v-if="row.original.entityTree?.linkedItems?.length"
+                          class="ml-4 space-y-2 border-l border-[#dce7f7] pl-4"
+                        >
+                          <div
+                            v-for="item in row.original.entityTree?.linkedItems || []"
+                            :key="item.key"
+                            class="rounded-[14px] border border-[#e6edf6] bg-white px-4 py-3"
+                          >
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                              <div class="min-w-0">
+                                <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                  {{ item.entityLabel }}
+                                </div>
+                                <div class="mt-1 truncate text-sm font-medium text-[#314256]">
+                                  {{ item.title }}
+                                </div>
+                              </div>
+                              <div
+                                class="shrink-0 rounded-full border px-3 py-1 text-xs font-semibold"
+                                :class="getLinkedEntityTreeStatusClass(item.status)"
+                              >
+                                {{ item.statusLabel }}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <button
-                        v-if="isTextCollapsible(row.original.details)"
-                        type="button"
-                        class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
-                        @click="toggleTextBlock(makeCollapsibleKey('import-run-row', row.original.key))"
-                      >
-                        {{ isTextBlockExpanded(makeCollapsibleKey('import-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
-                      </button>
+                    </div>
+                    <div v-else class="py-1">
+                      <div class="rounded-[16px] border border-[#e6edf6] bg-[#fbfcfe] px-4 py-3">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                          <div class="min-w-0 flex-1">
+                            <div v-if="hasExecutionRowHeading(row.original)" class="mb-2">
+                              <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                {{ row.original.entityLabel || 'Запись' }}
+                              </div>
+                              <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
+                                {{ row.original.title || 'Без названия' }}
+                              </div>
+                            </div>
+                            <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
+                              {{ getTextBlockDisplayValue(makeCollapsibleKey('import-run-row', row.original.key), row.original.details) }}
+                            </div>
+                            <button
+                              v-if="isTextCollapsible(row.original.details)"
+                              type="button"
+                              class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
+                              @click="toggleTextBlock(makeCollapsibleKey('import-run-row', row.original.key))"
+                            >
+                              {{ isTextBlockExpanded(makeCollapsibleKey('import-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                            </button>
+                          </div>
+                          <div
+                            class="shrink-0 rounded-full border px-3 py-1 text-xs font-semibold"
+                            :class="getLinkedEntityTreeStatusClass(row.original.status || '')"
+                          >
+                            {{ row.original.statusLabel }}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </template>
                 </B24Table>
