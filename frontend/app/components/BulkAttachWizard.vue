@@ -2,9 +2,11 @@
 const props = withDefaults(defineProps<{
   initialEntityType?: string
   lockEntityType?: boolean
+  resumeSessionId?: string
 }>(), {
   initialEntityType: '',
   lockEntityType: false,
+  resumeSessionId: '',
 })
 
 const apiStore = useApiStore()
@@ -60,6 +62,9 @@ const previewHasMore = ref(false)
 const fileUrl = ref('')
 const fieldId = ref('')
 const fileName = ref('')
+const uploadedFileId = ref('')
+const uploadedFileName = ref('')
+const uploadingFile = ref(false)
 
 // Step 4 — run result
 const sessionId = ref('')
@@ -79,6 +84,15 @@ const filterFieldOptions = computed(() => (
       label: field.title,
     }))
 ))
+
+const fileFieldOptions = computed(() =>
+  filterFieldCatalog.value
+    .filter((field) => field.type === 'file' || field.type === 'disk_file')
+    .map((field) => ({
+      value: field.id,
+      label: field.title,
+    }))
+)
 
 const computedFilter = computed(() => {
   const f: Record<string, any> = {}
@@ -221,9 +235,72 @@ async function goFileConfig() {
   step.value = 3
 }
 
+async function handleFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  error.value = ''
+  uploadingFile.value = true
+  uploadedFileId.value = ''
+  uploadedFileName.value = ''
+  try {
+    const res = await apiStore.uploadBulkAttachFile(file)
+    uploadedFileId.value = res.file_id
+    uploadedFileName.value = res.file_name
+  } catch (e: any) {
+    error.value = String(e?.data?.error || e?.message || 'Ошибка загрузки файла')
+  } finally {
+    uploadingFile.value = false
+    input.value = ''
+  }
+}
+
+function startPolling(sid: string) {
+  if (pollingHandle.value) return
+  pollingHandle.value = setInterval(async () => {
+    try {
+      const res = await apiStore.getImportSession(sid)
+      const snap = res.item
+      if (!snap) return
+      const status = String(snap.status || '')
+      progressProcessed.value = Number(snap.processed_rows || 0)
+      progressTotal.value = Number(snap.total_rows || progressTotal.value)
+      if (status !== 'running' && status !== 'draft') {
+        stopPolling()
+        sessionStatus.value = status
+        resultTotal.value = Number(snap.total_rows || 0)
+        resultSuccessful.value = Number(snap.successful_rows || 0)
+        resultFailed.value = Number(snap.failed_rows || 0)
+        progressProcessed.value = resultTotal.value
+      }
+    } catch { /* ignore polling errors */ }
+  }, 2000)
+}
+
+function stopPolling() {
+  if (pollingHandle.value) {
+    clearInterval(pollingHandle.value)
+    pollingHandle.value = null
+  }
+}
+
+async function applySessionSnapshot(snap: Record<string, any>) {
+  sessionId.value = String(snap.id || '')
+  sessionStatus.value = String(snap.status || '')
+  progressTotal.value = Number(snap.total_rows || 0)
+  progressProcessed.value = Number(snap.processed_rows || 0)
+  resultTotal.value = Number(snap.total_rows || 0)
+  resultSuccessful.value = Number(snap.successful_rows || 0)
+  resultFailed.value = Number(snap.failed_rows || 0)
+  step.value = 4
+  if (sessionStatus.value === 'running') {
+    startPolling(sessionId.value)
+  }
+}
+
 async function runAttach() {
   error.value = ''
-  if (!fileUrl.value.trim()) { error.value = 'Укажите URL файла'; return }
+  if (!uploadedFileId.value && !fileUrl.value.trim()) { error.value = 'Загрузите файл'; return }
   if (!fieldId.value.trim()) { error.value = 'Укажите ID поля'; return }
 
   busy.value = true
@@ -231,9 +308,10 @@ async function runAttach() {
     const created = await apiStore.createBulkAttachSession({
       entity_type: entityType.value,
       filter: computedFilter.value,
-      file_url: fileUrl.value.trim(),
+      ...(uploadedFileId.value
+        ? { file_id: uploadedFileId.value, file_name: uploadedFileName.value }
+        : { file_url: fileUrl.value.trim(), file_name: fileName.value.trim() }),
       field_id: fieldId.value.trim(),
-      file_name: fileName.value.trim(),
     })
     sessionId.value = String(created.item.id)
     sessionStatus.value = 'running'
@@ -242,11 +320,18 @@ async function runAttach() {
     progressTotal.value = previewTotal.value
 
     const runRes = await apiStore.runBulkAttachSession(sessionId.value)
-    sessionStatus.value = String(runRes.item?.status || 'completed')
-    resultTotal.value = Number(runRes.result?.total || 0)
-    resultSuccessful.value = Number(runRes.result?.successful || 0)
-    resultFailed.value = Number(runRes.result?.failed || 0)
-    progressProcessed.value = resultTotal.value
+    const runStatus = String(runRes.item?.status || '')
+
+    if (runStatus === 'running') {
+      // фоновый режим — поллим
+      startPolling(sessionId.value)
+    } else {
+      sessionStatus.value = runStatus || 'completed'
+      resultTotal.value = Number(runRes.result?.total ?? runRes.item?.total_rows ?? 0)
+      resultSuccessful.value = Number(runRes.result?.successful ?? runRes.item?.successful_rows ?? 0)
+      resultFailed.value = Number(runRes.result?.failed ?? runRes.item?.failed_rows ?? 0)
+      progressProcessed.value = resultTotal.value
+    }
   } catch (e: any) {
     error.value = String(e?.data?.error || e?.message || 'Ошибка при выполнении')
     sessionStatus.value = 'failed'
@@ -255,7 +340,21 @@ async function runAttach() {
   }
 }
 
+watch(() => props.resumeSessionId, async (newId) => {
+  if (!newId) return
+  stopPolling()
+  try {
+    const res = await apiStore.getImportSession(newId)
+    if (res.item) await applySessionSnapshot(res.item)
+  } catch { /* ignore */ }
+}, { immediate: true })
+
+onUnmounted(() => {
+  stopPolling()
+})
+
 function reset() {
+  stopPolling()
   step.value = 1
   error.value = ''
   filterFieldRows.value = []
@@ -264,6 +363,9 @@ function reset() {
   fileUrl.value = ''
   fieldId.value = ''
   fileName.value = ''
+  uploadedFileId.value = ''
+  uploadedFileName.value = ''
+  uploadingFile.value = false
   sessionId.value = ''
   sessionStatus.value = ''
   resultTotal.value = 0
@@ -399,7 +501,6 @@ function reset() {
           <button
             type="button"
             class="inline-flex items-center rounded-full border border-dashed border-[#c6d7ee] bg-transparent px-4 py-2 text-sm font-medium text-[#53749b] transition hover:border-[#2e6bd9] hover:text-[#2e6bd9]"
-            :disabled="loadingFilterFields"
             @click="openAddFilterField"
           >
             Добавить поле
@@ -484,36 +585,47 @@ function reset() {
         </div>
 
         <div class="mb-4">
-          <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-[#9aa9b8]">URL файла <span class="text-[#c24b53]">*</span></label>
-          <input
-            v-model="fileUrl"
-            type="url"
-            placeholder="https://example.com/promo.pdf"
-            class="w-full rounded-[10px] border border-[#d8e3ef] px-3 py-2 text-sm text-[#314256] outline-none focus:border-[#2e6bd9]"
-          />
-          <p class="mt-1 text-xs text-[#9aa9b8]">Публично доступный URL файла для скачивания</p>
+          <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-[#9aa9b8]">Файл <span class="text-[#c24b53]">*</span></label>
+          <label class="flex cursor-pointer items-center gap-3 rounded-[10px] border border-dashed border-[#c6d7ee] bg-[#f8fbff] px-4 py-3 transition hover:border-[#2e6bd9]">
+            <input type="file" class="hidden" :disabled="uploadingFile" @change="handleFileSelect" />
+            <span class="text-base">📎</span>
+            <span v-if="uploadingFile" class="text-sm text-[#6f8194]">Загрузка...</span>
+            <span v-else-if="uploadedFileName" class="text-sm font-medium text-[#314256]">{{ uploadedFileName }}</span>
+            <span v-else class="text-sm text-[#9aa9b8]">Выберите файл с компьютера</span>
+            <span v-if="uploadedFileName && !uploadingFile" class="ml-auto text-xs text-[#4caf7d]">✓ загружен</span>
+          </label>
+          <p class="mt-1 text-xs text-[#9aa9b8]">Файл будет прикреплён к каждой из {{ previewTotal }} записей</p>
         </div>
 
         <div class="mb-4">
-          <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-[#9aa9b8]">ID поля типа «Файл» <span class="text-[#c24b53]">*</span></label>
-          <input
-            v-model="fieldId"
-            type="text"
-            placeholder="Например: UF_CRM_PROMO_FILE"
-            class="w-full rounded-[10px] border border-[#d8e3ef] px-3 py-2 text-sm text-[#314256] outline-none focus:border-[#2e6bd9]"
-          />
-          <p class="mt-1 text-xs text-[#9aa9b8]">User Field или стандартное поле типа «Файл» в Bitrix24</p>
+          <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-[#9aa9b8]">Поле для файла <span class="text-[#c24b53]">*</span></label>
+          <div v-if="loadingFilterFields" class="rounded-[10px] border border-[#d8e3ef] px-3 py-2 text-sm text-[#9aa9b8]">
+            Загружаем поля...
+          </div>
+          <template v-else-if="fileFieldOptions.length">
+            <B24SelectMenu
+              :model-value="fieldId"
+              class="w-full"
+              placeholder="Выберите поле типа «Файл»"
+              :items="fileFieldOptions"
+              value-key="value"
+              :filter-fields="['label']"
+              :search-input="{ placeholder: 'Поиск поля' }"
+              @update:model-value="fieldId = String($event || '')"
+            />
+            <p class="mt-1 text-xs text-[#9aa9b8]">Показаны системные и пользовательские поля типа «Файл» из Bitrix24</p>
+          </template>
+          <template v-else>
+            <input
+              v-model="fieldId"
+              type="text"
+              placeholder="Например: UF_CRM_PROMO_FILE"
+              class="w-full rounded-[10px] border border-[#d8e3ef] px-3 py-2 text-sm text-[#314256] outline-none focus:border-[#2e6bd9]"
+            />
+            <p class="mt-1 text-xs text-[#b87a30]">Поля типа «Файл» не найдены — введите ID вручную</p>
+          </template>
         </div>
 
-        <div class="mb-5">
-          <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-[#9aa9b8]">Имя файла <span class="font-normal normal-case text-[#b0bec8]">(необязательно)</span></label>
-          <input
-            v-model="fileName"
-            type="text"
-            placeholder="promo.pdf"
-            class="w-full rounded-[10px] border border-[#d8e3ef] px-3 py-2 text-sm text-[#314256] outline-none focus:border-[#2e6bd9]"
-          />
-        </div>
 
         <div class="flex justify-between">
           <B24Button label="← Назад" color="air-tertiary" size="md" @click="step = 2" />
@@ -530,9 +642,8 @@ function reset() {
       <aside class="rounded-[22px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f7fbff_0%,#eef5ff_100%)] p-5">
         <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Памятка</div>
         <div class="mt-3 space-y-3 text-sm text-[#5b728b]">
-          <p>Укажи прямой URL файла, доступный для скачивания сервером.</p>
+          <p>Загрузи файл с компьютера — он будет прикреплён к каждой из отфильтрованных записей.</p>
           <p>В поле назначения используй ID пользовательского поля Bitrix24 типа «Файл», например `UF_CRM_*`.</p>
-          <p>Если имя не задано, система возьмёт его из источника.</p>
         </div>
       </aside>
     </div>

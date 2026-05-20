@@ -1,3 +1,4 @@
+import os
 import time
 
 from b24pysdk.bitrix_api.requests import BitrixAPIRequest
@@ -41,7 +42,7 @@ def fetch_crm_entities_page(account, entity_type: str, filter_params: dict, star
     if entity_type not in SUPPORTED_ENTITY_TYPES:
         raise ValueError(f"Unsupported entity type: {entity_type}")
 
-    response = BitrixAPIRequest(
+    request = BitrixAPIRequest(
         bitrix_token=account,
         api_method=CRM_LIST_METHODS[entity_type],
         params={
@@ -50,22 +51,13 @@ def fetch_crm_entities_page(account, entity_type: str, filter_params: dict, star
             "start": start,
         },
     )
-    result = response.result
-    if isinstance(result, dict):
-        items = result.get("result") or result.get("items") or []
-        total = int(result.get("total") or 0)
-        next_start = result.get("next")
-    elif isinstance(result, list):
-        items = result
-        total = len(result)
-        next_start = None
-    else:
-        items = []
-        total = 0
-        next_start = None
+    api_response = request.response
+    items = api_response.result if isinstance(api_response.result, list) else []
+    total = int(api_response.total) if api_response.total is not None else len(items)
+    next_start = api_response.next
 
     return {
-        "items": items if isinstance(items, list) else [],
+        "items": items,
         "total": total,
         "next": int(next_start) if next_start is not None else None,
     }
@@ -95,18 +87,22 @@ def fetch_crm_entity_ids(account, entity_type: str, filter_params: dict) -> list
 
 
 def execute_bulk_attach(*, session, account) -> dict:
+    from django.conf import settings
     from importer.models import ImportSession
 
     bulk_config = (session.summary or {}).get("bulk_attach", {})
     entity_type = str(bulk_config.get("entity_type") or "").strip()
     filter_params = bulk_config.get("filter") or {}
     file_url = str(bulk_config.get("file_url") or "").strip()
+    file_id = str(bulk_config.get("file_id") or "").strip()
     field_id = str(bulk_config.get("field_id") or "").strip()
     file_name_override = str(bulk_config.get("file_name") or "").strip()
     crm_entity_type = CRM_FILES_ENTITY_TYPES.get(entity_type)
 
-    if not entity_type or not file_url or not field_id or not crm_entity_type:
-        raise ValueError("Bulk attach config is incomplete (entity_type, file_url, field_id are required)")
+    if not entity_type or not field_id or not crm_entity_type:
+        raise ValueError("Bulk attach config is incomplete (entity_type, field_id are required)")
+    if not file_url and not file_id:
+        raise ValueError("Bulk attach config is incomplete (file_url or file_id is required)")
 
     entity_ids = fetch_crm_entity_ids(account, entity_type, filter_params)
     total = len(entity_ids)
@@ -122,13 +118,25 @@ def execute_bulk_attach(*, session, account) -> dict:
         session.save(update_fields=["status", "updated_at"])
         return {"total": 0, "successful": 0, "failed": 0, "results": []}
 
-    try:
-        download_result = download_attachment_source(file_url)
-    except Exception as error:
-        raise ValueError(f"Не удалось загрузить файл: {error}")
-
-    content = download_result.get("content") or b""
-    resolved_file_name = file_name_override or download_result.get("file_name") or "attachment.bin"
+    if file_id:
+        upload_dir = os.path.join(settings.MEDIA_ROOT, "bulk-attach-uploads", file_id)
+        try:
+            file_entries = os.listdir(upload_dir)
+        except OSError as error:
+            raise ValueError(f"Загруженный файл не найден: {error}")
+        if not file_entries:
+            raise ValueError("Загруженный файл не найден (пустая директория)")
+        disk_file_name = file_entries[0]
+        with open(os.path.join(upload_dir, disk_file_name), "rb") as f:
+            content = f.read()
+        resolved_file_name = file_name_override or disk_file_name
+    else:
+        try:
+            download_result = download_attachment_source(file_url)
+        except Exception as error:
+            raise ValueError(f"Не удалось загрузить файл: {error}")
+        content = download_result.get("content") or b""
+        resolved_file_name = file_name_override or download_result.get("file_name") or "attachment.bin"
 
     results = []
     successful = 0

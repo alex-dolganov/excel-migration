@@ -84,7 +84,7 @@ def attach_file_to_crm_entity(account, *, entity_type: str, record_id: int, fiel
         raise ValueError(f"Unsupported CRM file entity type: {entity_type}")
 
     encoded = base64.b64encode(content).decode("utf-8")
-    return BitrixAPIRequest(
+    request = BitrixAPIRequest(
         bitrix_token=account,
         api_method=api_method,
         params={
@@ -92,3 +92,4 @@ def attach_file_to_crm_entity(account, *, entity_type: str, record_id: int, fiel
             "fields": {field_id: {"fileData": [file_name, encoded]}},
         },
     )
+    return request.result

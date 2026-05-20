@@ -3105,6 +3105,36 @@ def crm_filter_preview(request: AuthorizedRequest):
 @xframe_options_exempt
 @csrf_exempt
 @require_http_methods(["POST"])
+@log_errors("bulk_attach_upload")
+@auth_required
+def bulk_attach_upload(request: AuthorizedRequest):
+    import uuid
+
+    account = request.bitrix24_account
+    if not has_permission(account, "sessions.create"):
+        return permission_denied_response()
+
+    upload = request.FILES.get("file")
+    if upload is None:
+        return JsonResponse({"error": "File is required"}, status=400)
+
+    file_id = str(uuid.uuid4())
+    upload_dir = os.path.join(settings.MEDIA_ROOT, "bulk-attach-uploads", file_id)
+    os.makedirs(upload_dir, exist_ok=True)
+
+    raw_name = getattr(upload, "name", None) or "attachment.bin"
+    safe_name = re.sub(r"[^\w.\-]", "_", raw_name)[:200] or "attachment.bin"
+
+    with open(os.path.join(upload_dir, safe_name), "wb") as f:
+        for chunk in upload.chunks():
+            f.write(chunk)
+
+    return JsonResponse({"file_id": file_id, "file_name": safe_name})
+
+
+@xframe_options_exempt
+@csrf_exempt
+@require_http_methods(["POST"])
 @log_errors("bulk_attach_session_create")
 @auth_required
 def bulk_attach_session_create(request: AuthorizedRequest):
@@ -3125,8 +3155,11 @@ def bulk_attach_session_create(request: AuthorizedRequest):
         return JsonResponse({"error": f"Unsupported entity type: {entity_type}"}, status=400)
 
     file_url = str(payload.get("file_url") or "").strip()
-    if not file_url:
-        return JsonResponse({"error": "file_url is required"}, status=400)
+    file_id = str(payload.get("file_id") or "").strip()
+    file_name = str(payload.get("file_name") or "").strip()
+
+    if not file_url and not file_id:
+        return JsonResponse({"error": "file_url or file_id is required"}, status=400)
 
     field_id = str(payload.get("field_id") or "").strip()
     if not field_id:
@@ -3136,22 +3169,27 @@ def bulk_attach_session_create(request: AuthorizedRequest):
     if not isinstance(filter_params, dict):
         filter_params = {}
 
-    file_name = str(payload.get("file_name") or "").strip()
+    portal_member_id = getattr(account, "member_id", "")
+    portal_domain = getattr(account, "domain_url", "")
 
-    portal_member_id = int(getattr(account, "portal_member_id", 0) or 0)
-    portal_domain = str(getattr(account, "portal_domain", "") or "")
+    entity_labels = {"lead": "Лиды", "contact": "Контакты", "company": "Компании", "deal": "Сделки"}
+    display_name = file_name or (file_id and "загруженный файл") or "файл из URL"
+    original_filename = f"Массовое добавление — {entity_labels.get(entity_type, entity_type)}: {display_name}"
 
     session = ImportSession.objects.create(
         portal_member_id=portal_member_id,
         portal_domain=portal_domain,
+        created_by_b24_user_id=getattr(account, "b24_user_id", 0),
         entity_type=CRM_FILES_ENTITY_TYPES[entity_type],
         source_format="bulk_attach",
         status=ImportSession.Status.DRAFT,
+        original_filename=original_filename,
         summary={
             "bulk_attach": {
                 "entity_type": entity_type,
                 "filter": filter_params,
                 "file_url": file_url,
+                "file_id": file_id,
                 "field_id": field_id,
                 "file_name": file_name,
             }
@@ -3184,12 +3222,16 @@ def bulk_attach_session_run(request: AuthorizedRequest, session_id):
     if (session.summary or {}).get("bulk_attach") is None:
         return JsonResponse({"error": "Session is not a bulk attach session"}, status=400)
 
-    from .services.bulk_attach import execute_bulk_attach
-
     session.status = ImportSession.Status.RUNNING
     session.last_error = ""
     session.save(update_fields=["status", "last_error", "updated_at"])
 
+    if is_import_queue_enabled():
+        from .services.background_jobs import enqueue_bulk_attach_session_run
+        enqueue_bulk_attach_session_run(session, account)
+        return JsonResponse({"item": serialize_session(session)})
+
+    from .services.bulk_attach import execute_bulk_attach
     try:
         result = execute_bulk_attach(session=session, account=account)
     except Exception as error:

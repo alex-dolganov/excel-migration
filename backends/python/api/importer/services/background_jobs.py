@@ -110,6 +110,63 @@ def enqueue_import_session_retry(session: ImportSession, account) -> str:
     return str(getattr(task, "id", ""))
 
 
+def enqueue_bulk_attach_session_run(session: ImportSession, account) -> str:
+    from importer.tasks import run_bulk_attach_session_task
+
+    task = run_bulk_attach_session_task.delay(str(session.id), str(getattr(account, "id", "")))
+    session.status = ImportSession.Status.RUNNING
+    session.last_error = ""
+    session.save(update_fields=["status", "last_error", "updated_at"])
+    return str(getattr(task, "id", ""))
+
+
+def execute_bulk_attach_background(*, session_id: str, account_id: str):
+    from importer.services.bulk_attach import execute_bulk_attach
+
+    session, account = _load_background_context(session_id, account_id)
+    if session.status == ImportSession.Status.CANCELLED:
+        return {"session_id": str(session.id), "status": session.status}
+
+    try:
+        result = execute_bulk_attach(session=session, account=account)
+    except Exception as error:
+        error_message = safe_format_import_error(error)
+        session.refresh_from_db()
+        session.status = ImportSession.Status.FAILED
+        session.last_error = error_message
+        session.save(update_fields=["status", "last_error", "updated_at"])
+        raise
+
+    session.refresh_from_db()
+    if session.status != ImportSession.Status.CANCELLED:
+        session.status = ImportSession.Status.COMPLETED
+        session.save(update_fields=["status", "updated_at"])
+
+    try:
+        bulk_config = (session.summary or {}).get("bulk_attach", {})
+        entity_type = str(bulk_config.get("entity_type") or "").strip()
+        file_name = str(bulk_config.get("file_name") or bulk_config.get("file_id") or "файл").strip()
+        total = int(result.get("total") or 0)
+        successful = int(result.get("successful") or 0)
+        failed = int(result.get("failed") or 0)
+        message = (
+            f'Массовое добавление файлов ({entity_type}) — {file_name}. '
+            f'Обработано: {total}, успешно: {successful}, ошибок: {failed}.'
+        )
+        user_id = int(session.created_by_b24_user_id or 0)
+        if user_id:
+            from b24pysdk.bitrix_api.requests import BitrixAPIRequest
+            BitrixAPIRequest(
+                bitrix_token=account,
+                api_method="im.notify.system.add",
+                params={"USER_ID": user_id, "MESSAGE": message},
+            ).result
+    except Exception as exc:
+        logging.warning("Failed to send bulk attach completion notify: %s", exc)
+
+    return result
+
+
 def _load_background_context(session_id: str, account_id: str) -> tuple[ImportSession, Bitrix24Account]:
     session = ImportSession.objects.get(id=session_id)
     account = Bitrix24Account.objects.get(pk=account_id)

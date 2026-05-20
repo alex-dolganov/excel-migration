@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     bulk_attach_session_create,
     bulk_attach_session_run,
+    bulk_attach_upload,
     crm_filter_preview,
     import_departments,
     import_alias_rules,
@@ -50,6 +51,7 @@ urlpatterns = [
     path("api/import-permissions/me", import_permissions_me, name="permissions-me"),
     path("api/import-roles", import_roles, name="roles"),
     path("api/crm-filter-preview", crm_filter_preview, name="crm-filter-preview"),
+    path("api/bulk-attach-upload", bulk_attach_upload, name="bulk-attach-upload"),
     path("api/bulk-attach-sessions", bulk_attach_session_create, name="bulk-attach-session-create"),
     path("api/bulk-attach-sessions/<uuid:session_id>/run", bulk_attach_session_run, name="bulk-attach-session-run"),
 ]

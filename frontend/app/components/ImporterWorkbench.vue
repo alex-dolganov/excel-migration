@@ -206,6 +206,12 @@ const expandedTextBlocks = ref<Record<string, boolean>>({})
 const recentSessions = ref<Record<string, any>[]>([])
 const historyLoadError = ref('')
 const currentView = ref<'wizard' | 'history' | 'bulkAttach'>('wizard')
+const activeRunningSession = computed(() =>
+  recentSessions.value.find(s => String(s?.status || '').trim().toLowerCase() === 'running') ?? null
+)
+const isBlockedByActiveSession = computed(() =>
+  Boolean(activeRunningSession.value && !session.value?.id)
+)
 const restoringHistorySessionId = ref('')
 
 function isValidPerRowDedupDecision(value: unknown): value is string {
@@ -240,6 +246,7 @@ const fileAttachCrmEntityItems = computed(() =>
 )
 const isFileAttachMode = computed(() => String(entityType.value || '').startsWith('crm_files_'))
 const selectedBulkAttachEntityType = computed(() => String(selectedFileAttachEntityType.value || '').replace(/^crm_files_/, ''))
+const bulkAttachResumeSessionId = ref('')
 const currentScenarioSummary = computed(() => buildScenarioSelectionSummary(entityType.value))
 const isTaskEntityImport = computed(() => entityType.value === 'task')
 const isDirectCrmEntityImport = computed(() => ['lead', 'contact', 'company', 'deal'].includes(entityType.value))
@@ -399,6 +406,7 @@ const canStart = computed(() => (
   && Boolean(selectedFile.value)
   && Boolean(sourceFormat.value)
   && !busyAction.value
+  && !isBlockedByActiveSession.value
 ))
 const canDownloadExampleTemplate = computed(() => (
   importerPermissionState.value.canCreateSessions
@@ -1699,6 +1707,8 @@ function goBackToFamilySelection() {
 }
 
 function goBackFromBulkAttach() {
+  bulkAttachResumeSessionId.value = ''
+  resetFlowState()
   currentView.value = 'wizard'
   resetMessages()
 }
@@ -1808,6 +1818,7 @@ function updateFileAttachEntityType(value: string) {
   selectedSmartProcessId.value = ''
   selectedFamily.value = 'crm'
   entityType.value = normalizedValue
+  bulkAttachResumeSessionId.value = ''
   currentView.value = 'bulkAttach'
   resetMessages()
 }
@@ -2715,8 +2726,11 @@ function applyHistoryScenarioSelection(snapshot: Record<string, any> | null | un
 }
 
 function resolveRestoredCurrentStep(snapshot: Record<string, any> | null | undefined) {
-  if (importRunData.value || shouldWaitForImportExecutionSnapshot(snapshot)) {
+  if (importRunData.value) {
     return 7
+  }
+  if (shouldWaitForImportExecutionSnapshot(snapshot)) {
+    return 6
   }
 
   if (dryRunData.value || validationData.value || shouldWaitForDryRunExecutionSnapshot(snapshot)) {
@@ -2805,7 +2819,7 @@ async function resumeHistorySessionBackground(snapshot: Record<string, any> | nu
 
   const jobMode = String(snapshot?.summary?.job?.mode || '').trim().toLowerCase()
   busyAction.value = jobMode === 'retry' ? 'retry' : 'run'
-  currentStep.value = 7
+  currentStep.value = 6
 
   try {
     importRunData.value = await resolveImportExecutionResult(sessionId, snapshot)
@@ -2838,24 +2852,33 @@ async function resumeHistorySession(sessionId: string) {
     clearSelectedFile()
     currentView.value = 'wizard'
     applyHistoryScenarioSelection(snapshot)
-    session.value = snapshot
-    syncPreviewSnapshot(snapshot)
 
-    if (preview.value) {
-      await refreshMapping()
+    const isBulkAttach = String(snapshot.source_format || '') === 'bulk_attach'
+
+    if (isBulkAttach) {
+      bulkAttachResumeSessionId.value = String(snapshot.id || '')
+      currentView.value = 'bulkAttach'
+    } else {
+      session.value = snapshot
+      syncPreviewSnapshot(snapshot)
+
+      if (preview.value) {
+        await refreshMapping()
+      }
+
+      syncRestoredExecutionState(snapshot)
+      currentView.value = 'wizard'
+
+      if (
+        shouldWaitForDryRunExecutionSnapshot(snapshot)
+        || shouldWaitForImportExecutionSnapshot(snapshot)
+      ) {
+        void resumeHistorySessionBackground(snapshot)
+      }
     }
 
-    syncRestoredExecutionState(snapshot)
-    currentView.value = isFileAttachMode.value ? 'bulkAttach' : 'wizard'
     setSuccess(`Сессия «${String(snapshot.original_filename || 'Без имени')}» восстановлена.`)
     await loadHistory()
-
-    if (
-      shouldWaitForDryRunExecutionSnapshot(snapshot)
-      || shouldWaitForImportExecutionSnapshot(snapshot)
-    ) {
-      void resumeHistorySessionBackground(snapshot)
-    }
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -2977,7 +3000,23 @@ async function resolveImportExecutionResult(sessionId: string, responseItem: Rec
   return resolvedImportRun
 }
 
-onMounted(loadHistory)
+let _historyPollInterval: ReturnType<typeof setInterval> | null = null
+
+onMounted(() => {
+  void loadHistory()
+  _historyPollInterval = setInterval(() => {
+    if (activeRunningSession.value && !session.value?.id) {
+      void loadHistory()
+    }
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (_historyPollInterval !== null) {
+    clearInterval(_historyPollInterval)
+    _historyPollInterval = null
+  }
+})
 
 </script>
 
@@ -3175,6 +3214,7 @@ onMounted(loadHistory)
         <BulkAttachWizard
           :initial-entity-type="selectedBulkAttachEntityType"
           :lock-entity-type="true"
+          :resume-session-id="bulkAttachResumeSessionId"
         />
       </div>
     </div>
@@ -3339,6 +3379,17 @@ onMounted(loadHistory)
             class="space-y-6"
           >
             <div class="space-y-6">
+              <div v-if="isBlockedByActiveSession" class="flex items-start gap-3 rounded-[16px] border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-sm text-[#92400e]">
+                <span class="mt-0.5 shrink-0 text-base">⚠️</span>
+                <div>
+                  <span class="font-semibold">Идёт импорт:</span> «{{ activeRunningSession?.original_filename || 'без имени' }}». Дождитесь его завершения или
+                  <button
+                    type="button"
+                    class="underline hover:no-underline"
+                    @click="resumeHistorySession(String(activeRunningSession?.id || activeRunningSession?.session_id || ''))"
+                  >перейдите к нему</button>, чтобы отменить. Новый импорт будет доступен после завершения или отмены.
+                </div>
+              </div>
               <section class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
                 <div class="mb-5 flex items-center justify-between gap-3">
                   <div>
@@ -3389,7 +3440,7 @@ onMounted(loadHistory)
                     :key="option.value"
                     type="button"
                     class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
-                    :disabled="!importerPermissionState.canCreateSessions"
+                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
                     @click="selectImportMode(option.value)"
                   >
                     <div class="text-base font-semibold text-[#2f4254]">{{ option.label }}</div>
@@ -3403,7 +3454,7 @@ onMounted(loadHistory)
                   <button
                     type="button"
                     class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
-                    :disabled="!importerPermissionState.canCreateSessions"
+                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
                     @click="selectFamily('crm')"
                   >
                     <div class="text-base font-semibold text-[#2f4254]">CRM-сущности</div>
@@ -3412,7 +3463,7 @@ onMounted(loadHistory)
                   <button
                     type="button"
                     class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
-                    :disabled="!importerPermissionState.canCreateSessions"
+                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
                     @click="selectFamily('task')"
                   >
                     <div class="text-base font-semibold text-[#2f4254]">Задачи</div>
@@ -3421,7 +3472,7 @@ onMounted(loadHistory)
                   <button
                     type="button"
                     class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
-                    :disabled="!importerPermissionState.canCreateSessions"
+                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
                     @click="selectFamily('hr')"
                   >
                     <div class="text-base font-semibold text-[#2f4254]">Пользователи и отделы</div>

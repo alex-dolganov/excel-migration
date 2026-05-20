@@ -59,8 +59,8 @@ export const SUPPORTED_IMPORT_ENTITIES = [
   { value: 'company', label: 'Компании' },
   { value: 'deal', label: 'Сделки' },
   { value: 'smart_process', label: 'Смарт-процессы' },
-  { value: 'crm_activity', label: 'Активности CRM' },
-  { value: 'crm_note', label: 'Заметки CRM' },
+  { value: 'crm_activity', label: 'Встречи/Звонки CRM' },
+  { value: 'crm_note', label: 'Комментарии CRM' },
   { value: 'linked_company_contact', label: 'Компания + Контакт' },
   { value: 'linked_company_deal', label: 'Компания + Сделка' },
   { value: 'linked_contact_company', label: 'Контакт + Компания' },
@@ -162,14 +162,14 @@ const TASK_IMPORT_SCENARIOS = {
 const CRM_IMPORT_SCENARIOS = {
   crm_activity: {
     value: 'crm_activity',
-    label: 'Активности CRM',
+    label: 'Встречи/Звонки CRM',
     family: 'crm',
-    title: 'Импорт активностей CRM',
+    title: 'Импорт встреч/звонков CRM',
     description: 'Каждая строка создаёт отдельную активность CRM для существующей записи.',
     minimumFields: ['OWNER_TYPE_ID', 'OWNER_ID', 'TYPE_ID', 'SUBJECT'],
     destinationLabel: 'Импортирует активность в таймлайн выбранной CRM-записи.',
     guide: {
-      title: 'Импорт активностей CRM',
+      title: 'Импорт встреч/звонков CRM',
       description: 'Каждая строка создаёт отдельную активность CRM для существующей записи.',
       highlights: [
         'Минимум для импорта: OWNER_TYPE_ID, OWNER_ID, TYPE_ID и SUBJECT.',
@@ -181,15 +181,15 @@ const CRM_IMPORT_SCENARIOS = {
   },
   crm_note: {
     value: 'crm_note',
-    label: 'Заметки CRM',
+    label: 'Комментарии CRM',
     family: 'crm',
-    title: 'Импорт заметок CRM',
-    description: 'Каждая строка добавляет заметку в таймлайн существующей CRM-записи.',
+    title: 'Импорт комментариев CRM',
+    description: 'Каждая строка добавляет комментарий в таймлайн существующей CRM-записи.',
     minimumFields: ['ENTITY_TYPE', 'ENTITY_ID', 'COMMENT'],
-    destinationLabel: 'Импортирует заметку напрямую в таймлайн выбранной CRM-сущности.',
+    destinationLabel: 'Импортирует комментарий напрямую в таймлайн выбранной CRM-сущности.',
     guide: {
-      title: 'Импорт заметок CRM',
-      description: 'Каждая строка добавляет заметку в таймлайн существующей CRM-записи.',
+      title: 'Импорт комментариев CRM',
+      description: 'Каждая строка добавляет комментарий в таймлайн существующей CRM-записи.',
       highlights: [
         'Минимум для импорта: ENTITY_TYPE, ENTITY_ID и COMMENT.',
         'ENTITY_TYPE можно передавать как код сущности: lead, contact, company или deal.',

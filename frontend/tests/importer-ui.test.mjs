@@ -72,8 +72,8 @@ test('builds linked-aware scenario-first sections for crm and task imports', () 
         { value: 'company', label: 'Компании', family: 'crm' },
         { value: 'deal', label: 'Сделки', family: 'crm' },
         { value: 'smart_process', label: 'Смарт-процессы', family: 'crm' },
-        { value: 'crm_activity', label: 'Активности CRM', family: 'crm' },
-        { value: 'crm_note', label: 'Заметки CRM', family: 'crm' },
+        { value: 'crm_activity', label: 'Встречи/Звонки CRM', family: 'crm' },
+        { value: 'crm_note', label: 'Комментарии CRM', family: 'crm' },
       ],
     },
     {
@@ -152,8 +152,8 @@ test('builds scenario selection summary for crm activity import', () => {
   assert.deepEqual(buildScenarioSelectionSummary('crm_activity'), {
     family: 'crm',
     familyLabel: 'CRM-сущности',
-    selectedLabel: 'Активности CRM',
-    title: 'Импорт активностей CRM',
+    selectedLabel: 'Встречи/Звонки CRM',
+    title: 'Импорт встреч/звонков CRM',
     description: 'Каждая строка создаёт отдельную активность CRM для существующей записи.',
     minimumFields: ['OWNER_TYPE_ID', 'OWNER_ID', 'TYPE_ID', 'SUBJECT'],
     destinationLabel: 'Импортирует активность в таймлайн выбранной CRM-записи.',
@@ -164,11 +164,11 @@ test('builds scenario selection summary for crm note import', () => {
   assert.deepEqual(buildScenarioSelectionSummary('crm_note'), {
     family: 'crm',
     familyLabel: 'CRM-сущности',
-    selectedLabel: 'Заметки CRM',
-    title: 'Импорт заметок CRM',
-    description: 'Каждая строка добавляет заметку в таймлайн существующей CRM-записи.',
+    selectedLabel: 'Комментарии CRM',
+    title: 'Импорт комментариев CRM',
+    description: 'Каждая строка добавляет комментарий в таймлайн существующей CRM-записи.',
     minimumFields: ['ENTITY_TYPE', 'ENTITY_ID', 'COMMENT'],
-    destinationLabel: 'Импортирует заметку напрямую в таймлайн выбранной CRM-сущности.',
+    destinationLabel: 'Импортирует комментарий напрямую в таймлайн выбранной CRM-сущности.',
   })
 })
 
@@ -213,7 +213,7 @@ test('builds scenario guide for linked deal company import without external key 
 
 test('builds scenario guide for crm activity import', () => {
   assert.deepEqual(buildEntityScenarioGuide('crm_activity'), {
-    title: 'Импорт активностей CRM',
+    title: 'Импорт встреч/звонков CRM',
     description: 'Каждая строка создаёт отдельную активность CRM для существующей записи.',
     highlights: [
       'Минимум для импорта: OWNER_TYPE_ID, OWNER_ID, TYPE_ID и SUBJECT.',
@@ -226,8 +226,8 @@ test('builds scenario guide for crm activity import', () => {
 
 test('builds scenario guide for crm note import', () => {
   assert.deepEqual(buildEntityScenarioGuide('crm_note'), {
-    title: 'Импорт заметок CRM',
-    description: 'Каждая строка добавляет заметку в таймлайн существующей CRM-записи.',
+    title: 'Импорт комментариев CRM',
+    description: 'Каждая строка добавляет комментарий в таймлайн существующей CRM-записи.',
     highlights: [
       'Минимум для импорта: ENTITY_TYPE, ENTITY_ID и COMMENT.',
       'ENTITY_TYPE можно передавать как код сущности: lead, contact, company или deal.',

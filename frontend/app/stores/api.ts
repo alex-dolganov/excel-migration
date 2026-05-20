@@ -404,10 +404,21 @@ export const useApiStore = defineStore(
       })
     }
 
+    const uploadBulkAttachFile = async (file: File): Promise<{ file_id: string, file_name: string }> => {
+      const formData = new FormData()
+      formData.append('file', file)
+      return await $fetch(`${apiUrl}/api/bulk-attach-upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenJWT.value}` },
+        body: formData,
+      })
+    }
+
     const createBulkAttachSession = async (data: {
       entity_type: string
       filter: Record<string, any>
-      file_url: string
+      file_url?: string
+      file_id?: string
       field_id: string
       file_name?: string
     }): Promise<{ item: Record<string, any> }> => {
@@ -550,6 +561,7 @@ export const useApiStore = defineStore(
       downloadImportExampleTemplateXlsx,
       getImportDepartments,
       crmFilterPreview,
+      uploadBulkAttachFile,
       createBulkAttachSession,
       runBulkAttachSession,
     }
