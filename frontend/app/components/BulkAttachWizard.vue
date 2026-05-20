@@ -9,6 +9,8 @@ const props = withDefaults(defineProps<{
   resumeSessionId: '',
 })
 
+const emit = defineEmits<{ finish: [] }>()
+
 const apiStore = useApiStore()
 
 type FilterFieldItem = { id: string, title: string }
@@ -75,6 +77,7 @@ const resultFailed = ref(0)
 const progressProcessed = ref(0)
 const progressTotal = ref(0)
 const pollingHandle = ref<ReturnType<typeof setInterval> | null>(null)
+const cancelRequested = ref(false)
 
 const filterFieldOptions = computed(() => (
   filterFieldCatalog.value
@@ -281,6 +284,25 @@ function stopPolling() {
   if (pollingHandle.value) {
     clearInterval(pollingHandle.value)
     pollingHandle.value = null
+  }
+}
+
+async function cancelAttach() {
+  if (!sessionId.value || cancelRequested.value) return
+  cancelRequested.value = true
+  try {
+    const res = await apiStore.cancelImportSession(sessionId.value)
+    stopPolling()
+    const snap = res.item || {}
+    sessionStatus.value = String(snap.status || 'cancelled')
+    resultTotal.value = Number(snap.total_rows || progressTotal.value)
+    resultSuccessful.value = Number(snap.successful_rows || resultSuccessful.value)
+    resultFailed.value = Number(snap.failed_rows || resultFailed.value)
+    progressProcessed.value = Number(snap.processed_rows || progressProcessed.value)
+  } catch (e: any) {
+    error.value = String(e?.data?.error || e?.message || 'Ошибка при остановке')
+  } finally {
+    cancelRequested.value = false
   }
 }
 
@@ -692,8 +714,20 @@ function reset() {
           </div>
         </div>
 
-        <div v-if="!busy" class="flex justify-end">
-          <B24Button label="Новый импорт" color="air-secondary" size="md" @click="reset" />
+        <div class="flex items-center justify-between gap-3">
+          <B24Button
+            v-if="!busy && sessionStatus === 'running'"
+            label="Остановить"
+            color="air-tertiary"
+            size="md"
+            :loading="cancelRequested"
+            :disabled="cancelRequested"
+            @click="cancelAttach"
+          />
+          <template v-if="!busy && sessionStatus !== 'running'">
+            <B24Button label="Новый импорт" color="air-secondary" size="md" @click="reset" />
+            <B24Button label="Завершить" color="air-primary" size="md" @click="emit('finish')" />
+          </template>
         </div>
       </div>
 

@@ -10,12 +10,9 @@ useHead({
   title: t('page.index.seo.title')
 })
 
-// region Init ////
 const { $logger, initApp, processErrorGlobal } = useAppInit('IndexPage')
 const { $initializeB24Frame } = useNuxtApp()
 let $b24: null | B24Frame = null
-
-// endregion ////
 
 const { contextId, isLoading: isLoadingState, load } = useDashboard({ isLoading: ref(false), load: () => {} })
 const isLoading = computed({
@@ -26,7 +23,6 @@ const isLoading = computed({
   }
 })
 
-// region Lifecycle Hooks ////
 const isInit = ref(false)
 const initError = ref('')
 const pageRenderError = ref('')
@@ -37,6 +33,16 @@ const isInitStateVisible = computed(() => shouldRenderInitCard({
   initError: initError.value,
   initStage: initStage.value,
 }))
+
+const selectedImportMode = ref('')
+
+function onModeSelect(mode: string) {
+  selectedImportMode.value = mode
+}
+
+function onBackToLanding() {
+  selectedImportMode.value = ''
+}
 
 onErrorCaptured((error, instance, info) => {
   const details = [
@@ -72,29 +78,57 @@ onMounted(async () => {
     isLoading.value = false
   }
 })
-// endregion ////
 </script>
 
 <template>
   <div class="min-h-screen w-full min-w-0 bg-[#eef2f4]">
-    <div class="flex w-full min-w-0 flex-col gap-4 px-2 py-4 sm:px-4 sm:py-5 lg:px-5 lg:py-6">
-      <B24Alert
-        v-if="pageRenderError"
-        color="air-primary-alert"
-        title="Client runtime error"
-        :description="`Страница упала в рантайме: ${pageRenderError}`"
-      />
+    <B24Alert
+      v-if="pageRenderError"
+      class="m-4"
+      color="air-primary-alert"
+      title="Client runtime error"
+      :description="`Страница упала в рантайме: ${pageRenderError}`"
+    />
 
-      <B24Alert
-        v-if="isInitStateVisible && !isInit && !pageRenderError"
-        color="air-secondary"
-        title="Инициализация приложения"
-        :description="initError || initStageDescription"
-      />
+    <B24Alert
+      v-if="isInitStateVisible && !isInit && !pageRenderError"
+      class="m-4"
+      color="air-secondary"
+      title="Инициализация приложения"
+      :description="initError || initStageDescription"
+    />
 
-      <template v-if="isInit && !pageRenderError">
-        <ImporterWorkbench />
-      </template>
-    </div>
+    <template v-if="isInit && !pageRenderError">
+      <div class="flex w-full min-w-0 flex-col gap-4 px-2 py-4 sm:px-4 sm:py-5 lg:px-5 lg:py-6">
+        <Transition name="page-switch" mode="out-in">
+          <AppLanding
+            v-if="!selectedImportMode"
+            key="landing"
+            @select="onModeSelect"
+          />
+          <ImporterWorkbench
+            v-else
+            key="workbench"
+            :initial-import-mode="selectedImportMode"
+            @back-to-landing="onBackToLanding"
+          />
+        </Transition>
+      </div>
+    </template>
   </div>
 </template>
+
+<style>
+.page-switch-enter-active,
+.page-switch-leave-active {
+  transition: opacity 0.28s ease, transform 0.28s ease;
+}
+.page-switch-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+.page-switch-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+</style>

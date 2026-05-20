@@ -157,6 +157,14 @@ type ImportTemplateItem = {
 
 type StepState = 'done' | 'current' | 'upcoming'
 
+const props = withDefaults(defineProps<{
+  initialImportMode?: string
+}>(), {
+  initialImportMode: '',
+})
+
+const emit = defineEmits<{ 'back-to-landing': [] }>()
+
 const apiStore = useApiStore()
 const userStore = useUserStore()
 const MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
@@ -3003,6 +3011,9 @@ async function resolveImportExecutionResult(sessionId: string, responseItem: Rec
 let _historyPollInterval: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
+  if (props.initialImportMode) {
+    selectImportMode(props.initialImportMode)
+  }
   void loadHistory()
   _historyPollInterval = setInterval(() => {
     if (activeRunningSession.value && !session.value?.id) {
@@ -3215,6 +3226,7 @@ onUnmounted(() => {
           :initial-entity-type="selectedBulkAttachEntityType"
           :lock-entity-type="true"
           :resume-session-id="bulkAttachResumeSessionId"
+          @finish="goBackFromBulkAttach"
         />
       </div>
     </div>
@@ -3302,9 +3314,6 @@ onUnmounted(() => {
               <div class="text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
                 {{ currentStepMeta.eyebrow }}
               </div>
-              <h1 class="mt-2 text-[30px] font-semibold leading-[1.08] text-[#2f4254]">
-                {{ currentImportTitle }}
-              </h1>
               <div class="mt-3 flex flex-wrap items-center gap-3 text-sm text-[#6c8093]">
                 <span class="font-medium text-[#506476]">Текущий статус</span>
                 <span
@@ -3353,6 +3362,12 @@ onUnmounted(() => {
                 @click="currentView = 'history'"
               />
               <div class="flex flex-wrap justify-end gap-2">
+                <div
+                  v-if="importMode"
+                  class="rounded-full border border-[#e5ebf2] bg-[#f7f9fb] px-3 py-1.5 text-sm text-[#5e7184]"
+                >
+                  {{ importModeMeta.label }}
+                </div>
                 <div class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
                   {{ currentScenarioSummary.selectedLabel }}
                 </div>
@@ -3397,9 +3412,6 @@ onUnmounted(() => {
                     <h2 class="mt-1 text-xl font-semibold text-[#314256]">
                       {{ !importMode ? 'Выберите режим импорта' : (selectedFamily ? 'Источник и назначение' : 'Выберите тип импорта') }}
                     </h2>
-                    <div v-if="importMode" class="mt-2 inline-flex rounded-full border border-[#d7e7ff] bg-white px-3 py-1 text-sm font-medium text-[#2e6bd9]">
-                      {{ importModeMeta.label }}
-                    </div>
                   </div>
                   <div class="flex items-center gap-2">
                     <B24Button
@@ -3408,7 +3420,7 @@ onUnmounted(() => {
                       color="air-primary"
                       size="lg"
                       :disabled="Boolean(busyAction)"
-                      @click="goBackToImportModeSelection"
+                      @click="emit('back-to-landing')"
                     />
                     <B24Button
                       v-if="importMode && selectedFamily"
@@ -3419,7 +3431,7 @@ onUnmounted(() => {
                       @click="goBackToFamilySelection"
                     />
                     <B24Button
-                      v-if="importMode && selectedFamily && !(showsAdvancedImportTools && selectedFileAttachEntityType)"
+                      v-if="importMode && selectedFamily && !selectedFileAttachEntityType"
                       label="Загрузить файл"
                       color="air-primary"
                       size="lg"
@@ -3430,23 +3442,8 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <div v-if="!importMode" class="space-y-4">
-                  <div class="rounded-[18px] border border-[#dce7f7] bg-[#f4f9ff] px-4 py-3 text-sm text-[#5c7592]">
-                    Сначала выберите режим: <span class="font-semibold text-[#314256]">Простой импорт</span> для быстрого старта или <span class="font-semibold text-[#314256]">Расширенный импорт</span> для полного набора настроек.
-                  </div>
-                  <div class="grid gap-4 sm:grid-cols-2">
-                  <button
-                    v-for="option in importModeOptions"
-                    :key="option.value"
-                    type="button"
-                    class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
-                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
-                    @click="selectImportMode(option.value)"
-                  >
-                    <div class="text-base font-semibold text-[#2f4254]">{{ option.label }}</div>
-                    <div class="text-sm text-[#6c8093]">{{ option.description }}</div>
-                  </button>
-                  </div>
+                <div v-if="!importMode" class="rounded-[18px] border border-[#dce7f7] bg-[#f4f9ff] px-4 py-3 text-sm text-[#5c7592]">
+                  Вернитесь на главный экран и выберите режим импорта.
                 </div>
 
                 <!-- Выбор категории -->
@@ -3546,10 +3543,9 @@ onUnmounted(() => {
                         />
                       </B24FormField>
                     </section>
-                    <section v-if="showsAdvancedImportTools" class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
+                    <section class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
                       <div class="flex items-center gap-2">
                         <div class="text-sm font-semibold text-[#314256]">Массовый импорт файлов</div>
-                        <span class="rounded-full bg-[#eaf2ff] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#3d8ef0]">Бета</span>
                       </div>
                       <div class="mt-1 text-sm text-[#6f8194]">Прикрепить файлы к полям типа «Файл» у существующих CRM-записей.</div>
                       <B24FormField label="Выберите CRM-сущность" class="mt-4">
