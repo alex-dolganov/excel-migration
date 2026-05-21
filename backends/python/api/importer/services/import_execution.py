@@ -94,7 +94,10 @@ def _read_positive_int_env(name: str, default: int) -> int:
 
 BITRIX_ROW_DELAY = _read_non_negative_float_env("BITRIX_ROW_DELAY", 0.0)
 BITRIX_BATCH_DELAY = _read_non_negative_float_env("BITRIX_BATCH_DELAY", 0.5)
-BATCH_SIZE = 50
+BATCH_SIZE = _read_positive_int_env("BATCH_SIZE", 50)
+_ENTITY_BATCH_SIZES = {
+    "lead": _read_positive_int_env("LEAD_BATCH_SIZE", 20),
+}
 PROGRESS_SAVE_INTERVAL = _read_positive_int_env("IMPORT_PROGRESS_SAVE_INTERVAL", 100)
 _RATE_LIMIT_KEYWORDS = frozenset(["query_limit_exceeded", "too many requests", "rate limit", "overloaded", "429"])
 _RATE_LIMIT_RETRY_WAITS = [5, 15, 30]
@@ -111,6 +114,17 @@ _CRM_BATCH_CREATE_METHODS = {
     "company": "crm.company.add",
     "deal": "crm.deal.add",
 }
+
+_CRM_BATCH_LIST_METHODS = {
+    "lead": "crm.lead.list",
+    "contact": "crm.contact.list",
+    "company": "crm.company.list",
+    "deal": "crm.deal.list",
+}
+
+
+def _get_batch_size(entity_type: str) -> int:
+    return _ENTITY_BATCH_SIZES.get(entity_type, BATCH_SIZE)
 
 
 def _is_batch_eligible(entity_type: str, dedup_settings: dict) -> bool:
@@ -221,7 +235,7 @@ def _flush_crm_batch_with_fallback(account, entity_type: str, pending_batch: lis
     try:
         return _bitrix_retry(lambda: _flush_crm_batch(account, entity_type, pending_batch))
     except Exception as error:
-        if len(pending_batch) <= 1 or not _is_timeout_error(error):
+        if len(pending_batch) <= 1 or not (_is_timeout_error(error) or _is_operation_time_limit_error(error)):
             raise
 
     middle_index = max(1, len(pending_batch) // 2)
@@ -1235,6 +1249,154 @@ def find_existing_record_cached(account, entity_type: str, row_payload: dict, de
     return cache[cache_key]
 
 
+def _warm_dedup_cache(
+    account,
+    entity_type: str,
+    rows: list,
+    row_numbers: list,
+    columns: list,
+    data_start_row: int,
+    mapping: dict,
+    fields: list,
+    normalized_dedup_settings: dict,
+    cache: dict,
+    user_resolver,
+    default_field_values: dict | None = None,
+    context: dict | None = None,
+) -> None:
+    """Pre-warm dedup lookup cache using batch API calls before the main row loop.
+
+    Converts N_rows × N_fields sequential API calls into ceil(N_rows×N_fields / 50)
+    batch requests, giving up to 50x speedup for dedup-heavy imports.
+    """
+    strategy = normalized_dedup_settings.get("strategy", "create")
+    dedup_fields = normalized_dedup_settings.get("fields", [])
+
+    if strategy == "create" or not dedup_fields:
+        return
+    if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES or entity_type in CRM_ACTIVITY_ENTITY_TYPES:
+        return
+    if entity_type in HR_ENTITY_TYPES or dedup_fields == ["ID"] or entity_type == SMART_PROCESS_ENTITY_TYPE:
+        return
+
+    api_method = _CRM_BATCH_LIST_METHODS.get(entity_type)
+    if not api_method:
+        return
+    extra_params = {}
+    select_param = ["ID"]
+
+    condition = str(normalized_dedup_settings.get("condition") or "any")
+
+    # Build row data: payload → cache key → dedup filter for every valid row
+    row_data = []  # [(cache_key, lookup_filter, matched_fields, missing_fields), ...]
+    for row_index, row_number in enumerate(row_numbers):
+        if row_number < data_start_row:
+            continue
+        row = rows[row_index] if row_index < len(rows) else []
+        if not row_has_values(row):
+            continue
+        try:
+            row_payload = build_row_payload(
+                row, columns, mapping, fields,
+                account=account,
+                user_resolver=user_resolver,
+                default_field_values=default_field_values,
+            )
+        except Exception:
+            continue
+        cache_key = build_dedup_lookup_cache_key(entity_type, row_payload, normalized_dedup_settings, context=context)
+        if cache_key is None or cache_key in cache:
+            continue
+        lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, normalized_dedup_settings)
+        row_data.append((cache_key, lookup_filter, matched_fields, missing_fields))
+
+    if not row_data:
+        return
+
+    # Build batch items list and per-key metadata
+    pending = []   # [(batch_key, filter_dict), ...]
+    key_meta = {}  # batch_key → (cache_key, field_name_or_None, matched_fields, dedup_missing)
+
+    for rd_idx, (cache_key, lookup_filter, matched_fields, missing_fields) in enumerate(row_data):
+        dedup_missing = missing_fields if matched_fields and missing_fields else []
+        if not lookup_filter:
+            cache[cache_key] = {"dedup_missing_fields": dedup_missing} if dedup_missing else None
+            continue
+        if condition == "all":
+            bkey = str(rd_idx)
+            pending.append((bkey, lookup_filter))
+            key_meta[bkey] = (cache_key, None, matched_fields, dedup_missing)
+        else:
+            for f_idx, (field_name, field_value) in enumerate(lookup_filter.items()):
+                bkey = f"{rd_idx}_{f_idx}"
+                pending.append((bkey, {field_name: field_value}))
+                key_meta[bkey] = (cache_key, field_name, matched_fields, dedup_missing)
+
+    # For "any": accumulate all field results per row before deciding
+    any_field_results: dict = {}  # cache_key → {field_name: record_id_or_None}
+
+    for batch_start in range(0, len(pending), BATCH_SIZE):
+        if batch_start > 0:
+            _sleep_if_configured(BITRIX_BATCH_DELAY)
+        chunk = pending[batch_start:batch_start + BATCH_SIZE]
+        batch_requests = {
+            bkey: BitrixAPIRequest(
+                bitrix_token=account,
+                api_method=api_method,
+                params={"filter": filter_dict, "select": select_param, **extra_params},
+            )
+            for bkey, filter_dict in chunk
+        }
+        try:
+            response = _bitrix_retry(lambda br=batch_requests: BitrixAPIBatchRequest(
+                bitrix_token=account,
+                bitrix_api_requests=br,
+                halt=False,
+            ))
+            raw_results = _normalize_batch_collection(response.result.result)
+        except Exception:
+            return
+        for bkey, _ in chunk:
+            cache_key, field_name, matched_fields, dedup_missing = key_meta[bkey]
+            raw = raw_results.get(bkey)
+            record_id = extract_record_id_from_list_response(raw) if raw is not None else None
+
+            if condition == "all":
+                if record_id is not None:
+                    cache[cache_key] = {
+                        "record_id": record_id,
+                        "duplicate_match_fields": matched_fields,
+                        "dedup_missing_fields": dedup_missing,
+                    }
+                elif dedup_missing:
+                    cache[cache_key] = {"dedup_missing_fields": dedup_missing}
+                else:
+                    cache[cache_key] = None
+            else:
+                if cache_key not in any_field_results:
+                    any_field_results[cache_key] = {}
+                any_field_results[cache_key][field_name] = record_id
+
+    # For "any": pick first matching field (preserving lookup_filter key order)
+    if condition == "any":
+        for cache_key, lookup_filter, matched_fields, missing_fields in row_data:
+            if cache_key in cache:
+                continue
+            dedup_missing = missing_fields if matched_fields and missing_fields else []
+            field_results = any_field_results.get(cache_key, {})
+            found = None
+            for field_name in lookup_filter:
+                record_id = field_results.get(field_name)
+                if record_id is not None:
+                    found = {
+                        "record_id": record_id,
+                        "duplicate_match_fields": [field_name],
+                        "dedup_missing_fields": dedup_missing,
+                    }
+                    break
+            cache[cache_key] = found if found is not None else ({"dedup_missing_fields": dedup_missing} if dedup_missing else None)
+
+
 def filter_dedup_settings_for_payload(dedup_settings: dict, row_payload: dict) -> dict:
     payload_keys = {str(field_id) for field_id in (row_payload or {}).keys()}
     return {
@@ -1898,6 +2060,23 @@ def execute_linked_dry_run(
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
     user_resolver = BitrixUserResolver(account)
     dedup_lookup_cache: dict[tuple, dict | None] = {}
+    parent_entity_type = get_linked_parent_entity_type(entity_type)
+    child_entity_type = get_linked_child_entity_type(entity_type)
+    for _linked_et in (parent_entity_type, child_entity_type):
+        _warm_dedup_cache(
+            account=account,
+            entity_type=_linked_et,
+            rows=rows,
+            row_numbers=row_numbers,
+            columns=columns,
+            data_start_row=data_start_row,
+            mapping=mapping,
+            fields=fields,
+            normalized_dedup_settings=normalize_dedup_settings(dedup_settings.get(_linked_et, {})),
+            cache=dedup_lookup_cache,
+            user_resolver=user_resolver,
+            default_field_values=default_field_values,
+        )
     checked_rows = 0
     ready_rows = 0
     ready_create_rows = 0
@@ -1907,8 +2086,6 @@ def execute_linked_dry_run(
     cancelled_rows = 0
     results = []
     was_cancelled = False
-    parent_entity_type = get_linked_parent_entity_type(entity_type)
-    child_entity_type = get_linked_child_entity_type(entity_type)
 
     def _find_existing_linked_record(account, linked_entity_type: str, row_payload: dict, linked_dedup_settings: dict):
         return find_existing_record_cached(
@@ -2424,6 +2601,21 @@ def execute_dry_run(
     user_resolver = BitrixUserResolver(account)
     dry_run_context = {"entity_config": dict(entity_config)} if entity_type == SMART_PROCESS_ENTITY_TYPE and isinstance(entity_config, dict) else None
     dedup_lookup_cache: dict[tuple, dict | None] = {}
+    _warm_dedup_cache(
+        account=account,
+        entity_type=entity_type,
+        rows=rows,
+        row_numbers=row_numbers,
+        columns=columns,
+        data_start_row=data_start_row,
+        mapping=mapping,
+        fields=fields,
+        normalized_dedup_settings=normalized_dedup_settings,
+        cache=dedup_lookup_cache,
+        user_resolver=user_resolver,
+        default_field_values=default_field_values,
+        context=dry_run_context,
+    )
     checked_rows = 0
     ready_rows = 0
     ready_create_rows = 0
@@ -2650,6 +2842,22 @@ def execute_import(
         import_context["entity_config"] = dict(entity_config)
     if not import_context:
         import_context = None
+    import_dedup_cache: dict[tuple, dict | None] = {}
+    _warm_dedup_cache(
+        account=account,
+        entity_type=entity_type,
+        rows=rows,
+        row_numbers=row_numbers,
+        columns=columns,
+        data_start_row=data_start_row,
+        mapping=mapping,
+        fields=fields,
+        normalized_dedup_settings=normalized_dedup_settings,
+        cache=import_dedup_cache,
+        user_resolver=user_resolver,
+        default_field_values=default_field_values,
+        context=import_context,
+    )
     checked_rows = 0
     created_rows = 0
     updated_rows = 0
@@ -2788,7 +2996,7 @@ def execute_import(
 
         if use_batch:
             pending_batch.append((row_number, row_payload))
-            if len(pending_batch) >= BATCH_SIZE:
+            if len(pending_batch) >= _get_batch_size(entity_type):
                 _flush_pending_batch()
                 if callable(progress_callback):
                     progress_callback(
@@ -2801,11 +3009,12 @@ def execute_import(
 
         try:
             existing_record_match = _bitrix_retry(
-                lambda: find_existing_record(
+                lambda rp=row_payload: find_existing_record_cached(
                     account,
                     entity_type,
-                    row_payload,
+                    rp,
                     normalized_dedup_settings,
+                    cache=import_dedup_cache,
                     context=import_context,
                 )
             )

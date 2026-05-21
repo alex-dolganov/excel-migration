@@ -436,7 +436,16 @@ function hasExecutionRowHeading(row: DryRunRow | ImportRunRow | null | undefined
 
 function buildCurrentDedupPayload() {
   if (isLinkedImportEntityType(entityType.value)) {
-    return buildDedupPayload(linkedDedupSettings.value)
+    const filteredLinked = Object.fromEntries(
+      Object.entries(linkedDedupSettings.value).map(([entityId, settings]: [string, any]) => {
+        const allowedIds = new Set((linkedDedupFieldOptions.value[entityId] || []).map((opt: any) => opt.id))
+        return [entityId, {
+          ...settings,
+          fields: (Array.isArray(settings?.fields) ? settings.fields : []).filter((f: any) => allowedIds.has(String(f || ''))),
+        }]
+      }),
+    )
+    return buildDedupPayload(filteredLinked)
   }
 
   return buildDedupPayload({
@@ -587,15 +596,22 @@ const effectiveDedupFields = computed(() => {
     return []
   }
 
+  const mappedFieldIds = new Set(
+    (Array.isArray(mappingRows.value) ? mappingRows.value : [])
+      .map((row) => String(row?.targetFieldId || '').trim().toUpperCase())
+      .filter((id) => id && /^[A-Z][A-Z0-9_]*$/.test(id)),
+  )
+
   if (!isSimpleImportMode.value) {
-    return dedupFields.value
+    return dedupFields.value.filter((fieldId) => mappedFieldIds.has(String(fieldId || '').toUpperCase()))
   }
 
   if (dedupStrategy.value === 'create') {
     return []
   }
 
-  return dedupFields.value.length ? dedupFields.value : simpleDedupPreset.value.fields
+  const filtered = dedupFields.value.filter((fieldId) => mappedFieldIds.has(String(fieldId || '').toUpperCase()))
+  return filtered.length ? filtered : simpleDedupPreset.value.fields
 })
 const simpleDedupFieldLabels = computed(() => (
   effectiveDedupFields.value
@@ -1377,7 +1393,7 @@ const importRunTableColumns = computed(() => [
 ])
 
 watch(maxAvailableStep, (value) => {
-  if (currentStep.value > value) {
+  if (currentStep.value > value && !busyAction.value) {
     currentStep.value = value
   }
 })
@@ -2659,6 +2675,20 @@ async function saveDedupSettings() {
 
   try {
     await persistDedupSettings()
+
+    if (hasBlockingPreflightIssues.value) {
+      const dedupIssues = mappingPreflightIssues.value.filter(
+        (issue: any) => String(issue?.code || '').trim() === 'dedup_field_unmapped',
+      )
+      if (dedupIssues.length > 0) {
+        const descriptions = dedupIssues.map((issue: any) => buildPreflightIssueDescription(issue)).join(' ')
+        setError(`${descriptions} Добавьте поле в шаг «Маппинг полей» или уберите его из настроек поиска дублей.`)
+      } else {
+        setError('Маппинг содержит ошибки, мешающие запуску. Проверьте настройки на шаге «Маппинг полей».')
+      }
+      return
+    }
+
     currentStep.value = 6
     setSuccess('Правила обработки дублей сохранены.')
   } catch (error) {

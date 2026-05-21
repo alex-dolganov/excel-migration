@@ -119,4 +119,4 @@ def get_token(request: AuthorizedRequest):
             bitrix24_account.is_b24_user_admin = is_portal_admin
             bitrix24_account.save(update_fields=["is_b24_user_admin"])
 
-    return JsonResponse({"token": bitrix24_account.create_jwt_token()})
+    return JsonResponse({"token": bitrix24_account.create_jwt_token(minutes=480)})
