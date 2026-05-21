@@ -5719,14 +5719,14 @@ onUnmounted(() => {
                   </template>
                   <template #details-cell="{ row }">
                     <div v-if="hasLinkedEntityTree(row.original)" class="py-1">
-                      <div class="space-y-3">
-                        <div class="rounded-[18px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f8fbff_0%,#eef6ff_100%)] px-4 py-3">
+                      <div class="space-y-2">
+                        <div class="rounded-[18px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-3 transition-all hover:border-[#c2d4f0] hover:bg-white hover:shadow-[0_2px_12px_rgba(46,107,217,0.06)]">
                           <div class="flex flex-wrap items-center justify-between gap-3">
                             <div class="min-w-0">
-                              <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                              <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
                                 {{ row.original.entityTree?.primary.entityLabel }}
                               </div>
-                              <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
+                              <div class="mt-1 truncate text-sm font-semibold text-[#2f4254]">
                                 {{ row.original.entityTree?.primary.title }}
                               </div>
                             </div>
@@ -5741,19 +5741,19 @@ onUnmounted(() => {
 
                         <div
                           v-if="row.original.entityTree?.linkedItems?.length"
-                          class="ml-4 space-y-2 border-l border-[#dce7f7] pl-4"
+                          class="ml-4 space-y-2 border-l-2 border-[#d7e7ff] pl-4"
                         >
                           <div
                             v-for="item in row.original.entityTree?.linkedItems || []"
                             :key="item.key"
-                            class="rounded-[14px] border border-[#e6edf6] bg-white px-4 py-3"
+                            class="rounded-[14px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-3"
                           >
                             <div class="flex flex-wrap items-center justify-between gap-3">
                               <div class="min-w-0">
-                                <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
                                   {{ item.entityLabel }}
                                 </div>
-                                <div class="mt-1 truncate text-sm font-medium text-[#314256]">
+                                <div class="mt-1 truncate text-sm font-medium text-[#2f4254]">
                                   {{ item.title }}
                                 </div>
                               </div>
@@ -5985,32 +5985,34 @@ onUnmounted(() => {
 
             <section
               v-if="isLinkedEntityImport && linkedImportRunSummary.hasSummary"
-              class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5"
+              class="overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_8px_32px_rgba(23,54,110,0.07)]"
             >
-              <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Итог</div>
-                  <h3 class="mt-1 text-xl font-semibold text-[#314256]">Что создано по связанному импорту</h3>
-                </div>
-
-                <div
-                  v-if="linkedImportRunSummary.hasOverflow"
-                  class="rounded-[16px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-3 text-sm text-[#a96c25]"
-                >
-                  {{ linkedImportRunSummary.overflowMessage }}
+              <div class="border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f4f8fe_100%)] px-6 py-5">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">Итог</div>
+                    <h3 class="mt-1.5 text-[17px] font-semibold text-[#2f4254]">Что создано по связанному импорту</h3>
+                  </div>
+                  <div
+                    v-if="linkedImportRunSummary.hasOverflow"
+                    class="rounded-[16px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-3 text-sm text-[#a96c25]"
+                  >
+                    {{ linkedImportRunSummary.overflowMessage }}
+                  </div>
                 </div>
               </div>
 
-              <div class="mt-5 grid gap-4 xl:grid-cols-2">
+              <div class="grid gap-4 p-6 xl:grid-cols-2">
                 <div
                   v-for="section in linkedImportRunSummary.sections"
                   :key="section.id"
-                  class="rounded-[18px] border border-[#e8eef5] bg-white p-4"
+                  class="flex flex-col rounded-[22px] border border-[#e5ebf2] bg-[#fbfcfe] p-5 transition-all duration-200 hover:border-[#c2d4f0] hover:bg-white hover:shadow-[0_4px_20px_rgba(46,107,217,0.06)]"
                 >
-                  <div class="flex items-center justify-between gap-3">
+                  <div class="flex items-start justify-between gap-3">
                     <div>
-                      <div class="text-sm font-semibold text-[#314256]">{{ section.title }}</div>
-                      <div class="mt-1 text-sm text-[#7b8a99]">Всего: {{ section.total }}</div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">Сущность</div>
+                      <div class="mt-1.5 text-[15px] font-semibold text-[#2f4254]">{{ section.title }}</div>
+                      <div class="mt-1 text-sm leading-relaxed text-[#6c8093]">Всего: {{ section.total }}</div>
                     </div>
                   </div>
 
@@ -6018,13 +6020,13 @@ onUnmounted(() => {
                     <div
                       v-for="item in buildVisibleLinkedSummaryItems(section)"
                       :key="item.key"
-                      class="flex items-start justify-between gap-3 rounded-[14px] border border-[#e8eef5] bg-[#fbfcfe] px-3 py-3"
+                      class="flex items-start justify-between gap-3 rounded-[14px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-3"
                     >
                       <div class="min-w-0">
-                        <div class="truncate text-sm font-medium text-[#314256]">{{ item.title }}</div>
-                        <div class="mt-1 text-sm text-[#7b8a99]">ID {{ item.recordId }}</div>
+                        <div class="truncate text-sm font-medium text-[#2f4254]">{{ item.title }}</div>
+                        <div class="mt-0.5 text-[12px] leading-relaxed text-[#5c7592]">ID {{ item.recordId }}</div>
                       </div>
-                      <div class="shrink-0 rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1 text-xs font-semibold text-[#2e6bd9]">
+                      <div class="shrink-0 rounded-full border border-[#d7e7ff] bg-white px-3 py-1 text-xs font-semibold text-[#2e6bd9]">
                         {{ item.statusLabel }}
                       </div>
                     </div>
@@ -6034,7 +6036,7 @@ onUnmounted(() => {
 
               <div
                 v-if="linkedSummaryPageCount > 1"
-                class="mt-5 flex flex-wrap items-center justify-center gap-2"
+                class="flex flex-wrap items-center justify-center gap-2 border-t border-[#e5ebf1] px-6 py-4"
               >
                 <button
                   v-for="page in buildLinkedSummaryPages()"
@@ -6050,7 +6052,7 @@ onUnmounted(() => {
                 </button>
               </div>
 
-              <div class="mt-5 flex flex-wrap gap-3">
+              <div class="flex flex-wrap gap-3 border-t border-[#e5ebf1] px-6 py-5">
                 <B24Button
                   v-if="busyAction === 'retry' || cancelRequested"
                   label="Остановить импорт"
@@ -6112,14 +6114,14 @@ onUnmounted(() => {
                     </template>
                     <template #details-cell="{ row }">
                       <div v-if="hasLinkedEntityTree(row.original)" class="py-1">
-                        <div class="space-y-3">
-                          <div class="rounded-[18px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f8fbff_0%,#eef6ff_100%)] px-4 py-3">
+                        <div class="space-y-2">
+                          <div class="rounded-[18px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-3 transition-all hover:border-[#c2d4f0] hover:bg-white hover:shadow-[0_2px_12px_rgba(46,107,217,0.06)]">
                             <div class="flex flex-wrap items-center justify-between gap-3">
                               <div class="min-w-0">
-                                <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
                                   {{ row.original.entityTree?.primary.entityLabel }}
                                 </div>
-                                <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
+                                <div class="mt-1 truncate text-sm font-semibold text-[#2f4254]">
                                   {{ row.original.entityTree?.primary.title }}
                                 </div>
                               </div>
@@ -6134,19 +6136,19 @@ onUnmounted(() => {
 
                           <div
                             v-if="row.original.entityTree?.linkedItems?.length"
-                            class="ml-4 space-y-2 border-l border-[#dce7f7] pl-4"
+                            class="ml-4 space-y-2 border-l-2 border-[#d7e7ff] pl-4"
                           >
                             <div
                               v-for="item in row.original.entityTree?.linkedItems || []"
                               :key="item.key"
-                              class="rounded-[14px] border border-[#e6edf6] bg-white px-4 py-3"
+                              class="rounded-[14px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-3"
                             >
                               <div class="flex flex-wrap items-center justify-between gap-3">
                                 <div class="min-w-0">
-                                  <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                  <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
                                     {{ item.entityLabel }}
                                   </div>
-                                  <div class="mt-1 truncate text-sm font-medium text-[#314256]">
+                                  <div class="mt-1 truncate text-sm font-medium text-[#2f4254]">
                                     {{ item.title }}
                                   </div>
                                 </div>
@@ -6384,14 +6386,14 @@ onUnmounted(() => {
                   </template>
                   <template #details-cell="{ row }">
                     <div v-if="hasLinkedEntityTree(row.original)" class="py-1">
-                      <div class="space-y-3">
-                        <div class="rounded-[18px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f8fbff_0%,#eef6ff_100%)] px-4 py-3">
+                      <div class="space-y-2">
+                        <div class="rounded-[18px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-3 transition-all hover:border-[#c2d4f0] hover:bg-white hover:shadow-[0_2px_12px_rgba(46,107,217,0.06)]">
                           <div class="flex flex-wrap items-center justify-between gap-3">
                             <div class="min-w-0">
-                              <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                              <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
                                 {{ row.original.entityTree?.primary.entityLabel }}
                               </div>
-                              <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
+                              <div class="mt-1 truncate text-sm font-semibold text-[#2f4254]">
                                 {{ row.original.entityTree?.primary.title }}
                               </div>
                             </div>
@@ -6406,19 +6408,19 @@ onUnmounted(() => {
 
                         <div
                           v-if="row.original.entityTree?.linkedItems?.length"
-                          class="ml-4 space-y-2 border-l border-[#dce7f7] pl-4"
+                          class="ml-4 space-y-2 border-l-2 border-[#d7e7ff] pl-4"
                         >
                           <div
                             v-for="item in row.original.entityTree?.linkedItems || []"
                             :key="item.key"
-                            class="rounded-[14px] border border-[#e6edf6] bg-white px-4 py-3"
+                            class="rounded-[14px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-3"
                           >
                             <div class="flex flex-wrap items-center justify-between gap-3">
                               <div class="min-w-0">
-                                <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                                <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
                                   {{ item.entityLabel }}
                                 </div>
-                                <div class="mt-1 truncate text-sm font-medium text-[#314256]">
+                                <div class="mt-1 truncate text-sm font-medium text-[#2f4254]">
                                   {{ item.title }}
                                 </div>
                               </div>
