@@ -1,11 +1,34 @@
 <script setup lang="ts">
+type InitialPreview = {
+  total: number
+  sample: Array<{ id: number, title: string }>
+  hasMore?: boolean
+}
+
+type InitialFilterRow = {
+  fieldId: string
+  value: string
+}
+
 const props = withDefaults(defineProps<{
   initialEntityType?: string
+  initialFieldId?: string
+  initialFilterRows?: InitialFilterRow[]
+  initialPreview?: InitialPreview | null
+  initialFile?: File | null
   lockEntityType?: boolean
+  lockFieldId?: boolean
+  lockFilters?: boolean
   resumeSessionId?: string
 }>(), {
   initialEntityType: '',
+  initialFieldId: '',
+  initialFilterRows: () => [],
+  initialPreview: null,
+  initialFile: null,
   lockEntityType: false,
+  lockFieldId: false,
+  lockFilters: false,
   resumeSessionId: '',
 })
 
@@ -64,6 +87,7 @@ const previewHasMore = ref(false)
 const fileUrl = ref('')
 const fieldId = ref('')
 const fileName = ref('')
+const selectedUploadFile = ref<File | null>(null)
 const uploadedFileId = ref('')
 const uploadedFileName = ref('')
 const uploadingFile = ref(false)
@@ -97,6 +121,18 @@ const fileFieldOptions = computed(() =>
     }))
 )
 
+const selectedFieldLabel = computed(() => (
+  fileFieldOptions.value.find((item) => item.value === fieldId.value)?.label
+  || filterFieldCatalog.value.find((item) => item.id === fieldId.value)?.title
+  || fieldId.value
+))
+
+const selectedUploadFileLabel = computed(() => (
+  uploadedFileName.value
+  || selectedUploadFile.value?.name
+  || ''
+))
+
 const computedFilter = computed(() => {
   const f: Record<string, any> = {}
   for (const row of filterFieldRows.value) {
@@ -127,7 +163,24 @@ watch(entityType, async (_value, previousValue) => {
     isAddingFilterField.value = false
   }
   await loadFilterFields()
+  applyInitialStepOnePrefill()
 }, { immediate: true })
+
+watch(() => props.initialFieldId, () => {
+  applyInitialStepOnePrefill()
+}, { immediate: true })
+
+watch(() => props.initialPreview, () => {
+  applyInitialStepOnePrefill()
+}, { immediate: true })
+
+watch(() => props.initialFile, () => {
+  applyInitialStepOnePrefill()
+}, { immediate: true })
+
+watch(() => props.initialFilterRows, () => {
+  applyInitialStepOnePrefill()
+}, { immediate: true, deep: true })
 
 async function loadFilterFields() {
   loadingFilterFields.value = true
@@ -154,6 +207,61 @@ async function loadFilterFields() {
     filterFieldCatalog.value = []
   } finally {
     loadingFilterFields.value = false
+  }
+}
+
+function buildFilterFieldRow(fieldKey: string, value: string, index: number) {
+  const normalizedFieldId = String(fieldKey || '').trim()
+  if (!normalizedFieldId) {
+    return null
+  }
+
+  const selectedField = filterFieldCatalog.value.find((field) => field.id === normalizedFieldId)
+  if (!selectedField) {
+    return null
+  }
+
+  return {
+    key: `${normalizedFieldId}:${index + 1}`,
+    fieldId: normalizedFieldId,
+    title: selectedField.title,
+    type: selectedField.type,
+    items: selectedField.items,
+    value: String(value || '').trim(),
+  }
+}
+
+function applyInitialStepOnePrefill() {
+  if (props.initialFieldId) {
+    fieldId.value = String(props.initialFieldId || '').trim()
+  }
+
+  if (props.initialFile) {
+    selectedUploadFile.value = props.initialFile
+    uploadedFileName.value = props.initialFile.name
+  }
+
+  if (props.initialPreview) {
+    previewTotal.value = Number(props.initialPreview.total || 0)
+    previewSample.value = Array.isArray(props.initialPreview.sample) ? props.initialPreview.sample.slice(0, PREVIEW_SAMPLE_LIMIT) : []
+    previewHasMore.value = Boolean(
+      props.initialPreview.hasMore
+      ?? (Number(props.initialPreview.total || 0) > Number(props.initialPreview.sample?.length || 0))
+    )
+  }
+
+  if (!props.initialFilterRows.length) {
+    if (props.lockFilters) {
+      filterFieldRows.value = []
+    }
+  } else {
+    filterFieldRows.value = props.initialFilterRows
+      .map((row, index) => buildFilterFieldRow(row.fieldId, row.value, index))
+      .filter((row): row is FilterFieldRow => Boolean(row))
+  }
+
+  if (!props.resumeSessionId && props.lockFilters && props.initialPreview) {
+    step.value = props.initialFile && props.initialFieldId && props.lockFieldId ? 3 : 2
   }
 }
 
@@ -243,9 +351,10 @@ async function handleFileSelect(event: Event) {
   const file = input.files?.[0]
   if (!file) return
   error.value = ''
+  selectedUploadFile.value = file
   uploadingFile.value = true
   uploadedFileId.value = ''
-  uploadedFileName.value = ''
+  uploadedFileName.value = file.name
   try {
     const res = await apiStore.uploadBulkAttachFile(file)
     uploadedFileId.value = res.file_id
@@ -255,6 +364,23 @@ async function handleFileSelect(event: Event) {
   } finally {
     uploadingFile.value = false
     input.value = ''
+  }
+}
+
+async function ensureUploadedFile() {
+  if (uploadedFileId.value || !selectedUploadFile.value) {
+    return
+  }
+
+  uploadingFile.value = true
+  try {
+    const res = await apiStore.uploadBulkAttachFile(selectedUploadFile.value)
+    uploadedFileId.value = res.file_id
+    uploadedFileName.value = res.file_name
+  } catch (e: any) {
+    error.value = String(e?.data?.error || e?.message || 'Ошибка загрузки файла')
+  } finally {
+    uploadingFile.value = false
   }
 }
 
@@ -322,11 +448,17 @@ async function applySessionSnapshot(snap: Record<string, any>) {
 
 async function runAttach() {
   error.value = ''
-  if (!uploadedFileId.value && !fileUrl.value.trim()) { error.value = 'Загрузите файл'; return }
+  if (!selectedUploadFile.value && !uploadedFileId.value && !fileUrl.value.trim()) { error.value = 'Загрузите файл'; return }
   if (!fieldId.value.trim()) { error.value = 'Укажите ID поля'; return }
 
   busy.value = true
   try {
+    await ensureUploadedFile()
+    if (!uploadedFileId.value && !fileUrl.value.trim()) {
+      error.value = 'Загрузите файл'
+      return
+    }
+
     const created = await apiStore.createBulkAttachSession({
       entity_type: entityType.value,
       filter: computedFilter.value,
@@ -385,6 +517,7 @@ function reset() {
   fileUrl.value = ''
   fieldId.value = ''
   fileName.value = ''
+  selectedUploadFile.value = null
   uploadedFileId.value = ''
   uploadedFileName.value = ''
   uploadingFile.value = false
@@ -395,6 +528,7 @@ function reset() {
   resultFailed.value = 0
   progressProcessed.value = 0
   progressTotal.value = 0
+  applyInitialStepOnePrefill()
 }
 </script>
 
@@ -454,7 +588,29 @@ function reset() {
           Выбранная CRM-сущность: <span class="font-semibold">{{ entityLabel }}</span>
         </div>
 
-        <div class="space-y-4">
+        <div v-if="lockFilters" class="space-y-4">
+          <div
+            v-if="filterFieldRows.length === 0"
+            class="rounded-[14px] border border-dashed border-[#d7e7ff] bg-[#f8fbff] px-4 py-4 text-sm text-[#67809b]"
+          >
+            Фильтр не задан. В массовое добавление попадут все {{ entityLabel.toLowerCase() }}.
+          </div>
+
+          <div
+            v-for="row in filterFieldRows"
+            :key="row.key"
+            class="rounded-[16px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-4"
+          >
+            <div class="text-sm font-semibold text-[#314256]">
+              {{ row.title }}
+            </div>
+            <div class="mt-3 rounded-[10px] border border-[#d8e3ef] bg-white px-3 py-2 text-sm text-[#314256]">
+              {{ row.value || '—' }}
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="space-y-4">
           <div
             v-if="filterFieldRows.length === 0"
             class="rounded-[14px] border border-dashed border-[#d7e7ff] bg-[#f8fbff] px-4 py-4 text-sm text-[#67809b]"
@@ -610,20 +766,24 @@ function reset() {
             <input type="file" class="hidden" :disabled="uploadingFile" @change="handleFileSelect" />
             <span class="text-base">📎</span>
             <span v-if="uploadingFile" class="text-sm text-[#6f8194]">Загрузка...</span>
-            <span v-else-if="uploadedFileName" class="text-sm font-medium text-[#314256]">{{ uploadedFileName }}</span>
+            <span v-else-if="selectedUploadFileLabel" class="text-sm font-medium text-[#314256]">{{ selectedUploadFileLabel }}</span>
             <span v-else class="text-sm text-[#9aa9b8]">Выберите файл с компьютера</span>
-            <span v-if="uploadedFileName && !uploadingFile" class="ml-auto text-xs text-[#4caf7d]">✓ загружен</span>
+            <span v-if="selectedUploadFileLabel && !uploadingFile" class="ml-auto text-xs text-[#4caf7d]">✓ готов</span>
           </label>
           <p class="mt-1 text-xs text-[#9aa9b8]">Файл будет прикреплён к каждой из {{ previewTotal }} записей</p>
         </div>
 
         <div class="mb-4">
           <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-[#9aa9b8]">Поле для файла <span class="text-[#c24b53]">*</span></label>
-          <div v-if="loadingFilterFields" class="rounded-[10px] border border-[#d8e3ef] px-3 py-2 text-sm text-[#9aa9b8]">
+          <div v-if="lockFieldId" class="rounded-[10px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-3 text-sm text-[#2e6bd9]">
+            Выбранное поле для файла: <span class="font-semibold">{{ selectedFieldLabel }}</span>
+          </div>
+          <div v-else-if="loadingFilterFields" class="rounded-[10px] border border-[#d8e3ef] px-3 py-2 text-sm text-[#9aa9b8]">
             Загружаем поля...
           </div>
           <template v-else-if="fileFieldOptions.length">
             <B24SelectMenu
+              v-if="!lockFieldId"
               :model-value="fieldId"
               class="w-full"
               placeholder="Выберите поле типа «Файл»"

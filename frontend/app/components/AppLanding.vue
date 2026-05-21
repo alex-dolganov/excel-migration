@@ -1,189 +1,210 @@
 <script setup lang="ts">
 const emit = defineEmits<{ select: [mode: string] }>()
 
-const activeInfo = ref<string | null>(null)
+const hover = ref<string | null>(null)
 
-function toggleInfo(mode: string, event: MouseEvent) {
-  event.stopPropagation()
-  activeInfo.value = activeInfo.value === mode ? null : mode
+const palette = {
+  simple:   { bg: '#E8F6EE', ink: '#1E8A52', glow: 'rgba(30,138,82,0.18)' },
+  advanced: { bg: '#EEF2FF', ink: '#3B47D6', glow: 'rgba(59,71,214,0.18)' },
 }
 
-const INFO = {
-  simple: {
-    points: [
-      'Загрузите файл Excel или CSV',
-      'Выберите тип данных: CRM, задачи или сотрудники',
-      'Сопоставьте колонки файла с полями Bitrix24',
-      'Запустите импорт — данные появятся в Bitrix24',
-    ],
-    note: 'Управление дублями и шаблоны сопоставления недоступны. Подходит для разовых переносов.',
-  },
-  advanced: {
-    points: [
-      'Всё из простого режима',
-      'Шаблоны сопоставления — сохраняйте и переиспользуйте настройки',
-      'Полный контроль над дублями: пропустить, обновить или спросить',
-      'Тестовый запуск — проверьте данные без реальных изменений в Bitrix24',
-      'Расширенная валидация и детальный отчёт по каждой строке',
-    ],
-    note: 'Рекомендуется для регулярных переносов и больших объёмов данных.',
-  },
-}
+const simpleFeatures  = ['Файл XLSX / CSV до 50 МБ', 'Автосопоставление полей', 'Базовая защита от дублей']
+const advancedFeatures = ['Сохранённые шаблоны маппинга', 'Гибкие правила поиска дублей', 'Построчный отчёт + откат']
 </script>
 
 <template>
   <div class="overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)]">
 
-    <!-- Hero -->
-    <div class="border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f4f8fe_100%)] px-6 py-8 sm:px-8 sm:py-10">
-      <div class="flex flex-col items-center text-center">
-        <img
-          src="/logo.png"
-          alt="Excel Migration"
-          class="mb-4 h-20 w-auto object-contain"
-        />
-        <h1 class="text-[30px] font-semibold leading-tight tracking-tight text-[#2f4254]">Excel Migration</h1>
-        <p class="mt-2 text-[14px] leading-relaxed text-[#6c8093]">
-          Перенесите данные из Excel и CSV в Bitrix24 — CRM, задачи и сотрудников.
-        </p>
+    <!-- ── Hero ── -->
+    <section
+      class="relative overflow-hidden border-b border-[#e5ebf1] px-8 py-6 sm:px-10"
+      style="background: linear-gradient(180deg, #F7F8FA 0%, #FFFFFF 100%)"
+    >
+      <!-- Dot grid -->
+      <div
+        class="pointer-events-none absolute inset-0 opacity-[0.3]"
+        style="
+          background-image: radial-gradient(circle, #D8DCE6 1px, transparent 1.5px);
+          background-size: 22px 22px;
+          mask-image: radial-gradient(ellipse at top, black 20%, transparent 70%);
+          -webkit-mask-image: radial-gradient(ellipse at top, black 20%, transparent 70%);
+        "
+      />
+
+      <div class="relative flex items-center gap-6">
+        <!-- Logo -->
+        <img src="/logo.png" alt="Excel Migration" class="h-12 w-auto shrink-0 object-contain" />
+
+        <!-- Text -->
+        <div>
+          <h1 class="text-[26px] font-semibold leading-[1.15] tracking-[-0.02em] text-[#0F1115]">
+            Перенесите Excel в&nbsp;ваш&nbsp;портал
+          </h1>
+          <p class="mt-1 text-[13px] text-[#5A5E6E]">
+            CRM-сущности, задачи, сотрудники — за&nbsp;7 шагов с&nbsp;предпросмотром, проверкой дублей и&nbsp;тестовым запуском.
+          </p>
+        </div>
       </div>
-    </div>
+    </section>
 
-    <!-- Mode selection -->
-    <div class="px-6 py-8 sm:px-8">
-      <div class="mb-6">
-        <h2 class="text-[17px] font-semibold text-[#314256]">Выберите режим импорта</h2>
-        <p class="mt-1.5 text-sm text-[#6c8093]">
-          Простой — для быстрого старта, расширенный — для полного контроля над процессом.
-        </p>
+    <!-- ── Mode picker ── -->
+    <section class="px-8 pb-8 pt-6 sm:px-10">
+      <div class="mb-4 flex items-center justify-between">
+        <div>
+          <div class="mb-1 text-[10px] uppercase tracking-[0.16em] text-[#8B8FA0]">Шаг 0 · Выбор режима</div>
+          <h2 class="text-[18px] font-semibold tracking-tight text-[#0F1115]">Как импортируем?</h2>
+        </div>
+        <div class="hidden items-center gap-1.5 text-[11.5px] text-[#8B8FA0] sm:flex">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+            <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.2" />
+            <path d="M7 4.5v3M7 9.2v.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+          </svg>
+          Режим можно сменить внутри приложения
+        </div>
       </div>
 
-      <div class="grid gap-4 sm:grid-cols-2">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 
-        <!-- Simple -->
-        <div class="flex flex-col rounded-[22px] border border-[#e5ebf2] bg-[#fbfcfe] p-6 transition-all duration-300 hover:border-[#c2d4f0] hover:bg-white hover:shadow-[0_4px_20px_rgba(46,107,217,0.06)]">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">Режим</div>
-              <h3 class="mt-1.5 text-[16px] font-semibold text-[#2f4254]">Простой импорт</h3>
+        <!-- ── Простой ── -->
+        <div
+          class="relative flex cursor-pointer flex-col overflow-hidden rounded-2xl bg-white transition-all duration-200"
+          :style="{
+            border: `1.5px solid ${hover === 'simple' ? palette.simple.ink : '#ECEEF3'}`,
+            boxShadow: hover === 'simple' ? `0 12px 32px -16px ${palette.simple.glow}` : 'none',
+            transform: hover === 'simple' ? 'translateY(-2px)' : 'translateY(0)',
+          }"
+          @mouseenter="hover = 'simple'"
+          @mouseleave="hover = null"
+          @click="emit('select', 'simple')"
+        >
+          <!-- Card hero -->
+          <div class="relative h-[90px] shrink-0 overflow-hidden" :style="{ background: palette.simple.bg }">
+            <div class="absolute bottom-4 left-0 right-0 flex items-center justify-center gap-3 px-8">
+              <div class="h-[5px] flex-1 rounded-full" :style="{ background: palette.simple.ink, opacity: '0.85' }" />
+              <div class="h-[5px] flex-1 rounded-full" :style="{ background: palette.simple.ink, opacity: '0.55' }" />
+              <div class="h-[5px] flex-1 rounded-full" :style="{ background: palette.simple.ink, opacity: '0.25' }" />
             </div>
-            <button
-              type="button"
-              class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition"
-              :class="activeInfo === 'simple'
-                ? 'border-[#2e6bd9] bg-[#e6eefc] text-[#2e6bd9]'
-                : 'border-[#dde8f8] bg-[#f4f9ff] text-[#6898d8] hover:border-[#2e6bd9] hover:text-[#2e6bd9]'"
-              @click="toggleInfo('simple', $event)"
-            >
-              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                <circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M7 6.5v3.5M7 4.2v.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </button>
+            <div class="absolute left-5 top-4 flex items-center gap-2">
+              <div class="grid h-8 w-8 place-items-center rounded-xl text-white" :style="{ background: palette.simple.ink }">
+                <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
+                  <path d="M10 1L3 10h4l-1 7 8-10H10l1-6z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+                </svg>
+              </div>
+              <span class="text-[10px] font-semibold uppercase tracking-[0.18em]" :style="{ color: palette.simple.ink }">
+                Режим · Простой
+              </span>
+            </div>
+            <span class="absolute right-4 top-4 rounded-full bg-white px-2 py-0.5 text-[10px] font-medium" :style="{ color: palette.simple.ink }">
+              ~3 минуты
+            </span>
           </div>
 
-          <p class="mt-3 text-sm leading-relaxed text-[#6c8093]">
-            Только файл, сущность, простое сопоставление полей и запуск.
-          </p>
-
-          <Transition name="info-panel">
-            <div v-if="activeInfo === 'simple'" class="mt-4 rounded-[14px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-4">
-              <ul class="space-y-2">
-                <li
-                  v-for="point in INFO.simple.points"
-                  :key="point"
-                  class="flex items-start gap-2.5 text-[12px] leading-relaxed text-[#5c7592]"
-                >
-                  <span class="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#2e6bd9]" />
-                  {{ point }}
-                </li>
-              </ul>
-              <p class="mt-3 text-[11px] leading-relaxed text-[#9aa9b8]">{{ INFO.simple.note }}</p>
-            </div>
-          </Transition>
-
-          <div class="mt-auto pt-5">
+          <!-- Card body -->
+          <div class="flex flex-1 flex-col px-5 pb-5 pt-4">
+            <h3 class="text-[17px] font-semibold tracking-tight text-[#0F1115]">Простой импорт</h3>
+            <p class="mt-1.5 text-[12.5px] leading-relaxed text-[#5A5E6E]">
+              Загрузите файл, выберите сущность, подтвердите сопоставление — и&nbsp;запускайте.
+            </p>
+            <ul class="mt-3 space-y-1.5">
+              <li v-for="f in simpleFeatures" :key="f" class="flex items-center gap-2 text-[12.5px] text-[#3A3D47]">
+                <span class="grid h-4 w-4 shrink-0 place-items-center rounded-full" :style="{ background: palette.simple.bg }">
+                  <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
+                    <path d="M2 4.5l1.6 1.6L7 2.6" :stroke="palette.simple.ink" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </span>
+                {{ f }}
+              </li>
+            </ul>
             <button
               type="button"
-              class="w-full rounded-[12px] bg-[#2e6bd9] py-2.5 text-sm font-semibold text-white transition duration-200 hover:bg-[#2560c5]"
-              @click="emit('select', 'simple')"
+              class="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-xl text-[13px] font-semibold text-white transition-opacity hover:opacity-90"
+              :style="{ background: palette.simple.ink }"
+              @click.stop="emit('select', 'simple')"
             >
-              Начать
+              Начать простой импорт
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
             </button>
           </div>
         </div>
 
-        <!-- Advanced -->
-        <div class="flex flex-col rounded-[22px] border border-[#e5ebf2] bg-[#fbfcfe] p-6 transition-all duration-300 hover:border-[#c2d4f0] hover:bg-white hover:shadow-[0_4px_20px_rgba(46,107,217,0.06)]">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">Режим</div>
-              <h3 class="mt-1.5 text-[16px] font-semibold text-[#2f4254]">Расширенный импорт</h3>
+        <!-- ── Расширенный ── -->
+        <div
+          class="relative flex cursor-pointer flex-col overflow-hidden rounded-2xl bg-white transition-all duration-200"
+          :style="{
+            border: `1.5px solid ${hover === 'advanced' ? palette.advanced.ink : '#ECEEF3'}`,
+            boxShadow: hover === 'advanced' ? `0 12px 32px -16px ${palette.advanced.glow}` : 'none',
+            transform: hover === 'advanced' ? 'translateY(-2px)' : 'translateY(0)',
+          }"
+          @mouseenter="hover = 'advanced'"
+          @mouseleave="hover = null"
+          @click="emit('select', 'advanced')"
+        >
+          <!-- Card hero -->
+          <div class="relative h-[90px] shrink-0 overflow-hidden" :style="{ background: palette.advanced.bg }">
+            <svg class="absolute bottom-0 left-0 right-0 w-full" style="height:48px" viewBox="0 0 400 48" preserveAspectRatio="none">
+              <g :stroke="palette.advanced.ink" stroke-width="1.5">
+                <circle cx="60" cy="10" r="3" :fill="palette.advanced.ink" />
+                <circle cx="60" cy="24" r="3" :fill="palette.advanced.ink" opacity=".75" />
+                <circle cx="60" cy="38" r="3" :fill="palette.advanced.ink" opacity=".5" />
+                <circle cx="340" cy="10" r="3" :fill="palette.advanced.ink" opacity=".5" />
+                <circle cx="340" cy="24" r="3" :fill="palette.advanced.ink" />
+                <circle cx="340" cy="38" r="3" :fill="palette.advanced.ink" opacity=".75" />
+                <path d="M63 10 C 180 10, 220 24, 337 24" fill="none" />
+                <path d="M63 24 C 180 24, 220 10, 337 10" fill="none" opacity=".7" />
+                <path d="M63 38 C 180 38, 220 38, 337 38" fill="none" opacity=".5" />
+              </g>
+            </svg>
+            <div class="absolute left-5 top-4 z-10 flex items-center gap-2">
+              <div class="grid h-8 w-8 place-items-center rounded-xl text-white" :style="{ background: palette.advanced.ink }">
+                <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
+                  <path d="M3 5h12M3 9h12M3 13h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                  <circle cx="6" cy="5" r="1.5" fill="#fff" :stroke="palette.advanced.ink" stroke-width="1" />
+                  <circle cx="11" cy="9" r="1.5" fill="#fff" :stroke="palette.advanced.ink" stroke-width="1" />
+                  <circle cx="8" cy="13" r="1.5" fill="#fff" :stroke="palette.advanced.ink" stroke-width="1" />
+                </svg>
+              </div>
+              <span class="text-[10px] font-semibold uppercase tracking-[0.18em]" :style="{ color: palette.advanced.ink }">
+                Режим · Расширенный
+              </span>
             </div>
-            <button
-              type="button"
-              class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition"
-              :class="activeInfo === 'advanced'
-                ? 'border-[#2e6bd9] bg-[#e6eefc] text-[#2e6bd9]'
-                : 'border-[#dde8f8] bg-[#f4f9ff] text-[#6898d8] hover:border-[#2e6bd9] hover:text-[#2e6bd9]'"
-              @click="toggleInfo('advanced', $event)"
-            >
-              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                <circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M7 6.5v3.5M7 4.2v.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </button>
+            <span class="absolute right-4 top-4 z-10 rounded-full bg-white px-2 py-0.5 text-[10px] font-medium" :style="{ color: palette.advanced.ink }">
+              Шаблоны · Отчёты
+            </span>
           </div>
 
-          <p class="mt-3 text-sm leading-relaxed text-[#6c8093]">
-            Шаблоны сопоставления, расширенная настройка дублей и детальный отчёт по каждой строке.
-          </p>
-
-          <Transition name="info-panel">
-            <div v-if="activeInfo === 'advanced'" class="mt-4 rounded-[14px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-4">
-              <ul class="space-y-2">
-                <li
-                  v-for="point in INFO.advanced.points"
-                  :key="point"
-                  class="flex items-start gap-2.5 text-[12px] leading-relaxed text-[#5c7592]"
-                >
-                  <span class="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#2e6bd9]" />
-                  {{ point }}
-                </li>
-              </ul>
-              <p class="mt-3 text-[11px] leading-relaxed text-[#9aa9b8]">{{ INFO.advanced.note }}</p>
-            </div>
-          </Transition>
-
-          <div class="mt-auto pt-5">
+          <!-- Card body -->
+          <div class="flex flex-1 flex-col px-5 pb-5 pt-4">
+            <h3 class="text-[17px] font-semibold tracking-tight text-[#0F1115]">Расширенный импорт</h3>
+            <p class="mt-1.5 text-[12.5px] leading-relaxed text-[#5A5E6E]">
+              Шаблоны маппинга, тонкая настройка дублей, тестовый запуск и&nbsp;детальный отчёт.
+            </p>
+            <ul class="mt-3 space-y-1.5">
+              <li v-for="f in advancedFeatures" :key="f" class="flex items-center gap-2 text-[12.5px] text-[#3A3D47]">
+                <span class="grid h-4 w-4 shrink-0 place-items-center rounded-full" :style="{ background: palette.advanced.bg }">
+                  <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
+                    <path d="M2 4.5l1.6 1.6L7 2.6" :stroke="palette.advanced.ink" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </span>
+                {{ f }}
+              </li>
+            </ul>
             <button
               type="button"
-              class="w-full rounded-[12px] bg-[#2e6bd9] py-2.5 text-sm font-semibold text-white transition duration-200 hover:bg-[#2560c5]"
-              @click="emit('select', 'advanced')"
+              class="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-xl text-[13px] font-semibold text-white transition-opacity hover:opacity-90"
+              :style="{ background: palette.advanced.ink }"
+              @click.stop="emit('select', 'advanced')"
             >
-              Начать
+              Начать расширенный
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
             </button>
           </div>
         </div>
 
       </div>
-
-      <p class="mt-5 text-[13px] text-[#b0bec8]">Режим можно изменить в любой момент, нажав «← Режим» внутри приложения.</p>
-    </div>
-
+    </section>
   </div>
 </template>
-
-<style scoped>
-.info-panel-enter-active,
-.info-panel-leave-active {
-  transition: opacity 0.2s ease, max-height 0.25s ease;
-  overflow: hidden;
-  max-height: 300px;
-}
-.info-panel-enter-from,
-.info-panel-leave-to {
-  opacity: 0;
-  max-height: 0;
-}
-</style>

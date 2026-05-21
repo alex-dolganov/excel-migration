@@ -181,6 +181,7 @@ type ImportTemplateItem = {
 }
 
 type StepState = 'done' | 'current' | 'upcoming'
+type BulkFlowStep = 'setup' | 'review' | 'execution'
 
 const props = withDefaults(defineProps<{
   initialImportMode?: string
@@ -242,14 +243,33 @@ const successMessage = ref('')
 const expandedTextBlocks = ref<Record<string, boolean>>({})
 const recentSessions = ref<Record<string, any>[]>([])
 const historyLoadError = ref('')
-const currentView = ref<'wizard' | 'history' | 'bulkAttach'>('wizard')
+const currentView = ref<'wizard' | 'history'>('wizard')
+
+function isBulkAttachSessionSnapshot(snapshot: Record<string, any> | null | undefined) {
+  const normalizedSourceFormat = String(snapshot?.source_format || '').trim().toLowerCase()
+  const normalizedEntityType = String(snapshot?.entity_type || '').trim().toLowerCase()
+  const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
+  const bulkAttachSummary = summary.bulk_attach && typeof summary.bulk_attach === 'object'
+    ? summary.bulk_attach
+    : null
+
+  return normalizedSourceFormat === 'bulk_attach'
+    || normalizedEntityType.startsWith('crm_files_')
+    || Boolean(bulkAttachSummary)
+}
 const activeRunningSession = computed(() =>
   recentSessions.value.find(s => String(s?.status || '').trim().toLowerCase() === 'running') ?? null
 )
+const activeRunningSessionId = computed(() => String(activeRunningSession.value?.id || activeRunningSession.value?.session_id || '').trim())
+const currentSessionId = computed(() => String(session.value?.id || session.value?.session_id || '').trim())
+const isViewingActiveRunningSession = computed(() => (
+  Boolean(activeRunningSessionId.value && currentSessionId.value && activeRunningSessionId.value === currentSessionId.value)
+))
 const isBlockedByActiveSession = computed(() =>
-  Boolean(activeRunningSession.value && !session.value?.id)
+  Boolean(activeRunningSessionId.value && !isViewingActiveRunningSession.value)
 )
 const restoringHistorySessionId = ref('')
+const isRestoringImporterSession = ref(false)
 
 function isValidPerRowDedupDecision(value: unknown): value is string {
   return PER_ROW_DEDUP_DECISION_VALUES.has(String(value || '').trim().toLowerCase())
@@ -507,7 +527,6 @@ const fileAttachCrmEntityItems = computed(() =>
 )
 const isFileAttachMode = computed(() => String(entityType.value || '').startsWith('crm_files_'))
 const selectedBulkAttachEntityType = computed(() => String(selectedFileAttachEntityType.value || '').replace(/^crm_files_/, ''))
-const bulkAttachResumeSessionId = ref('')
 const currentScenarioSummary = computed(() => buildScenarioSelectionSummary(entityType.value))
 const isTaskEntityImport = computed(() => entityType.value === 'task')
 const isDirectCrmEntityImport = computed(() => ['lead', 'contact', 'company', 'deal'].includes(entityType.value))
@@ -525,12 +544,39 @@ const simpleDedupPreset = computed(() => buildSimpleDedupPreset({
 const exampleTemplateDownloadMeta = computed(() => buildExampleTemplateDownloadMeta(entityType.value))
 const currentImportTitle = computed(() => 'Excel Migration')
 const selectedFamily = ref('')
+const crmFlavor = ref<'direct' | 'linked' | 'bulk'>('direct')
+const domainAccent = computed(() => {
+  const p: Record<string, { bg: string; ink: string }> = {
+    crm:  { bg: '#EEF2FF', ink: '#3B47D6' },
+    task: { bg: '#FFF1E8', ink: '#D8632A' },
+    hr:   { bg: '#E8F6EE', ink: '#1E8A52' },
+  }
+  return p[selectedFamily.value] ?? p.crm
+})
 const selectedCrmEntityType = ref('')
 const selectedTaskEntityType = ref('')
 const selectedLinkedPrimaryEntityType = ref('')
 const selectedLinkedSecondaryEntityType = ref('')
 const selectedHrEntityType = ref('')
 const selectedFileAttachEntityType = ref('')
+const selectedBulkFileField = ref('')
+const bulkFileFields = ref<{ value: string; label: string }[]>([])
+const loadingBulkFileFields = ref(false)
+const bulkEntityFields = ref<{ id: string; title: string; type: string; items: { value: string; label: string }[] }[]>([])
+const bulkFilterPreview = ref<{ total: number; sample: { id: number; title: string }[] } | null>(null)
+const loadingBulkFilterPreview = ref(false)
+const bulkFilterConditions = ref<{ fieldId: string; value: string }[]>([])
+const bulkAttachSessionId = ref('')
+const bulkAttachSessionStatus = ref('')
+const bulkAttachResultTotal = ref(0)
+const bulkAttachResultSuccessful = ref(0)
+const bulkAttachResultFailed = ref(0)
+const bulkAttachProgressProcessed = ref(0)
+const bulkAttachProgressTotal = ref(0)
+const bulkAttachPollingHandle = ref<ReturnType<typeof setInterval> | null>(null)
+const isAddingBulkFilterField = ref(false)
+const pendingBulkFilterFieldId = ref('')
+const dropzoneDragOver = ref(false)
 const smartProcesses = ref<Record<string, any>[]>([])
 const loadingSmartProcesses = ref(false)
 const selectedSmartProcessId = ref('')
@@ -618,6 +664,14 @@ const simpleDedupFieldLabels = computed(() => (
     .map((fieldId) => resolveImporterFieldLabel(fieldId))
     .filter(Boolean)
 ))
+const bulkFilterFieldOptions = computed(() => (
+  bulkEntityFields.value
+    .filter((field) => !bulkFilterConditions.value.some((condition) => condition.fieldId === field.id))
+    .map((field) => ({
+      value: field.id,
+      label: field.title,
+    }))
+))
 const linkedDedupFieldOptions = computed(() => linkedDedupEntityGroups.value.reduce((result, group) => {
   const prefix = String(group.prefix || '').trim().toUpperCase()
   result[group.id] = dedupFieldOptions.value
@@ -695,7 +749,6 @@ const canStart = computed(() => (
   && Boolean(selectedFile.value)
   && Boolean(sourceFormat.value)
   && !busyAction.value
-  && !isBlockedByActiveSession.value
 ))
 const canDownloadExampleTemplate = computed(() => (
   importerPermissionState.value.canCreateSessions
@@ -880,38 +933,141 @@ const dedupProgressDescription = computed(() => {
   return 'На больших файлах проверка может занять время. После завершения обновим экран автоматически.'
 })
 const currentStepMeta = computed(() => {
-  const items: Record<number, { eyebrow: string, title: string }> = {
+  const items: Record<number, { eyebrow: string, title: string, description: string }> = {
     1: {
       eyebrow: 'Шаг 1 · Настройки',
       title: 'Файл и назначение',
+      description: 'Выберите сценарий импорта, файл и базовые настройки запуска.',
     },
     2: {
       eyebrow: 'Шаг 2 · Структура',
       title: 'Параметры чтения файла',
+      description: 'Проверьте строки заголовков, начало данных и структуру листа.',
     },
     3: {
       eyebrow: 'Шаг 3 · Предпросмотр',
       title: 'Пример файла',
+      description: 'Просмотрите первые строки файла перед сопоставлением полей.',
     },
     4: {
       eyebrow: 'Шаг 4 · Соответствие',
       title: 'Соответствие полей',
+      description: 'Сопоставьте колонки файла с полями Bitrix24.',
     },
     5: {
       eyebrow: 'Шаг 5 · Дубли',
       title: 'Обработка дублей',
+      description: 'Настройте правила поиска и обработки дублей.',
     },
     6: {
       eyebrow: 'Шаг 6 · Тестовый импорт',
       title: 'Тестовый импорт и запуск',
+      description: 'Проверьте результаты тестового прогона перед основным запуском.',
     },
     7: {
       eyebrow: 'Шаг 7 · Результат',
       title: 'Результат импорта',
+      description: 'Проверьте итоговую статистику и завершите сценарий.',
     },
   }
 
   return items[currentStep.value] || items[1]
+})
+const isBulkAttachFlow = computed(() => (
+  selectedFamily.value === 'crm'
+  && crmFlavor.value === 'bulk'
+))
+const bulkFlowStep = computed<BulkFlowStep>(() => {
+  if (showBulkAttachExecutionState.value) return 'execution'
+  if (bulkFilterPreview.value) return 'review'
+  return 'setup'
+})
+const bulkFlowStepMeta = computed(() => {
+  const items: Record<BulkFlowStep, { eyebrow: string, title: string, description: string }> = {
+    setup: {
+      eyebrow: 'Шаг 1 · Назначение',
+      title: 'Назначение',
+      description: 'Выберите CRM-сущность, поле для файлов и настройте фильтр отбора.',
+    },
+    review: {
+      eyebrow: 'Шаг 2 · Файл и выборка',
+      title: 'Файл и выборка',
+      description: 'Загрузите файл, проверьте найденные записи и подготовьте массовую загрузку.',
+    },
+    execution: {
+      eyebrow: 'Шаг 3 · Загрузка',
+      title: 'Загрузка файлов',
+      description: 'Следите за прогрессом загрузки, при необходимости остановите импорт и завершите сценарий.',
+    },
+  }
+
+  return items[bulkFlowStep.value]
+})
+const selectedFamilyHeaderMeta = computed(() => {
+  if (isBulkAttachFlow.value) {
+    return bulkFlowStepMeta.value
+  }
+
+  return {
+    eyebrow: 'Шаг 1 · Настройки',
+    title: 'Источник и назначение',
+    description: 'Выберите способ импорта и загрузите файл.',
+  }
+})
+const selectedFamilyHeaderStatusMeta = computed(() => {
+  if (!isBulkAttachFlow.value) {
+    return {
+      dotClass: 'bg-[#E8B53A]',
+      label: 'Ожидает запуска',
+    }
+  }
+
+  if (busyAction.value === 'bulk-attach-cancel') {
+    return {
+      dotClass: 'bg-[#D8632A]',
+      label: 'Останавливаем загрузку',
+    }
+  }
+
+  if (isBulkAttachExecutionLocked.value) {
+    return {
+      dotClass: 'bg-[#3B47D6]',
+      label: 'Загрузка выполняется',
+    }
+  }
+
+  if (bulkAttachSessionStatus.value === 'completed') {
+    return {
+      dotClass: 'bg-[#1E8A52]',
+      label: 'Загрузка завершена',
+    }
+  }
+
+  if (bulkAttachSessionStatus.value === 'cancelled') {
+    return {
+      dotClass: 'bg-[#D8632A]',
+      label: 'Загрузка остановлена',
+    }
+  }
+
+  if (bulkAttachSessionStatus.value === 'failed') {
+    return {
+      dotClass: 'bg-[#C24B53]',
+      label: 'Есть ошибка загрузки',
+    }
+  }
+
+  if (bulkFlowStep.value === 'review') {
+    return {
+      dotClass: 'bg-[#E8B53A]',
+      label: 'Готово к запуску',
+    }
+  }
+
+  return {
+    dotClass: 'bg-[#E8B53A]',
+    label: 'Ожидает запуска',
+  }
 })
 const canGoBack = computed(() => currentStep.value > 1)
 const wizardAdvanceMode = computed(() => getWizardAdvanceMode(currentStep.value, maxAvailableStep.value))
@@ -1042,7 +1198,69 @@ const importSteps = computed(() => {
     enabled: step.id <= maxAvailableStep.value && !(isMappingAdvanceBlocked.value && step.id > currentStep.value),
   }))
 })
+const bulkImportSteps = computed(() => {
+  const currentBulkStepId = bulkFlowStep.value === 'setup'
+    ? 1
+    : bulkFlowStep.value === 'review'
+      ? 2
+      : 3
+  const stepState = (id: number): StepState => {
+    if (id < currentBulkStepId) {
+      return 'done'
+    }
+
+    if (id === currentBulkStepId) {
+      return 'current'
+    }
+
+    return 'upcoming'
+  }
+
+  return [
+    {
+      id: 1,
+      title: 'Назначение',
+      description: 'Сущность, поле и фильтр',
+      state: stepState(1),
+      enabled: currentBulkStepId >= 1,
+    },
+    {
+      id: 2,
+      title: 'Файл и выборка',
+      description: 'Файл и найденные записи',
+      state: stepState(2),
+      enabled: currentBulkStepId >= 2,
+    },
+    {
+      id: 3,
+      title: 'Загрузка',
+      description: 'Выполнение и результат',
+      state: stepState(3),
+      enabled: currentBulkStepId >= 3,
+    },
+  ]
+})
+const visibleSteps = computed(() => (
+  isBulkAttachFlow.value && currentStep.value === 1
+    ? bulkImportSteps.value
+    : importSteps.value
+))
+const selectedBulkFileFieldLabel = computed(() => (
+  bulkFileFields.value.find((field) => field.value === selectedBulkFileField.value)?.label
+  || String(selectedBulkFileField.value || '').trim()
+  || 'Не выбрано'
+))
 const sidebarFacts = computed(() => {
+  if (isBulkAttachFlow.value && currentStep.value === 1) {
+    const selectedRowsTotal = bulkFilterPreview.value?.total || bulkAttachProgressTotal.value || 0
+    return [
+      { label: 'CRM-сущность', value: currentScenarioSummary.value.selectedLabel },
+      { label: 'Поле файла', value: selectedBulkFileFieldLabel.value },
+      { label: 'Файл', value: fileName.value || 'Не выбран' },
+      { label: 'Записей', value: selectedRowsTotal ? String(selectedRowsTotal) : '—' },
+    ]
+  }
+
   return [
     { label: 'Назначение', value: currentScenarioSummary.value.selectedLabel },
     { label: 'Файл', value: fileName.value || 'Не выбран' },
@@ -1068,6 +1286,33 @@ const migrationStatusBadge = computed(() => buildMigrationStatusBadge({
   validationIssueCount: validationIssueCount.value,
   importRunFailedRows: importRunFailedRows.value,
 }))
+const currentStepHeaderStatusMeta = computed(() => {
+  if (migrationStatusBadge.value.tone === 'busy') {
+    return {
+      dotClass: 'bg-[#3B47D6]',
+      label: migrationStatusBadge.value.label,
+    }
+  }
+
+  if (migrationStatusBadge.value.tone === 'ok') {
+    return {
+      dotClass: 'bg-[#1E8A52]',
+      label: migrationStatusBadge.value.label,
+    }
+  }
+
+  if (migrationStatusBadge.value.tone === 'error') {
+    return {
+      dotClass: 'bg-[#C24B53]',
+      label: migrationStatusBadge.value.label,
+    }
+  }
+
+  return {
+    dotClass: 'bg-[#E8B53A]',
+    label: migrationStatusBadge.value.label,
+  }
+})
 const headerNotice = computed(() => {
   if (String(errorMessage.value || '').trim()) {
     return {
@@ -1087,6 +1332,74 @@ const headerNotice = computed(() => {
 
   return null
 })
+const isBulkFilePickerReady = computed(() => (
+  crmFlavor.value !== 'bulk'
+  || (Boolean(String(selectedFileAttachEntityType.value || '').trim()) && Boolean(String(selectedBulkFileField.value || '').trim()))
+))
+const bulkAttachSessionStatusNormalized = computed(() => String(bulkAttachSessionStatus.value || '').trim().toLowerCase())
+const isBulkAttachExecutionLocked = computed(() => (
+  crmFlavor.value === 'bulk'
+  && (
+    busyAction.value === 'bulk-attach-run'
+    || busyAction.value === 'bulk-attach-cancel'
+    || ['created', 'queued', 'pending', 'running', 'cancelling', 'stopping'].includes(bulkAttachSessionStatusNormalized.value)
+  )
+))
+const isBulkAttachScenarioLocked = computed(() => (
+  isBulkAttachFlow.value
+  && isBulkAttachExecutionLocked.value
+))
+const isBulkFilePickerLocked = computed(() => (
+  crmFlavor.value === 'bulk'
+  && (!isBulkFilePickerReady.value || isBulkAttachExecutionLocked.value)
+))
+const showBulkAttachExecutionState = computed(() => (
+  busyAction.value === 'bulk-attach-run'
+  || busyAction.value === 'bulk-attach-cancel'
+  || Boolean(bulkAttachSessionId.value)
+  || Boolean(bulkAttachSessionStatusNormalized.value)
+))
+const bulkAttachProgressPercent = computed(() => {
+  if (!bulkAttachProgressTotal.value) return 0
+  return Math.min(100, Math.round((bulkAttachProgressProcessed.value / bulkAttachProgressTotal.value) * 100))
+})
+const bulkAttachActionLabel = computed(() => {
+  const normalizedStatus = String(bulkAttachSessionStatus.value || '').trim().toLowerCase()
+  if (busyAction.value === 'bulk-attach-run') return 'Начинаем загрузку'
+  if (normalizedStatus === 'running') return 'Загрузка выполняется'
+  if (normalizedStatus === 'completed') return 'Загрузка завершена'
+  if (normalizedStatus === 'failed') return 'Повторить загрузку'
+  if (normalizedStatus === 'cancelled') return 'Запустить заново'
+  return 'Начать загрузку'
+})
+const isBulkAttachActionDisabled = computed(() => {
+  if (
+    busyAction.value === 'bulk-attach-run'
+    || busyAction.value === 'bulk-attach-cancel'
+    || loadingBulkFilterPreview.value
+    || loadingBulkFileFields.value
+  ) {
+    return true
+  }
+
+  if (
+    !bulkFilterPreview.value
+    || !selectedFileAttachEntityType.value
+    || !selectedBulkFileField.value
+    || !selectedFile.value
+    || !sourceFormat.value
+  ) {
+    return true
+  }
+
+  return ['running', 'completed'].includes(String(bulkAttachSessionStatus.value || '').trim().toLowerCase())
+})
+const canCancelBulkAttach = computed(() => (
+  Boolean(String(bulkAttachSessionId.value || '').trim())
+  && String(bulkAttachSessionStatus.value || '').trim().toLowerCase() === 'running'
+  && busyAction.value !== 'bulk-attach-cancel'
+  && busyAction.value !== 'bulk-attach-run'
+))
 const dedupStrategyItems = computed(() => {
   const baseItems = [
     { value: 'create', label: 'Всегда создавать' },
@@ -1456,6 +1769,42 @@ function goToStep(step: number) {
   currentStep.value = step
 }
 
+function goToBulkFlowStep(step: number) {
+  const currentBulkStep = bulkFlowStep.value === 'setup'
+    ? 1
+    : bulkFlowStep.value === 'review'
+      ? 2
+      : 3
+
+  if (step < 1 || step > currentBulkStep || step === currentBulkStep) {
+    return
+  }
+
+  if (isBulkAttachExecutionLocked.value) {
+    return
+  }
+
+  if (step === 1) {
+    resetBulkAttachExecutionState()
+    bulkFilterPreview.value = null
+    clearSelectedFile()
+    resetMessages()
+    return
+  }
+
+  resetBulkAttachExecutionState()
+  resetMessages()
+}
+
+function goToSidebarStep(step: number) {
+  if (isBulkAttachFlow.value && currentStep.value === 1) {
+    goToBulkFlowStep(step)
+    return
+  }
+
+  goToStep(step)
+}
+
 function goNext() {
   if (!canGoNext.value) {
     return
@@ -1510,6 +1859,48 @@ function clearSelectedFile() {
 
   if (fileInputRef.value) {
     fileInputRef.value.value = ''
+  }
+}
+
+function stopBulkAttachPolling() {
+  if (bulkAttachPollingHandle.value) {
+    clearInterval(bulkAttachPollingHandle.value)
+    bulkAttachPollingHandle.value = null
+  }
+}
+
+function resetBulkAttachExecutionState() {
+  stopBulkAttachPolling()
+  bulkAttachSessionId.value = ''
+  bulkAttachSessionStatus.value = ''
+  bulkAttachResultTotal.value = 0
+  bulkAttachResultSuccessful.value = 0
+  bulkAttachResultFailed.value = 0
+  bulkAttachProgressProcessed.value = 0
+  bulkAttachProgressTotal.value = 0
+}
+
+async function loadBulkAttachEntityFields(entityType: string) {
+  const normalizedValue = String(entityType || '').trim()
+  if (!normalizedValue) {
+    bulkFileFields.value = []
+    bulkEntityFields.value = []
+    return
+  }
+
+  loadingBulkFileFields.value = true
+  try {
+    const [fileResult, allResult] = await Promise.all([
+      apiStore.fetchCrmFileFields(normalizedValue),
+      apiStore.fetchCrmEntityFields(normalizedValue),
+    ])
+    bulkFileFields.value = (fileResult.fields || []).map((field) => ({ value: field.id, label: field.title }))
+    bulkEntityFields.value = allResult.fields || []
+  } catch {
+    bulkFileFields.value = []
+    bulkEntityFields.value = []
+  } finally {
+    loadingBulkFileFields.value = false
   }
 }
 
@@ -1880,6 +2271,46 @@ watch(selectedCrmEntityType, async (value) => {
   await loadSmartProcesses()
 })
 
+watch(selectedFileAttachEntityType, async (value) => {
+  if (isRestoringImporterSession.value) {
+    return
+  }
+
+  selectedBulkFileField.value = ''
+  bulkFileFields.value = []
+  bulkEntityFields.value = []
+  bulkFilterPreview.value = null
+  bulkFilterConditions.value = []
+  resetBulkAttachExecutionState()
+  clearSelectedFile()
+  isAddingBulkFilterField.value = false
+  pendingBulkFilterFieldId.value = ''
+  if (!value) return
+  await loadBulkAttachEntityFields(value)
+})
+
+watch(selectedBulkFileField, (value, previousValue) => {
+  if (String(value || '').trim() === String(previousValue || '').trim()) {
+    return
+  }
+
+  if (isRestoringImporterSession.value) {
+    return
+  }
+
+  bulkFilterPreview.value = null
+  resetBulkAttachExecutionState()
+  dropzoneDragOver.value = false
+})
+
+watch(selectedFile, (value, previousValue) => {
+  if (value === previousValue) {
+    return
+  }
+
+  resetBulkAttachExecutionState()
+})
+
 watch(dedupFieldOptions, (options) => {
   if (isLinkedImportEntityType(entityType.value)) {
     return
@@ -2018,6 +2449,41 @@ function buildVisibleLinkedSummaryItems(section: LinkedImportSummarySection): Li
   return section.items.slice(startIndex, startIndex + section.pageSize)
 }
 
+function resolveActiveCrmFlavorEntityType(flavor: 'direct' | 'linked' | 'bulk') {
+  if (flavor === 'direct') {
+    return String(selectedCrmEntityType.value || '').trim()
+  }
+
+  if (flavor === 'linked') {
+    return resolveLinkedStrategyEntityType(
+      selectedLinkedPrimaryEntityType.value,
+      selectedLinkedSecondaryEntityType.value,
+    )
+  }
+
+  return String(selectedFileAttachEntityType.value || '').trim()
+}
+
+function selectCrmFlavor(value: 'direct' | 'linked' | 'bulk') {
+  const normalizedValue = value === 'linked' || value === 'bulk' ? value : 'direct'
+  if (isBulkAttachScenarioLocked.value && normalizedValue !== crmFlavor.value) {
+    return
+  }
+
+  crmFlavor.value = normalizedValue
+
+  if (normalizedValue === 'direct') {
+    entityType.value = selectedCrmEntityType.value
+  } else if (normalizedValue === 'linked') {
+    entityType.value = resolveLinkedStrategyEntityType(
+      selectedLinkedPrimaryEntityType.value,
+      selectedLinkedSecondaryEntityType.value,
+    )
+  } else {
+    entityType.value = selectedFileAttachEntityType.value
+  }
+}
+
 function formatDedupFieldList(fields: unknown): string {
   const normalizedFields = Array.isArray(fields)
     ? fields.map((field) => resolveImporterFieldLabel(String(field || '').trim())).filter(Boolean)
@@ -2044,6 +2510,12 @@ function goBackToImportModeSelection() {
 
 function selectFamily(family: string) {
   selectedFamily.value = family
+  selectCrmFlavor('direct')
+  bulkFilterPreview.value = null
+  bulkFileFields.value = []
+  selectedBulkFileField.value = ''
+  isAddingBulkFilterField.value = false
+  pendingBulkFilterFieldId.value = ''
   selectedCrmEntityType.value = ''
   selectedTaskEntityType.value = ''
   selectedLinkedPrimaryEntityType.value = ''
@@ -2054,11 +2526,181 @@ function selectFamily(family: string) {
   entityType.value = ''
   departmentsExpanded.value = false
   resetMessages()
+}
+
+async function runBulkFilterPreview() {
+  if (!selectedFileAttachEntityType.value) return
+  const plainType = selectedFileAttachEntityType.value.replace(/^crm_files_/, '')
+  const filter = buildBulkFilterPayload()
+  loadingBulkFilterPreview.value = true
+  resetBulkAttachExecutionState()
+  bulkFilterPreview.value = null
+  try {
+    const result = await apiStore.crmFilterPreview({ entity_type: plainType, filter })
+    bulkFilterPreview.value = { total: result.total, sample: result.sample }
+  }
+  catch {
+    bulkFilterPreview.value = { total: 0, sample: [] }
+  }
+  finally {
+    loadingBulkFilterPreview.value = false
+  }
+}
+
+function buildBulkFilterPayload() {
+  const filter: Record<string, string> = {}
+  for (const cond of bulkFilterConditions.value) {
+    if (cond.fieldId.trim() && cond.value.trim()) {
+      filter[cond.fieldId.trim()] = cond.value.trim()
+    }
+  }
+  return filter
+}
+
+function applyBulkAttachSnapshot(snapshot: Record<string, any> | null | undefined, result?: Record<string, any> | null) {
+  const snap = snapshot && typeof snapshot === 'object' ? snapshot : {}
+  const normalizedStatus = String(snap.status || bulkAttachSessionStatus.value || '').trim().toLowerCase()
+
+  bulkAttachSessionId.value = String(snap.id || bulkAttachSessionId.value || '')
+  bulkAttachSessionStatus.value = normalizedStatus
+  bulkAttachProgressTotal.value = Number(snap.total_rows || bulkFilterPreview.value?.total || bulkAttachProgressTotal.value || 0)
+  bulkAttachProgressProcessed.value = Number(
+    snap.processed_rows
+    ?? (normalizedStatus === 'running' ? bulkAttachProgressProcessed.value : bulkAttachProgressTotal.value),
+  )
+  bulkAttachResultTotal.value = Number(result?.total ?? snap.total_rows ?? bulkAttachResultTotal.value)
+  bulkAttachResultSuccessful.value = Number(result?.successful ?? snap.successful_rows ?? bulkAttachResultSuccessful.value)
+  bulkAttachResultFailed.value = Number(result?.failed ?? snap.failed_rows ?? bulkAttachResultFailed.value)
+
+  if (normalizedStatus && normalizedStatus !== 'running') {
+    stopBulkAttachPolling()
+    if (!bulkAttachResultTotal.value) {
+      bulkAttachResultTotal.value = bulkAttachProgressTotal.value
+    }
+    bulkAttachProgressProcessed.value = bulkAttachResultTotal.value || bulkAttachProgressProcessed.value
+  }
+}
+
+function buildBulkAttachPreviewFromSnapshot(snapshot: Record<string, any> | null | undefined) {
+  const totalRows = Number(snapshot?.total_rows || snapshot?.processed_rows || 0)
+  return {
+    total: totalRows,
+    sample: [] as Array<{ id: number, title: string }>,
+  }
+}
+
+function startBulkAttachPolling(sessionId: string) {
+  if (!sessionId || bulkAttachPollingHandle.value) {
+    return
+  }
+
+  bulkAttachPollingHandle.value = setInterval(async () => {
+    try {
+      const response = await apiStore.getImportSession(sessionId)
+      applyBulkAttachSnapshot(response.item)
+    } catch {
+      // Ignore polling errors. The next poll or manual navigation will reconcile the state.
+    }
+  }, 2000)
+}
+
+function resolveBulkFilterField(fieldId: string) {
+  return bulkEntityFields.value.find((field) => field.id === fieldId) || null
+}
+
+function openAddBulkFilterField() {
+  isAddingBulkFilterField.value = true
+  pendingBulkFilterFieldId.value = ''
+}
+
+function addBulkFilterField(fieldId: string) {
+  const normalizedFieldId = String(fieldId || '').trim()
+  if (!normalizedFieldId) {
+    return
+  }
+
+  if (bulkFilterConditions.value.some((condition) => condition.fieldId === normalizedFieldId)) {
+    pendingBulkFilterFieldId.value = ''
+    isAddingBulkFilterField.value = false
+    return
+  }
+
+  bulkFilterConditions.value = [
+    ...bulkFilterConditions.value,
+    { fieldId: normalizedFieldId, value: '' },
+  ]
+  pendingBulkFilterFieldId.value = ''
+  isAddingBulkFilterField.value = false
+}
+
+function removeBulkFilterField(fieldId: string) {
+  bulkFilterConditions.value = bulkFilterConditions.value.filter((condition) => condition.fieldId !== fieldId)
+}
+
+function getBulkFilterValueOptions(fieldId: string) {
+  const field = resolveBulkFilterField(fieldId)
+  return Array.isArray(field?.items) ? field.items : []
+}
+
+function goBackFromBulkPreview() {
+  resetBulkAttachExecutionState()
+  bulkFilterPreview.value = null
+  resetMessages()
+}
+
+function handleStepOneBack() {
+  if (isBulkAttachFlow.value) {
+    if (isBulkAttachExecutionLocked.value) {
+      return
+    }
+
+    if (bulkFlowStep.value === 'execution') {
+      goToBulkFlowStep(2)
+      return
+    }
+
+    if (bulkFlowStep.value === 'review') {
+      goToBulkFlowStep(1)
+      return
+    }
+  }
+
+  goBackToFamilySelection()
+}
+
+async function cancelBulkAttachExecution() {
+  const sessionId = String(bulkAttachSessionId.value || '').trim()
+  if (!sessionId || !canCancelBulkAttach.value) {
+    return
+  }
+
+  resetMessages()
+  busyAction.value = 'bulk-attach-cancel'
+
+  try {
+    const response = await apiStore.cancelImportSession(sessionId)
+    applyBulkAttachSnapshot(response.item)
+    setSuccess('Загрузка остановлена.')
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
+  } finally {
+    if (busyAction.value === 'bulk-attach-cancel') {
+      busyAction.value = ''
+    }
+  }
 }
 
 function goBackToFamilySelection() {
   currentView.value = 'wizard'
   selectedFamily.value = ''
+  selectCrmFlavor('direct')
+  resetBulkAttachExecutionState()
+  bulkFilterPreview.value = null
+  bulkFilterConditions.value = []
+  bulkFileFields.value = []
+  selectedBulkFileField.value = ''
+  isAddingBulkFilterField.value = false
+  pendingBulkFilterFieldId.value = ''
   selectedCrmEntityType.value = ''
   selectedTaskEntityType.value = ''
   selectedLinkedPrimaryEntityType.value = ''
@@ -2071,22 +2713,19 @@ function goBackToFamilySelection() {
   resetMessages()
 }
 
-function goBackFromBulkAttach() {
-  bulkAttachResumeSessionId.value = ''
-  resetFlowState()
-  currentView.value = 'wizard'
-  resetMessages()
-}
-
 function finishToEntitySelection() {
+  resetBulkAttachExecutionState()
   resetFlowState()
   clearSelectedFile()
   goBackToFamilySelection()
+  currentStep.value = 1
 }
 
-function finishBulkAttachToEntitySelection() {
-  bulkAttachResumeSessionId.value = ''
-  finishToEntitySelection()
+function finishInlineBulkAttachFlow() {
+  resetBulkAttachExecutionState()
+  bulkFilterPreview.value = null
+  clearSelectedFile()
+  resetMessages()
 }
 
 function updateDedupStrategySelection(value: string) {
@@ -2246,7 +2885,7 @@ function updateScenarioEntityType(family: 'crm' | 'task' | 'linked' | 'hr', valu
   resetMessages()
 }
 
-function updateFileAttachEntityType(value: string) {
+function setSelectedFileAttachEntityType(value: string) {
   const normalizedValue = String(value || '').trim()
   if (!normalizedValue) return
 
@@ -2259,9 +2898,86 @@ function updateFileAttachEntityType(value: string) {
   selectedSmartProcessId.value = ''
   selectedFamily.value = 'crm'
   entityType.value = normalizedValue
-  bulkAttachResumeSessionId.value = ''
-  currentView.value = 'bulkAttach'
+  currentView.value = 'wizard'
   resetMessages()
+}
+
+function selectBulkFileAttachEntityType(value: string) {
+  setSelectedFileAttachEntityType(value)
+}
+
+function startBulkAttachSetup() {
+  resetMessages()
+
+  const normalizedEntityType = String(selectedFileAttachEntityType.value || '').trim()
+  const normalizedFieldId = String(selectedBulkFileField.value || '').trim()
+
+  if (!normalizedEntityType) {
+    setError('Выберите CRM-сущность для массового добавления файлов.')
+    return
+  }
+
+  if (!normalizedFieldId) {
+    setError('Выберите поле типа «Файл», куда нужно прикреплять вложение.')
+    return
+  }
+
+  if (!selectedFile.value || !sourceFormat.value) {
+    setError('Выберите файл для массового добавления.')
+    return
+  }
+
+  if (!bulkFilterPreview.value) {
+    setError('Сначала проверьте выборку записей по фильтру.')
+    return
+  }
+
+  const plainType = normalizedEntityType.replace(/^crm_files_/, '')
+  const filter = buildBulkFilterPayload()
+
+  resetBulkAttachExecutionState()
+  bulkAttachProgressTotal.value = Number(bulkFilterPreview.value.total || 0)
+  busyAction.value = 'bulk-attach-run'
+
+  Promise.resolve()
+    .then(async () => {
+      const uploadResponse = await apiStore.uploadBulkAttachFile(selectedFile.value as File)
+      const created = await apiStore.createBulkAttachSession({
+        entity_type: plainType,
+        filter,
+        file_id: String(uploadResponse.file_id || '').trim(),
+        file_name: String(uploadResponse.file_name || selectedFile.value?.name || '').trim(),
+        field_id: normalizedFieldId,
+      })
+
+      const sessionId = String(created.item?.id || '').trim()
+      if (!sessionId) {
+        throw new Error('Не удалось создать сессию массовой загрузки.')
+      }
+
+      bulkAttachSessionId.value = sessionId
+      bulkAttachSessionStatus.value = 'running'
+
+      const runResponse = await apiStore.runBulkAttachSession(sessionId)
+      applyBulkAttachSnapshot(runResponse.item, runResponse.result)
+
+      if (String(runResponse.item?.status || '').trim().toLowerCase() === 'running') {
+        startBulkAttachPolling(sessionId)
+        setSuccess('Загрузка запущена. Следим за выполнением прямо в этом блоке.')
+        return
+      }
+
+      setSuccess('Загрузка файла завершена.')
+    })
+    .catch((error: unknown) => {
+      resetBulkAttachExecutionState()
+      setError(error instanceof Error ? error.message : String(error))
+    })
+    .finally(() => {
+      if (busyAction.value === 'bulk-attach-run') {
+        busyAction.value = ''
+      }
+    })
 }
 
 function updateLinkedPrimaryEntityType(value: string) {
@@ -2350,7 +3066,11 @@ async function refreshAliasRules() {
 }
 
 function openFilePicker() {
-  if (!importerPermissionState.value.canCreateSessions || busyAction.value) {
+  if (
+    !importerPermissionState.value.canCreateSessions
+    || busyAction.value
+    || (crmFlavor.value === 'bulk' && isBulkFilePickerLocked.value)
+  ) {
     return
   }
 
@@ -2360,12 +3080,19 @@ function openFilePicker() {
 function handleFileChange(event: Event) {
   const target = event.target as HTMLInputElement
   resetMessages()
+  resetBulkAttachExecutionState()
   dryRunData.value = null
   preimportScanData.value = null
   importRunData.value = null
   importExecutionStage.value = 'idle'
 
   const nextFile = target.files?.[0] || null
+  if (nextFile && !detectSourceFormat(nextFile.name)) {
+    selectedFile.value = null
+    target.value = ''
+    setError('Неподдерживаемый формат файла. Загрузите файл в формате .xlsx, .xls или .csv.')
+    return
+  }
   if (nextFile && nextFile.size > MAX_IMPORT_FILE_SIZE_BYTES) {
     selectedFile.value = null
     target.value = ''
@@ -2374,6 +3101,32 @@ function handleFileChange(event: Event) {
   }
 
   selectedFile.value = nextFile
+}
+
+function handleDropFile(event: DragEvent) {
+  dropzoneDragOver.value = false
+  if (
+    !importerPermissionState.value.canCreateSessions
+    || busyAction.value
+    || (crmFlavor.value === 'bulk' && isBulkFilePickerLocked.value)
+  ) return
+  const file = event.dataTransfer?.files?.[0] || null
+  if (!file) return
+  resetMessages()
+  resetBulkAttachExecutionState()
+  dryRunData.value = null
+  preimportScanData.value = null
+  importRunData.value = null
+  importExecutionStage.value = 'idle'
+  if (!detectSourceFormat(file.name)) {
+    setError('Неподдерживаемый формат файла. Загрузите файл в формате .xlsx, .xls или .csv.')
+    return
+  }
+  if (file.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+    setError(buildImportFileSizeErrorMessage(file))
+    return
+  }
+  selectedFile.value = file
 }
 
 async function startImporterSetup() {
@@ -2403,6 +3156,25 @@ async function startImporterSetup() {
     setError(buildImportFileSizeErrorMessage(selectedFile.value))
     return
   }
+
+  try {
+    const slice = await selectedFile.value.slice(0, 4).arrayBuffer()
+    const b = new Uint8Array(slice)
+    if (sourceFormat.value === 'xls') {
+      const ok = b[0] === 0xD0 && b[1] === 0xCF && b[2] === 0x11 && b[3] === 0xE0
+      if (!ok) {
+        setError('Файл имеет расширение .xls, но его содержимое не соответствует формату Excel. Такое бывает с выгрузками из браузера, Google Аналитики или Search Console — откройте файл в Excel и пересохраните как .xlsx или .csv.')
+        return
+      }
+    }
+    if (sourceFormat.value === 'xlsx') {
+      const ok = b[0] === 0x50 && b[1] === 0x4B && b[2] === 0x03 && b[3] === 0x04
+      if (!ok) {
+        setError('Файл имеет расширение .xlsx, но его содержимое повреждено или не соответствует формату. Попробуйте пересохранить файл в Excel заново.')
+        return
+      }
+    }
+  } catch {}
 
   busyAction.value = 'start'
   resetFlowState()
@@ -3223,7 +3995,7 @@ function applyHistoryScenarioSelection(snapshot: Record<string, any> | null | un
   importMode.value = 'advanced'
 
   if (fileAttachCrmEntityItems.value.some((item) => String(item?.value || '').trim() === normalizedEntityType)) {
-    updateFileAttachEntityType(normalizedEntityType)
+    selectBulkFileAttachEntityType(normalizedEntityType)
   } else if (crmScenarioItems.value.some((item) => String(item?.value || '').trim() === normalizedEntityType)) {
     updateScenarioEntityType('crm', normalizedEntityType)
   } else if (taskScenarioItems.value.some((item) => String(item?.value || '').trim() === normalizedEntityType)) {
@@ -3379,11 +4151,12 @@ async function resumeHistorySessionBackground(snapshot: Record<string, any> | nu
 
 async function resumeHistorySession(sessionId: string) {
   if (!sessionId || restoringHistorySessionId.value) {
-    return
+    return false
   }
 
   resetMessages()
   restoringHistorySessionId.value = sessionId
+  isRestoringImporterSession.value = true
 
   try {
     const response = await apiStore.getImportSession(sessionId)
@@ -3395,13 +4168,48 @@ async function resumeHistorySession(sessionId: string) {
     resetFlowState()
     clearSelectedFile()
     currentView.value = 'wizard'
-    applyHistoryScenarioSelection(snapshot)
+    const isBulkAttach = isBulkAttachSessionSnapshot(snapshot)
 
-    const isBulkAttach = String(snapshot.source_format || '') === 'bulk_attach'
+    if (!isBulkAttach) {
+      applyHistoryScenarioSelection(snapshot)
+    }
 
     if (isBulkAttach) {
-      bulkAttachResumeSessionId.value = String(snapshot.id || '')
-      currentView.value = 'bulkAttach'
+      const bulkAttachSummary = snapshot.summary?.bulk_attach && typeof snapshot.summary.bulk_attach === 'object'
+        ? snapshot.summary.bulk_attach
+        : {}
+      const rawEntityType = String(bulkAttachSummary.entity_type || snapshot.entity_type || '').trim()
+      const normalizedEntityType = rawEntityType.startsWith('crm_files_') ? rawEntityType : `crm_files_${rawEntityType}`
+      const fieldId = String(bulkAttachSummary.field_id || '').trim()
+      const filter = bulkAttachSummary.filter && typeof bulkAttachSummary.filter === 'object' ? bulkAttachSummary.filter : {}
+
+      session.value = snapshot
+      importMode.value = 'advanced'
+      selectedFamily.value = 'crm'
+      crmFlavor.value = 'bulk'
+      selectedCrmEntityType.value = ''
+      selectedTaskEntityType.value = ''
+      selectedLinkedPrimaryEntityType.value = ''
+      selectedLinkedSecondaryEntityType.value = ''
+      selectedHrEntityType.value = ''
+      selectedSmartProcessId.value = ''
+      selectedFileAttachEntityType.value = normalizedEntityType
+      entityType.value = normalizedEntityType
+      currentView.value = 'wizard'
+
+      await loadBulkAttachEntityFields(normalizedEntityType)
+
+      selectedBulkFileField.value = fieldId
+      bulkFilterConditions.value = Object.entries(filter).map(([filterFieldId, value]) => ({
+        fieldId: String(filterFieldId || '').trim(),
+        value: String(value || '').trim(),
+      })).filter((row) => row.fieldId && row.value)
+      bulkFilterPreview.value = buildBulkAttachPreviewFromSnapshot(snapshot)
+      applyBulkAttachSnapshot(snapshot)
+
+      if (String(snapshot.status || '').trim().toLowerCase() === 'running' && bulkAttachSessionId.value) {
+        startBulkAttachPolling(bulkAttachSessionId.value)
+      }
     } else {
       session.value = snapshot
       syncPreviewSnapshot(snapshot)
@@ -3423,9 +4231,12 @@ async function resumeHistorySession(sessionId: string) {
 
     setSuccess(`Сессия «${String(snapshot.original_filename || 'Без имени')}» восстановлена.`)
     await loadHistory()
+    return true
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
+    return false
   } finally {
+    isRestoringImporterSession.value = false
     restoringHistorySessionId.value = ''
   }
 }
@@ -3591,11 +4402,13 @@ async function resolveImportExecutionResult(sessionId: string, responseItem: Rec
 
 let _historyPollInterval: ReturnType<typeof setInterval> | null = null
 
-onMounted(() => {
+onMounted(async () => {
   if (props.initialImportMode) {
     selectImportMode(props.initialImportMode)
   }
-  void loadHistory()
+
+  await loadHistory()
+
   _historyPollInterval = setInterval(() => {
     if (activeRunningSession.value && !session.value?.id) {
       void loadHistory()
@@ -3608,6 +4421,7 @@ onUnmounted(() => {
     clearInterval(_historyPollInterval)
     _historyPollInterval = null
   }
+  stopBulkAttachPolling()
 })
 
 </script>
@@ -3787,52 +4601,17 @@ onUnmounted(() => {
     </div>
 
     <div
-      v-else-if="currentView === 'bulkAttach'"
-      class="overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)]"
-    >
-      <div class="border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbfe_100%)] px-6 py-5 sm:px-8">
-        <div class="flex items-start justify-between gap-5">
-          <div class="flex items-start gap-5">
-            <button
-              type="button"
-              class="flex shrink-0 items-center gap-1.5 rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9] transition hover:bg-[#ddeeff]"
-              @click="goBackFromBulkAttach"
-            >
-              ← Назад
-            </button>
-            <div>
-              <h1 class="text-[26px] font-semibold leading-[1.1] text-[#2f4254]">
-                Массовое добавление файлов
-              </h1>
-              <div class="mt-3 flex flex-wrap items-center gap-2">
-                <span class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
-                  {{ currentScenarioSummary.selectedLabel }}
-                </span>
-              </div>
-            </div>
-          </div>
-          <div class="hidden max-w-[320px] rounded-[18px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-3 text-sm text-[#5a7fa8] lg:block">
-            Выберите CRM-элементы по фильтру, укажите файл и поле типа «Файл», затем запустите массовое добавление.
-          </div>
-        </div>
-      </div>
-
-      <div class="min-h-[600px] overflow-y-auto px-6 py-6 sm:px-8 sm:py-8">
-        <BulkAttachWizard
-          :initial-entity-type="selectedBulkAttachEntityType"
-          :lock-entity-type="true"
-          :resume-session-id="bulkAttachResumeSessionId"
-          @finish="finishBulkAttachToEntitySelection"
-        />
-      </div>
-    </div>
-
-    <div
       v-else
       class="grid min-h-[860px] grid-cols-1 overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)] xl:grid-cols-[280px_minmax(0,1fr)]"
     >
       <aside class="flex min-w-0 flex-col border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#f7fbff_0%,#f3f7fb_100%)] xl:border-b-0 xl:border-r">
         <div class="flex-1 space-y-6 px-5 py-6">
+          <!-- Logo -->
+          <div class="flex items-center gap-2.5 px-1">
+            <img src="/logo.png" alt="Excel Migration" class="h-8 w-auto object-contain" />
+            <span class="text-[14px] font-semibold tracking-tight text-[#2f4254]">Excel Migration</span>
+          </div>
+
           <div class="space-y-4">
             <div class="px-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
               Этапы
@@ -3840,29 +4619,30 @@ onUnmounted(() => {
 
             <div class="space-y-3">
               <button
-                v-for="(step, index) in importSteps"
+                v-for="(step, index) in visibleSteps"
                 :key="step.id"
                 type="button"
                 class="relative flex w-full gap-3 rounded-[18px] px-3 py-3 text-left transition duration-150"
+                :style="step.state === 'current' ? { background: domainAccent.bg } : {}"
                 :class="{
-                  'bg-white shadow-[0_10px_26px_rgba(30,80,150,0.08)]': step.state === 'current',
+                  'shadow-[0_10px_26px_rgba(30,80,150,0.08)]': step.state === 'current',
                   'bg-[#eff6ff]': step.state === 'done',
                   'bg-transparent hover:bg-white hover:shadow-[0_10px_26px_rgba(30,80,150,0.08)]': step.state === 'upcoming' && step.enabled,
                   'opacity-60': !step.enabled,
                 }"
                 :disabled="!step.enabled"
-                @click="goToStep(step.id)"
+                @click="goToSidebarStep(step.id)"
               >
                 <div
-                  v-if="index < importSteps.length - 1"
+                  v-if="index < visibleSteps.length - 1"
                   class="absolute left-[32px] top-[44px] h-[34px] w-[2px] -translate-x-1/2 rounded-full"
                   :class="step.state === 'done' ? 'bg-[#8fd0a1]' : 'bg-[#dbe4ed]'"
                 />
 
                 <div
                   class="relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
+                  :style="step.state === 'current' ? { background: domainAccent.ink, color: '#FFFFFF' } : {}"
                   :class="{
-                    'bg-[#2e6bd9] text-white shadow-[0_0_0_6px_rgba(46,107,217,0.12)]': step.state === 'current',
                     'bg-[#dff3e5] text-[#2e8b57]': step.state === 'done',
                     'bg-white text-[#93a1af] border border-[#dde5ee]': step.state === 'upcoming',
                   }"
@@ -3873,8 +4653,9 @@ onUnmounted(() => {
                 <div class="min-w-0 pt-1">
                   <div
                     class="text-sm font-semibold"
+                    :style="step.state === 'current' ? { color: domainAccent.ink } : {}"
                     :class="{
-                      'text-[#2f4254]': step.state !== 'upcoming',
+                      'text-[#2f4254]': step.state === 'done',
                       'text-[#8da0b1]': step.state === 'upcoming',
                     }"
                   >
@@ -3904,32 +4685,34 @@ onUnmounted(() => {
       </aside>
 
       <div class="flex min-w-0 flex-col bg-white">
-        <div class="border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbfe_100%)] px-6 py-5 sm:px-8">
-          <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div class="min-w-0">
-              <div class="text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
-                {{ currentStepMeta.eyebrow }}
-              </div>
-              <div class="mt-3 flex flex-wrap items-center gap-3 text-sm text-[#6c8093]">
-                <span class="font-medium text-[#506476]">Текущий статус</span>
-                <span
-                  class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold"
-                  :class="{
-                    'bg-[#f2f5f9] text-[#6e8193]': migrationStatusBadge.tone === 'idle',
-                    'bg-[#eef6ff] text-[#2e6bd9]': migrationStatusBadge.tone === 'busy',
-                    'bg-[#eefaf3] text-[#2b7a4b]': migrationStatusBadge.tone === 'ok',
-                    'bg-[#fff1f1] text-[#c24b53]': migrationStatusBadge.tone === 'error',
-                  }"
-                >
-                  {{ migrationStatusBadge.label }}
+        <div
+          v-if="!(currentStep === 1 && importMode)"
+          class="px-6 pt-6 sm:px-8"
+        >
+          <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div class="min-w-0 flex-1">
+              <div class="mb-3 flex flex-wrap items-center gap-2">
+                <span class="rounded-full bg-[#EEF2FF] px-2.5 py-0.5 text-[11px] font-medium text-[#3B47D6]">
+                  {{ currentStepMeta.eyebrow }}
+                </span>
+                <span class="text-[11px] text-[#8B8FA0]">·</span>
+                <span class="inline-flex items-center gap-1.5 text-[11px] text-[#5A5E6E]">
+                  <span class="h-1.5 w-1.5 rounded-full" :class="currentStepHeaderStatusMeta.dotClass" />
+                  {{ currentStepHeaderStatusMeta.label }}
                 </span>
               </div>
+              <h1 class="text-[28px] font-semibold leading-[1.15] tracking-[-0.02em] text-[#0F1115]">
+                {{ currentStepMeta.title }}
+              </h1>
+              <p class="mt-2 max-w-[760px] text-[14px] text-[#5A5E6E]">
+                {{ currentStepMeta.description }}
+              </p>
               <div
                 v-if="headerNotice"
                 class="mt-3 flex flex-wrap items-center gap-3 text-sm"
               >
                 <span
-                  class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold"
+                  class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold"
                   :class="headerNotice.tone === 'error'
                     ? 'bg-[#fff1f1] text-[#c24b53]'
                     : 'bg-[#eefaf3] text-[#2b7a4b]'"
@@ -3950,14 +4733,14 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="flex shrink-0 flex-col items-end gap-3">
+            <div class="flex shrink-0 flex-col gap-3 xl:items-end">
               <B24Button
                 label="История"
                 color="air-primary"
                 size="lg"
                 @click="currentView = 'history'"
               />
-              <div class="flex flex-wrap justify-end gap-2">
+              <div class="flex flex-wrap gap-2 xl:justify-end">
                 <div
                   v-if="importMode"
                   class="rounded-full border border-[#e5ebf2] bg-[#f7f9fb] px-3 py-1.5 text-sm text-[#5e7184]"
@@ -3985,12 +4768,57 @@ onUnmounted(() => {
         </div>
 
         <div class="min-w-0 flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8 sm:py-8">
-          <div
-            v-if="currentStep === 1"
-            class="space-y-6"
-          >
-            <div class="space-y-6">
-              <div v-if="isBlockedByActiveSession" class="flex items-start gap-3 rounded-[16px] border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-sm text-[#92400e]">
+          <div v-if="currentStep === 1">
+            <Transition name="step1-fade" mode="out-in">
+            <!-- No import mode: simple prompt -->
+            <div v-if="!importMode" key="no-mode" class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
+              <div class="rounded-[18px] border border-[#dce7f7] bg-[#f4f9ff] px-4 py-3 text-sm text-[#5c7592]">
+                Вернитесь на главный экран и выберите режим импорта.
+              </div>
+            </div>
+
+            <!-- Family selection: flat design (no panel wrapper) -->
+            <div v-else-if="!selectedFamily" key="select-family">
+              <!-- Page header row -->
+              <div class="mb-6 flex items-start justify-between">
+                <div>
+                  <div class="mb-3 flex items-center gap-2">
+                    <span class="rounded-full bg-[#EEF2FF] px-2.5 py-0.5 text-[11px] font-medium text-[#3B47D6]">
+                      Шаг 1 · Настройки
+                    </span>
+                    <span class="text-[11px] text-[#8B8FA0]">·</span>
+                    <span class="inline-flex items-center gap-1.5 text-[11px] text-[#5A5E6E]">
+                      <span class="h-1.5 w-1.5 rounded-full bg-[#E8B53A]" />
+                      Ожидает запуска
+                    </span>
+                  </div>
+                  <h1 class="text-[28px] font-semibold leading-[1.15] tracking-[-0.02em] text-[#0F1115]">
+                    Выберите тип импорта
+                  </h1>
+                  <p class="mt-2 max-w-[520px] text-[14px] text-[#5A5E6E]">
+                    От выбора зависят следующие шаги — формат файла, сопоставление полей и правила дублей.
+                  </p>
+                </div>
+                <div class="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    class="h-10 rounded-xl border border-[#d7e7ff] bg-[#f4f9ff] px-4 text-[13px] font-medium text-[#2e6bd9] transition-colors hover:bg-[#ddeeff]"
+                    @click="emit('back-to-landing')"
+                  >
+                    Расширенный режим
+                  </button>
+                  <button
+                    type="button"
+                    class="h-10 rounded-xl bg-[#2e6bd9] px-4 text-[13px] font-medium text-white transition-colors hover:bg-[#2560c5]"
+                    @click="currentView = 'history'"
+                  >
+                    История
+                  </button>
+                </div>
+              </div>
+
+              <!-- Active session warning -->
+              <div v-if="isBlockedByActiveSession" class="mb-4 flex items-start gap-3 rounded-[16px] border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-sm text-[#92400e]">
                 <span class="mt-0.5 shrink-0 text-base">⚠️</span>
                 <div>
                   <span class="font-semibold">Идёт импорт:</span> «{{ activeRunningSession?.original_filename || 'без имени' }}». Дождитесь его завершения или
@@ -4001,33 +4829,171 @@ onUnmounted(() => {
                   >перейдите к нему</button>, чтобы отменить. Новый импорт будет доступен после завершения или отмены.
                 </div>
               </div>
-              <section class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
-                <div class="mb-5 flex items-center justify-between gap-3">
-                  <div>
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаг 1</div>
-                    <h2 class="mt-1 text-xl font-semibold text-[#314256]">
-                      {{ !importMode ? 'Выберите режим импорта' : (selectedFamily ? 'Источник и назначение' : 'Выберите тип импорта') }}
-                    </h2>
+
+              <!-- Category cards -->
+              <div class="grid gap-4 sm:grid-cols-3">
+                  <!-- CRM -->
+                  <button
+                    type="button"
+                    class="relative overflow-hidden rounded-[16px] text-left transition-all duration-200"
+                    style="border: 1.5px solid #ECEEF3; background: #FFFFFF;"
+                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
+                    @mouseenter="$event.currentTarget.style.cssText = 'border: 1.5px solid #3B47D6; background: #EEF2FF; border-radius: 16px; text-align: left; transition: all 0.2s; box-shadow: 0 8px 24px -12px #3B47D640;'"
+                    @mouseleave="$event.currentTarget.style.cssText = 'border: 1.5px solid #ECEEF3; background: #FFFFFF; border-radius: 16px; text-align: left; transition: all 0.2s;'"
+                    @click="selectFamily('crm')"
+                  >
+                    <div class="flex h-[100px] items-center justify-center bg-[#EEF2FF]">
+                      <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+                        <circle cx="20" cy="22" r="8" stroke="#3B47D6" stroke-width="2"/>
+                        <circle cx="44" cy="22" r="8" stroke="#3B47D6" stroke-width="2" opacity=".7"/>
+                        <path d="M8 50c2-7 10-11 16-11" stroke="#3B47D6" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M40 39c6 0 14 4 16 11" stroke="#3B47D6" stroke-width="2" stroke-linecap="round" opacity=".7"/>
+                        <path d="M28 32l8 8M36 32l-8 8" stroke="#3B47D6" stroke-width="2" stroke-linecap="round"/>
+                      </svg>
+                    </div>
+                    <div class="p-4">
+                      <div class="text-[15px] font-semibold text-[#0F1115]">CRM-сущности</div>
+                      <p class="mt-1 text-[12.5px] leading-relaxed text-[#5A5E6E]">Лиды, контакты, компании, сделки и связанный импорт.</p>
+                      <div class="mt-3 flex flex-wrap gap-1.5">
+                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">Лиды</span>
+                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">Контакты</span>
+                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">Компании</span>
+                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">Сделки</span>
+                      </div>
+                    </div>
+                  </button>
+
+                  <!-- Задачи -->
+                  <button
+                    type="button"
+                    class="relative overflow-hidden rounded-[16px] text-left transition-all duration-200"
+                    style="border: 1.5px solid #ECEEF3; background: #FFFFFF;"
+                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
+                    @mouseenter="$event.currentTarget.style.cssText = 'border: 1.5px solid #D8632A; background: #FFF1E8; border-radius: 16px; text-align: left; transition: all 0.2s; box-shadow: 0 8px 24px -12px #D8632A40;'"
+                    @mouseleave="$event.currentTarget.style.cssText = 'border: 1.5px solid #ECEEF3; background: #FFFFFF; border-radius: 16px; text-align: left; transition: all 0.2s;'"
+                    @click="selectFamily('task')"
+                  >
+                    <div class="flex h-[100px] items-center justify-center bg-[#FFF1E8]">
+                      <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+                        <rect x="14" y="14" width="36" height="36" rx="4" stroke="#D8632A" stroke-width="2"/>
+                        <path d="M22 26l4 4 8-8" stroke="#D8632A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M38 28h6" stroke="#D8632A" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M22 40h6" stroke="#D8632A" stroke-width="2" stroke-linecap="round" opacity=".5"/>
+                        <path d="M32 40h12" stroke="#D8632A" stroke-width="2" stroke-linecap="round" opacity=".5"/>
+                      </svg>
+                    </div>
+                    <div class="p-4">
+                      <div class="text-[15px] font-semibold text-[#0F1115]">Задачи</div>
+                      <p class="mt-1 text-[12.5px] leading-relaxed text-[#5A5E6E]">Задачи, подзадачи, комментарии, чек-листы и вложения.</p>
+                      <div class="mt-3 flex flex-wrap gap-1.5">
+                        <span class="rounded-full bg-[#FFF1E8] px-2 py-0.5 text-[11px] font-medium text-[#D8632A]">Задачи</span>
+                        <span class="rounded-full bg-[#FFF1E8] px-2 py-0.5 text-[11px] font-medium text-[#D8632A]">Чек-листы</span>
+                        <span class="rounded-full bg-[#FFF1E8] px-2 py-0.5 text-[11px] font-medium text-[#D8632A]">Комментарии</span>
+                      </div>
+                    </div>
+                  </button>
+
+                  <!-- HR -->
+                  <button
+                    type="button"
+                    class="relative overflow-hidden rounded-[16px] text-left transition-all duration-200"
+                    style="border: 1.5px solid #ECEEF3; background: #FFFFFF;"
+                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
+                    @mouseenter="$event.currentTarget.style.cssText = 'border: 1.5px solid #1E8A52; background: #E8F6EE; border-radius: 16px; text-align: left; transition: all 0.2s; box-shadow: 0 8px 24px -12px #1E8A5240;'"
+                    @mouseleave="$event.currentTarget.style.cssText = 'border: 1.5px solid #ECEEF3; background: #FFFFFF; border-radius: 16px; text-align: left; transition: all 0.2s;'"
+                    @click="selectFamily('hr')"
+                  >
+                    <div class="flex h-[100px] items-center justify-center bg-[#E8F6EE]">
+                      <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+                        <rect x="10" y="10" width="14" height="14" rx="2" stroke="#1E8A52" stroke-width="2"/>
+                        <rect x="40" y="10" width="14" height="14" rx="2" stroke="#1E8A52" stroke-width="2" opacity=".6"/>
+                        <rect x="25" y="40" width="14" height="14" rx="2" stroke="#1E8A52" stroke-width="2"/>
+                        <path d="M17 24v8h15M47 24v8H32M32 32v8" stroke="#1E8A52" stroke-width="2" stroke-linecap="round"/>
+                      </svg>
+                    </div>
+                    <div class="p-4">
+                      <div class="text-[15px] font-semibold text-[#0F1115]">Пользователи и отделы</div>
+                      <p class="mt-1 text-[12.5px] leading-relaxed text-[#5A5E6E]">Сотрудники портала и структура компании.</p>
+                      <div class="mt-3 flex flex-wrap gap-1.5">
+                        <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">Сотрудники</span>
+                        <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">Отделы</span>
+                        <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">Роли</span>
+                      </div>
+                    </div>
+                  </button>
+              </div>
+
+              <!-- Футер -->
+              <div class="mt-8 flex items-center justify-between">
+                <span class="text-[12.5px] text-[#8B8FA0]">
+                  Тип импорта можно сменить позже — состояние сохранится.
+                </span>
+                <button
+                  type="button"
+                  class="h-11 rounded-xl border border-[#d7e7ff] bg-[#f4f9ff] px-5 text-[13px] font-medium text-[#2e6bd9] transition-colors hover:bg-[#ddeeff]"
+                  @click="emit('back-to-landing')"
+                >
+                  ← Назад
+                </button>
+              </div>
+            </div>
+
+            <!-- Выбран тип: подэкраны сущностей -->
+            <div v-else :key="selectedFamily">
+              <div class="mb-6 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div class="min-w-0 flex-1">
+                  <div class="mb-3 flex flex-wrap items-center gap-2">
+                    <span class="rounded-full bg-[#EEF2FF] px-2.5 py-0.5 text-[11px] font-medium text-[#3B47D6]">
+                      {{ selectedFamilyHeaderMeta.eyebrow }}
+                    </span>
+                    <span class="text-[11px] text-[#8B8FA0]">·</span>
+                    <span class="inline-flex items-center gap-1.5 text-[11px] text-[#5A5E6E]">
+                      <span class="h-1.5 w-1.5 rounded-full" :class="selectedFamilyHeaderStatusMeta.dotClass" />
+                      {{ selectedFamilyHeaderStatusMeta.label }}
+                    </span>
                   </div>
-                  <div class="flex items-center gap-2">
+                  <h1 class="text-[28px] font-semibold leading-[1.15] tracking-[-0.02em] text-[#0F1115]">
+                    {{ selectedFamilyHeaderMeta.title }}
+                  </h1>
+                  <p class="mt-2 max-w-[760px] text-[14px] text-[#5A5E6E]">
+                    {{ selectedFamilyHeaderMeta.description }}
+                  </p>
+                </div>
+                <div class="flex shrink-0 flex-col gap-3 xl:items-end">
+                  <div class="flex flex-wrap gap-2 xl:justify-end">
+                    <div
+                      v-if="importMode"
+                      class="rounded-full border border-[#e5ebf2] bg-[#f7f9fb] px-3 py-1.5 text-sm text-[#5e7184]"
+                    >
+                      {{ importModeMeta.label }}
+                    </div>
+                    <div class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
+                      {{ currentScenarioSummary.selectedLabel }}
+                    </div>
+                    <div
+                      v-if="sourceFormat"
+                      class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium uppercase text-[#2e6bd9]"
+                    >
+                      {{ sourceFormat }}
+                    </div>
+                    <div
+                      v-if="fileName"
+                      class="rounded-full border border-[#dfe7f2] bg-[#f7f9fb] px-3 py-1.5 text-sm text-[#5e7184]"
+                    >
+                      {{ fileName }}
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2 xl:justify-end">
+                    <button
+                      type="button"
+                      class="h-10 rounded-xl border border-[#d7e7ff] bg-[#f4f9ff] px-4 text-[13px] font-medium text-[#2e6bd9] transition-colors hover:bg-[#ddeeff]"
+                      :disabled="Boolean(busyAction) || (isBulkAttachFlow && isBulkAttachExecutionLocked)"
+                      @click="handleStepOneBack()"
+                    >
+                      ← Назад
+                    </button>
                     <B24Button
-                      v-if="importMode && !selectedFamily"
-                      label="← Режим"
-                      color="air-primary"
-                      size="lg"
-                      :disabled="Boolean(busyAction)"
-                      @click="emit('back-to-landing')"
-                    />
-                    <B24Button
-                      v-if="importMode && selectedFamily"
-                      label="← Назад"
-                      color="air-primary"
-                      size="lg"
-                      :disabled="Boolean(busyAction)"
-                      @click="goBackToFamilySelection"
-                    />
-                    <B24Button
-                      v-if="importMode && selectedFamily && !selectedFileAttachEntityType"
+                      v-if="!(selectedFamily === 'crm' && crmFlavor === 'bulk')"
                       label="Загрузить файл"
                       color="air-primary"
                       size="lg"
@@ -4035,150 +5001,507 @@ onUnmounted(() => {
                       :disabled="!canStart"
                       @click="startImporterSetup"
                     />
+                    <B24Button
+                      v-else-if="!bulkFilterPreview"
+                      label="Далее →"
+                      color="air-primary"
+                      size="lg"
+                      :loading="loadingBulkFilterPreview"
+                      :disabled="!selectedFileAttachEntityType || !selectedBulkFileField || Boolean(busyAction) || loadingBulkFileFields || loadingBulkFilterPreview"
+                      @click="runBulkFilterPreview"
+                    />
+                    <B24Button
+                      v-else
+                      :label="bulkAttachActionLabel"
+                      color="air-primary"
+                      size="lg"
+                      :loading="busyAction === 'bulk-attach-run'"
+                      :disabled="isBulkAttachActionDisabled"
+                      @click="startBulkAttachSetup"
+                    />
                   </div>
                 </div>
+              </div>
 
-                <div v-if="!importMode" class="rounded-[18px] border border-[#dce7f7] bg-[#f4f9ff] px-4 py-3 text-sm text-[#5c7592]">
-                  Вернитесь на главный экран и выберите режим импорта.
+                <!-- Ошибка / успех на шаге 1 -->
+                <div v-if="errorMessage" class="mb-4 flex items-start gap-3 rounded-[16px] border border-[#fecaca] bg-[#fff1f1] px-4 py-3 text-sm text-[#c24b53]">
+                  <svg class="mt-0.5 shrink-0" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.4"/>
+                    <path d="M8 5v3.5M8 10.5v.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                  </svg>
+                  <span>{{ errorMessage }}</span>
                 </div>
-
-                <!-- Выбор категории -->
-                <div v-else-if="!selectedFamily" class="grid gap-4 sm:grid-cols-3">
-                  <button
-                    type="button"
-                    class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
-                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
-                    @click="selectFamily('crm')"
-                  >
-                    <div class="text-base font-semibold text-[#2f4254]">CRM-сущности</div>
-                    <div class="text-sm text-[#6c8093]">Лиды, контакты, компании, сделки и связанный импорт.</div>
-                  </button>
-                  <button
-                    type="button"
-                    class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
-                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
-                    @click="selectFamily('task')"
-                  >
-                    <div class="text-base font-semibold text-[#2f4254]">Задачи</div>
-                    <div class="text-sm text-[#6c8093]">Задачи, подзадачи, комментарии, чек-листы и вложения.</div>
-                  </button>
-                  <button
-                    type="button"
-                    class="flex flex-col gap-3 rounded-[18px] border border-[#e5ebf2] bg-white p-5 text-left transition hover:border-[#c2d4f0] hover:bg-[#f4f9ff]"
-                    :disabled="!importerPermissionState.canCreateSessions || isBlockedByActiveSession"
-                    @click="selectFamily('hr')"
-                  >
-                    <div class="text-base font-semibold text-[#2f4254]">Пользователи и отделы</div>
-                    <div class="text-sm text-[#6c8093]">Сотрудники портала и структура компании.</div>
-                  </button>
+                <div v-else-if="successMessage" class="mb-4 flex items-start gap-3 rounded-[16px] border border-[#86efac] bg-[#f0fdf4] px-4 py-3 text-sm text-[#166534]">
+                  <svg class="mt-0.5 shrink-0" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.4"/>
+                    <path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span>{{ successMessage }}</span>
                 </div>
 
                 <!-- CRM подэкран -->
-                <div v-else-if="selectedFamily === 'crm'" class="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
-                  <div class="space-y-4">
-                    <section class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                      <div class="text-sm font-semibold text-[#314256]">CRM-сущности</div>
-                      <div class="mt-1 text-sm text-[#6f8194]">Прямой импорт в стандартные CRM-разделы.</div>
-                      <B24FormField label="Выберите CRM-сущность" class="mt-4">
-                        <B24Select
-                          :model-value="selectedCrmEntityType"
-                          :items="crmScenarioItems"
-                          placeholder="Например, Сделки"
-                          size="lg"
-                          class="w-full"
-                          :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
-                          @update:model-value="updateScenarioEntityType('crm', String($event || ''))"
-                        />
-                      </B24FormField>
-                      <B24FormField
-                        v-if="selectedCrmEntityType === 'smart_process'"
-                        label="Выберите смарт-процесс"
-                        class="mt-4"
-                      >
-                        <B24Select
-                          :model-value="selectedSmartProcessId"
-                          :items="smartProcessOptions"
-                          placeholder="Например, Согласования"
-                          size="lg"
-                          class="w-full"
-                          :disabled="loadingSmartProcesses || !importerPermissionState.canCreateSessions || Boolean(busyAction)"
-                          @update:model-value="selectedSmartProcessId = String($event || '')"
-                        />
-                        <div class="mt-2 text-xs text-[#7f92a7]">
-                          {{ loadingSmartProcesses
-                            ? 'Загружаем список смарт-процессов портала...'
-                            : smartProcessOptions.length
-                              ? 'Выберите конкретный смарт-процесс, в который пойдёт импорт.'
-                              : 'Смарт-процессы не найдены или недоступны для текущего пользователя.' }}
-                        </div>
-                      </B24FormField>
-                    </section>
-                    <section v-if="showsAdvancedImportTools" class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                      <div class="text-sm font-semibold text-[#314256]">Связанный импорт</div>
-                      <div class="mt-1 text-sm text-[#6f8194]">Одна строка Excel создаёт и связывает несколько сущностей.</div>
-                      <B24FormField label="Выберите основную сущность" class="mt-4">
-                        <B24Select
-                          :model-value="selectedLinkedPrimaryEntityType"
-                          :items="linkedPrimaryEntityItems"
-                          placeholder="Например, Сделка"
-                          size="lg"
-                          class="w-full"
-                          :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
-                          @update:model-value="updateLinkedPrimaryEntityType(String($event || ''))"
-                        />
-                      </B24FormField>
-                      <B24FormField label="Выберите связанную сущность" class="mt-4">
-                        <B24Select
-                          :model-value="selectedLinkedSecondaryEntityType"
-                          :items="linkedSecondaryEntityItems"
-                          placeholder="Например, Контакт"
-                          size="lg"
-                          class="w-full"
-                          :disabled="!selectedLinkedPrimaryEntityType || !importerPermissionState.canCreateSessions || Boolean(busyAction)"
-                          @update:model-value="updateLinkedSecondaryEntityType(String($event || ''))"
-                        />
-                      </B24FormField>
-                    </section>
-                    <section class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                      <div class="flex items-center gap-2">
-                        <div class="text-sm font-semibold text-[#314256]">Массовый импорт файлов</div>
+                <div v-if="selectedFamily === 'crm'">
+                  <!-- Flavor selector -->
+                  <div class="grid grid-cols-3 gap-3 mb-5">
+                    <button
+                      v-for="f in [
+                        { key: 'direct', title: 'Прямой импорт',          blurb: 'В стандартные разделы CRM — сделки, контакты, компании.' },
+                        { key: 'linked', title: 'Связанный импорт',        blurb: 'Одна строка создаёт несколько связанных сущностей.' },
+                        { key: 'bulk',   title: 'Массовый импорт файлов',  blurb: 'Прикрепить файлы к полям существующих CRM-записей.' },
+                      ]"
+                      :key="f.key"
+                      type="button"
+                      class="text-left rounded-2xl p-4 transition-all"
+                      :class="isBulkAttachScenarioLocked ? 'cursor-not-allowed' : ''"
+                      :style="isBulkAttachScenarioLocked
+                        ? { background: crmFlavor === f.key ? '#EEF2F6' : '#F7F9FC', border: '1.5px solid #DCE4EE', boxShadow: 'none', color: '#8EA0B2' }
+                        : (crmFlavor === f.key
+                          ? { background: domainAccent.bg, border: `1.5px solid ${domainAccent.ink}`, boxShadow: `0 4px 14px -8px ${domainAccent.ink}40` }
+                          : { background: '#FFFFFF', border: '1.5px solid #ECEEF3' })"
+                      :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction) || isBulkAttachScenarioLocked"
+                      @click="selectCrmFlavor(f.key as 'direct' | 'linked' | 'bulk')"
+                    >
+                      <div class="flex items-center gap-2.5 mb-1.5">
+                        <span
+                          class="w-8 h-8 rounded-lg grid place-items-center shrink-0"
+                          :style="isBulkAttachScenarioLocked
+                            ? { background: '#FFFFFF', color: '#8EA0B2' }
+                            : (crmFlavor === f.key
+                              ? { background: '#FFFFFF', color: domainAccent.ink }
+                              : { background: domainAccent.bg, color: domainAccent.ink })"
+                        >
+                          <svg v-if="f.key === 'direct'" width="18" height="18" viewBox="0 0 18 18" fill="none">
+                            <path d="M3 9h12M11 5l4 4-4 4" :stroke="domainAccent.ink" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                          </svg>
+                          <svg v-else-if="f.key === 'linked'" width="18" height="18" viewBox="0 0 18 18" fill="none">
+                            <circle cx="5" cy="5" r="2.4" :stroke="domainAccent.ink" stroke-width="1.6" />
+                            <circle cx="13" cy="13" r="2.4" :stroke="domainAccent.ink" stroke-width="1.6" />
+                            <path d="M6.5 6.5l5 5" :stroke="domainAccent.ink" stroke-width="1.6" stroke-linecap="round" />
+                          </svg>
+                          <svg v-else width="18" height="18" viewBox="0 0 18 18" fill="none">
+                            <path d="M3 13V5a2 2 0 012-2h4l2 2h4a1 1 0 011 1v7a2 2 0 01-2 2H5a2 2 0 01-2-2z"
+                              :stroke="domainAccent.ink" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                          </svg>
+                        </span>
+                        <span
+                          class="text-[14px] font-semibold tracking-tight"
+                          :style="{ color: isBulkAttachScenarioLocked ? '#7F8C99' : (crmFlavor === f.key ? domainAccent.ink : '#0F1115') }"
+                        >
+                          {{ f.title }}
+                        </span>
+                        <span
+                          v-if="crmFlavor === f.key && !isBulkAttachScenarioLocked"
+                          class="ml-auto w-5 h-5 rounded-full grid place-items-center shrink-0"
+                          :style="{ background: domainAccent.ink }"
+                        >
+                          <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+                            <path d="M2.5 5.5l2 2 4-4" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                          </svg>
+                        </span>
                       </div>
-                      <div class="mt-1 text-sm text-[#6f8194]">Прикрепить файлы к полям типа «Файл» у существующих CRM-записей.</div>
-                      <B24FormField label="Выберите CRM-сущность" class="mt-4">
-                        <B24Select
-                          :model-value="selectedFileAttachEntityType"
-                          :items="fileAttachCrmEntityItems"
-                          placeholder="Например, Сделки"
-                          size="lg"
-                          class="w-full"
-                          :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
-                          @update:model-value="updateFileAttachEntityType(String($event || ''))"
-                        />
-                      </B24FormField>
-                    </section>
+                      <p class="text-[12px] leading-snug text-[#5A5E6E]">{{ f.blurb }}</p>
+                    </button>
                   </div>
-                  <div class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                    <B24FormField :label="isFileAttachMode ? 'Excel-список файлов' : 'Файл для импорта'" class="w-full">
-                      <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange">
-                      <div class="space-y-4">
-                        <div class="rounded-[16px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-4">
-                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                            Файл
-                          </div>
-                          <div class="truncate text-sm font-medium text-[#314256]">{{ fileName || 'Файл еще не выбран' }}</div>
-                          <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV, размер файла до 50 МБ</div>
-                        </div>
-                        <B24Button label="Выбрать файл" color="air-primary" size="lg" class="w-full" :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)" @click="openFilePicker" />
-                        <div class="rounded-[16px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-4">
-                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                            Шаблон
-                          </div>
-                          <div class="mt-2 text-sm font-medium text-[#314256]">{{ exampleTemplateDownloadMeta.title }}</div>
-                          <div class="mt-1 text-xs text-[#7f92a7]">{{ exampleTemplateDownloadMeta.description }}</div>
-                        </div>
-                        <B24Button label="Скачать шаблон Excel" color="air-secondary-accent-2" size="lg" class="w-full" :loading="busyAction === 'example-template'" :disabled="!canDownloadExampleTemplate" @click="downloadExampleTemplate" />
+
+                  <!-- Two-column body -->
+                  <div
+                    class="grid gap-5"
+                    :style="{ gridTemplateColumns: '1fr 320px' }"
+                  >
+                    <!-- Left: form panel -->
+                    <div class="rounded-2xl border border-[#ECEEF3] bg-white p-6 flex flex-col">
+                      <div class="flex items-center justify-between mb-1">
+                        <h3 class="text-[15px] font-semibold tracking-tight text-[#0F1115]">
+                          {{ crmFlavor === 'direct' ? 'Прямой импорт' : crmFlavor === 'linked' ? 'Связанный импорт' : 'Массовый импорт файлов' }}
+                        </h3>
+                        <span class="text-[11px] text-[#5A5E6E]">Поля можно изменить на шаге «Соответствие»</span>
                       </div>
-                    </B24FormField>
+                      <p class="text-[12.5px] mb-5 text-[#5A5E6E]">
+                        {{ crmFlavor === 'direct'
+                          ? 'В стандартные разделы CRM — сделки, контакты, компании.'
+                          : crmFlavor === 'linked'
+                            ? 'Одна строка создаёт несколько связанных сущностей.'
+                            : 'Прикрепить файлы к полям существующих CRM-записей.' }}
+                      </p>
+
+                      <!-- Direct fields -->
+                      <div v-if="crmFlavor === 'direct'" class="space-y-4 max-w-[380px]">
+                        <div>
+                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">CRM-сущность</div>
+                          <B24Select
+                            :model-value="selectedCrmEntityType"
+                            :items="crmScenarioItems"
+                            placeholder="Например, Сделки"
+                            size="lg"
+                            class="w-full"
+                            :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                            @update:model-value="updateScenarioEntityType('crm', String($event || ''))"
+                          />
+                        </div>
+                        <div v-if="selectedCrmEntityType === 'smart_process'">
+                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">Смарт-процесс</div>
+                          <B24Select
+                            :model-value="selectedSmartProcessId"
+                            :items="smartProcessOptions"
+                            placeholder="Например, Согласования"
+                            size="lg"
+                            class="w-full"
+                            :disabled="loadingSmartProcesses || !importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                            @update:model-value="selectedSmartProcessId = String($event || '')"
+                          />
+                          <div class="mt-2 text-xs text-[#7f92a7]">
+                            {{ loadingSmartProcesses
+                              ? 'Загружаем список смарт-процессов...'
+                              : smartProcessOptions.length
+                                ? 'Выберите конкретный смарт-процесс.'
+                                : 'Смарт-процессы не найдены.' }}
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Linked fields -->
+                      <div v-else-if="crmFlavor === 'linked'" class="grid grid-cols-2 gap-4">
+                        <div>
+                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">Основная сущность</div>
+                          <B24Select
+                            :model-value="selectedLinkedPrimaryEntityType"
+                            :items="linkedPrimaryEntityItems"
+                            placeholder="Выберите основную сущность"
+                            size="lg"
+                            class="w-full"
+                            :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                            @update:model-value="updateLinkedPrimaryEntityType(String($event || ''))"
+                          />
+                        </div>
+                        <div>
+                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">Связанная сущность</div>
+                          <B24Select
+                            :model-value="selectedLinkedSecondaryEntityType"
+                            :items="linkedSecondaryEntityItems"
+                            :placeholder="selectedLinkedPrimaryEntityType
+                              ? (linkedSecondaryEntityItems.length ? 'Выберите связанную сущность' : 'Для этой сущности нет связанных вариантов')
+                              : 'Сначала выберите основную сущность'"
+                            size="lg"
+                            class="w-full"
+                            :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                            @update:model-value="updateLinkedSecondaryEntityType(String($event || ''))"
+                          />
+                        </div>
+                      </div>
+
+                      <!-- Bulk fields -->
+                      <div v-else class="space-y-5">
+                        <div v-if="!bulkFilterPreview" class="space-y-5">
+                          <div class="grid grid-cols-2 gap-4">
+                            <div>
+                              <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">CRM-сущность</div>
+                              <B24Select
+                                :model-value="selectedFileAttachEntityType"
+                                :items="fileAttachCrmEntityItems"
+                                placeholder="Например, Сделки"
+                                size="lg"
+                                class="w-full"
+                                :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                                @update:model-value="selectBulkFileAttachEntityType(String($event || ''))"
+                              />
+                            </div>
+                            <div>
+                              <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">Поле для файлов</div>
+                              <div
+                                v-if="loadingBulkFileFields"
+                                class="flex h-11 w-full items-center rounded-[14px] border border-[#D8E3EF] bg-white px-4 text-[14px] font-medium text-[#3A3D47]"
+                              >
+                                Загрузка...
+                              </div>
+                              <B24Select
+                                v-else
+                                :model-value="selectedBulkFileField"
+                                :items="bulkFileFields"
+                                :placeholder="selectedFileAttachEntityType
+                                  ? (bulkFileFields.length ? 'Выберите поле' : 'У выбранной сущности нет полей типа «Файл»')
+                                  : 'Сначала выберите CRM-сущность'"
+                                size="lg"
+                                class="w-full"
+                                :disabled="Boolean(busyAction)"
+                                @update:model-value="selectedBulkFileField = String($event || '')"
+                              />
+                            </div>
+                          </div>
+
+                          <div class="space-y-4">
+                            <div class="text-[12px] font-medium text-[#5A5E6E]">Фильтр отбора:</div>
+
+                            <div
+                              v-for="condition in bulkFilterConditions"
+                              :key="condition.fieldId"
+                              class="rounded-[16px] border border-[#e5ebf2] bg-white px-4 py-4"
+                            >
+                              <div class="flex items-center justify-between gap-3">
+                                <div class="text-sm font-semibold text-[#314256]">
+                                  {{ resolveBulkFilterField(condition.fieldId)?.title || condition.fieldId }}
+                                </div>
+                                <button
+                                  type="button"
+                                  class="rounded-full border border-[#d9e5f1] bg-white px-3 py-1 text-xs font-medium text-[#6d8194] transition hover:border-[#f0b7b7] hover:text-[#c24b53]"
+                                  @click="removeBulkFilterField(condition.fieldId)"
+                                >
+                                  Удалить
+                                </button>
+                              </div>
+
+                              <B24SelectMenu
+                                v-if="getBulkFilterValueOptions(condition.fieldId).length"
+                                :model-value="condition.value"
+                                class="mt-3 w-full"
+                                placeholder="Выберите значение Bitrix24"
+                                :items="getBulkFilterValueOptions(condition.fieldId)"
+                                value-key="value"
+                                :filter-fields="['label']"
+                                :search-input="{ placeholder: 'Поиск значения Bitrix24' }"
+                                @update:model-value="condition.value = String($event || '')"
+                              />
+                              <input
+                                v-else
+                                v-model="condition.value"
+                                type="text"
+                                :placeholder="`Введите значение для поля «${resolveBulkFilterField(condition.fieldId)?.title || condition.fieldId}»`"
+                                class="mt-3 w-full rounded-[10px] border border-[#d8e3ef] px-3 py-2 text-sm text-[#314256] outline-none focus:border-[#2e6bd9]"
+                              />
+                            </div>
+
+                            <div v-if="isAddingBulkFilterField" class="rounded-[16px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-4">
+                              <B24SelectMenu
+                                :model-value="pendingBulkFilterFieldId"
+                                class="w-full"
+                                placeholder="Выберите поле Bitrix24"
+                                :items="bulkFilterFieldOptions"
+                                value-key="value"
+                                :filter-fields="['label']"
+                                :search-input="{ placeholder: 'Поиск поля Bitrix24' }"
+                                @update:model-value="addBulkFilterField(String($event || ''))"
+                              />
+                            </div>
+
+                            <button
+                              type="button"
+                              class="inline-flex items-center rounded-full border border-dashed border-[#c6d7ee] bg-transparent px-4 py-2 text-sm font-medium text-[#53749b] transition hover:border-[#2e6bd9] hover:text-[#2e6bd9]"
+                              :disabled="!selectedFileAttachEntityType"
+                              @click="openAddBulkFilterField"
+                            >
+                              Добавить поле
+                            </button>
+                          </div>
+                        </div>
+
+                        <div v-else class="space-y-4">
+                          <div class="rounded-2xl border border-[#ECEEF3] bg-white p-5">
+                            <div class="flex items-center gap-3">
+                              <div class="w-10 h-10 rounded-2xl grid place-items-center shrink-0" :style="{ background: domainAccent.bg }">
+                                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                  <circle cx="10" cy="10" r="7.5" :stroke="domainAccent.ink" stroke-width="1.6" />
+                                  <path d="M10 6.5v4M10 12.5v.5" :stroke="domainAccent.ink" stroke-width="1.6" stroke-linecap="round" />
+                                </svg>
+                              </div>
+                              <div>
+                                <div class="text-[13px] font-semibold text-[#0F1115]">
+                                  Найдено записей: <span :style="{ color: domainAccent.ink }">{{ bulkFilterPreview.total }}</span>
+                                </div>
+                                <div class="text-[11.5px] text-[#5A5E6E] mt-0.5">
+                                  Файл будет прикреплён к каждой найденной записи
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div v-if="showBulkAttachExecutionState" class="rounded-2xl border border-[#ECEEF3] bg-[#fbfcfe] p-5">
+                            <div class="flex items-center justify-between gap-3">
+                              <div>
+                                <div class="text-[13px] font-semibold text-[#0F1115]">Загрузка файла</div>
+                                <div class="mt-0.5 text-[11.5px] text-[#5A5E6E]">
+                                  <template v-if="busyAction === 'bulk-attach-run'">Подготавливаем файл и создаём сессию загрузки.</template>
+                                  <template v-else-if="bulkAttachSessionStatus === 'running'">Файл уже загружается, статус обновляется автоматически.</template>
+                                  <template v-else-if="bulkAttachSessionStatus === 'completed'">Загрузка завершена.</template>
+                                  <template v-else-if="bulkAttachSessionStatus === 'failed'">Во время загрузки произошла ошибка.</template>
+                                  <template v-else-if="bulkAttachSessionStatus === 'cancelled'">Загрузка была остановлена.</template>
+                                </div>
+                              </div>
+                              <span
+                                class="inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold"
+                                :style="bulkAttachSessionStatus === 'completed'
+                                  ? { background: '#E8F6EE', color: '#1E8A52' }
+                                  : bulkAttachSessionStatus === 'failed'
+                                    ? { background: '#FDECEC', color: '#C24B53' }
+                                    : { background: domainAccent.bg, color: domainAccent.ink }"
+                              >
+                                {{ busyAction === 'bulk-attach-run' ? 'Подготовка' : bulkAttachActionLabel }}
+                              </span>
+                            </div>
+
+                            <div class="mt-4 h-2 overflow-hidden rounded-full bg-[#E8EDF4]">
+                              <div
+                                class="h-full rounded-full transition-all"
+                                :style="{ width: `${bulkAttachProgressPercent}%`, background: domainAccent.ink }"
+                              />
+                            </div>
+
+                            <div class="mt-3 flex items-center justify-between text-[12px] text-[#5A5E6E]">
+                              <span>Обработано: {{ bulkAttachProgressProcessed }} / {{ bulkAttachProgressTotal || bulkFilterPreview.total }}</span>
+                              <span>{{ bulkAttachProgressPercent }}%</span>
+                            </div>
+
+                            <div
+                              v-if="bulkAttachSessionStatus === 'completed' || bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled'"
+                              class="mt-4 grid grid-cols-3 gap-3"
+                            >
+                              <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
+                                <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Всего</div>
+                                <div class="mt-1 text-lg font-semibold text-[#0F1115]">{{ bulkAttachResultTotal }}</div>
+                              </div>
+                              <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
+                                <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Успешно</div>
+                                <div class="mt-1 text-lg font-semibold text-[#1E8A52]">{{ bulkAttachResultSuccessful }}</div>
+                              </div>
+                              <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
+                                <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Ошибки</div>
+                                <div class="mt-1 text-lg font-semibold text-[#C24B53]">{{ bulkAttachResultFailed }}</div>
+                              </div>
+                            </div>
+
+                            <div class="mt-4 flex flex-wrap gap-3">
+                              <B24Button
+                                v-if="canCancelBulkAttach || busyAction === 'bulk-attach-cancel'"
+                                label="Остановить"
+                                color="air-tertiary"
+                                size="lg"
+                                :loading="busyAction === 'bulk-attach-cancel'"
+                                :disabled="!canCancelBulkAttach"
+                                @click="cancelBulkAttachExecution"
+                              />
+                              <B24Button
+                                v-if="bulkAttachSessionStatus === 'completed' || bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled'"
+                                label="Завершить"
+                                color="air-primary"
+                                size="lg"
+                                @click="finishInlineBulkAttachFlow"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Footer hint -->
+                      <div v-if="crmFlavor !== 'bulk' || !bulkFilterPreview" class="mt-auto pt-5 flex items-center gap-2 text-[12px] text-[#5A5E6E]">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                          <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.2" />
+                          <path d="M7 4.5v3M7 9.2v.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+                        </svg>
+                        <template v-if="crmFlavor === 'linked'">Свяжем строки по выбранному полю — без дублей.</template>
+                        <template v-else-if="crmFlavor === 'bulk'">К каждой строке файла приложим один файл-вложение.</template>
+                        <template v-else>Можно подключить шаблон сопоставления полей.</template>
+                      </div>
+                    </div>
+
+                    <!-- Right column: dropzone + template -->
+                    <div class="flex flex-col gap-4">
+                      <!-- Dropzone -->
+                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                        Файл
+                      </div>
+                      <div
+                        class="rounded-2xl p-5 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden transition-all"
+                        :class="crmFlavor === 'bulk' && isBulkFilePickerLocked ? 'cursor-not-allowed' : 'cursor-pointer'"
+                        :style="{
+                          border: crmFlavor === 'bulk' && isBulkFilePickerLocked
+                            ? '1.5px dashed #D8E1EB'
+                            : (dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`),
+                          background: crmFlavor === 'bulk' && isBulkFilePickerLocked
+                            ? '#F8FAFC'
+                            : (dropzoneDragOver ? domainAccent.bg : '#FFFFFF'),
+                        }"
+                        @dragover.prevent="!isBulkFilePickerLocked && (dropzoneDragOver = true)"
+                        @dragleave.prevent="dropzoneDragOver = false"
+                        @drop.prevent="handleDropFile($event)"
+                        @click="openFilePicker"
+                      >
+                        <div
+                          class="absolute inset-0 pointer-events-none opacity-50"
+                          :style="{
+                            backgroundImage: `radial-gradient(circle, ${domainAccent.ink}15 1px, transparent 1.5px)`,
+                            backgroundSize: '18px 18px',
+                            maskImage: 'radial-gradient(ellipse at center, black 30%, transparent 75%)',
+                            WebkitMaskImage: 'radial-gradient(ellipse at center, black 30%, transparent 75%)',
+                          }"
+                        />
+                        <div
+                          class="relative w-12 h-12 rounded-2xl grid place-items-center mb-3 transition-transform"
+                          :style="crmFlavor === 'bulk' && isBulkFilePickerLocked
+                            ? { background: '#FFFFFF', color: '#8EA0B2' }
+                            : { background: dropzoneDragOver ? '#FFFFFF' : domainAccent.bg, color: domainAccent.ink }"
+                        >
+                          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+                            <path d="M11 14V4M7 8l4-4 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                            <path d="M3 14v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                          </svg>
+                        </div>
+                        <div class="relative text-[14px] font-semibold tracking-tight text-[#0F1115]">
+                          {{ crmFlavor === 'bulk' && isBulkFilePickerLocked
+                            ? (isBulkAttachExecutionLocked
+                                ? 'Загрузка уже выполняется'
+                                : 'Сначала выберите CRM-сущность и поле для файлов')
+                            : (dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда') }}
+                        </div>
+                        <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]">
+                          {{ crmFlavor === 'bulk' && isBulkFilePickerLocked
+                            ? (isBulkAttachExecutionLocked
+                                ? 'Загрузка уже выполняется. Чтобы заменить файл, сначала остановите текущую сессию.'
+                                : 'Правый блок станет активным после выбора поля назначения.')
+                            : 'XLSX, XLS, CSV · до 50 МБ' }}
+                        </p>
+                        <div v-if="fileName" class="relative mt-1 text-[11.5px] font-semibold" :style="{ color: domainAccent.ink }">
+                          {{ fileName }}
+                        </div>
+                        <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange" />
+                        <button
+                          type="button"
+                          class="relative mt-3 h-9 px-4 text-[12.5px] rounded-xl font-semibold text-white transition-opacity hover:opacity-85 active:opacity-70"
+                          :style="crmFlavor === 'bulk' && isBulkFilePickerLocked
+                            ? { background: '#C8D2DE' }
+                            : { background: domainAccent.ink }"
+                          :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction) || isBulkFilePickerLocked"
+                          @click.stop="openFilePicker"
+                        >
+                          Выбрать файл
+                        </button>
+                      </div>
+
+                      <!-- Template download -->
+                      <div v-if="crmFlavor !== 'bulk'" class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
+                        Шаблон
+                      </div>
+                      <div v-if="crmFlavor !== 'bulk'" class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
+                        <div
+                          class="w-10 h-10 rounded-xl grid place-items-center shrink-0 bg-white"
+                          :style="{ color: domainAccent.ink }"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                            <rect x="3" y="3" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.6" />
+                            <path d="M3 7h12M3 11h12M7 3v12M11 3v12" stroke="currentColor" stroke-width="1.2" opacity=".6" />
+                          </svg>
+                        </div>
+                        <div class="min-w-0 flex-1">
+                          <div class="text-[12.5px] font-semibold tracking-tight" :style="{ color: domainAccent.ink }">{{ exampleTemplateDownloadMeta.title }}</div>
+                          <div class="text-[11px] mt-0.5 text-[#5A5E6E]">{{ exampleTemplateDownloadMeta.description }}</div>
+                        </div>
+                        <B24Button
+                          label="Скачать"
+                          color="air-secondary-accent-2"
+                          size="sm"
+                          :loading="busyAction === 'example-template'"
+                          :disabled="!canDownloadExampleTemplate"
+                          @click="downloadExampleTemplate"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -4201,24 +5524,76 @@ onUnmounted(() => {
                       </B24FormField>
                     </section>
                   </div>
-                  <div class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                    <B24FormField label="Файл для импорта" class="w-full">
-                      <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange">
-                      <div class="space-y-4">
-                        <div class="rounded-[16px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-4">
-                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
-                          <div class="truncate text-sm font-medium text-[#314256]">{{ fileName || 'Файл еще не выбран' }}</div>
-                          <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV, размер файла до 50 МБ</div>
-                        </div>
-                        <B24Button label="Выбрать файл" color="air-primary" size="lg" class="w-full" :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)" @click="openFilePicker" />
-                        <div class="rounded-[16px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-4">
-                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаблон</div>
-                          <div class="mt-2 text-sm font-medium text-[#314256]">{{ exampleTemplateDownloadMeta.title }}</div>
-                          <div class="mt-1 text-xs text-[#7f92a7]">{{ exampleTemplateDownloadMeta.description }}</div>
-                        </div>
-                        <B24Button label="Скачать шаблон Excel" color="air-secondary-accent-2" size="lg" class="w-full" :loading="busyAction === 'example-template'" :disabled="!canDownloadExampleTemplate" @click="downloadExampleTemplate" />
+                  <div class="flex flex-col gap-4">
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
+                    <div
+                      class="rounded-2xl p-5 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden transition-all cursor-pointer"
+                      :style="{
+                        border: dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`,
+                        background: dropzoneDragOver ? domainAccent.bg : '#FFFFFF',
+                      }"
+                      @dragover.prevent="dropzoneDragOver = true"
+                      @dragleave.prevent="dropzoneDragOver = false"
+                      @drop.prevent="handleDropFile($event)"
+                      @click="openFilePicker"
+                    >
+                      <div
+                        class="absolute inset-0 pointer-events-none opacity-50"
+                        :style="{
+                          backgroundImage: `radial-gradient(circle, ${domainAccent.ink}15 1px, transparent 1.5px)`,
+                          backgroundSize: '18px 18px',
+                          maskImage: 'radial-gradient(ellipse at center, black 30%, transparent 75%)',
+                          WebkitMaskImage: 'radial-gradient(ellipse at center, black 30%, transparent 75%)',
+                        }"
+                      />
+                      <div
+                        class="relative w-12 h-12 rounded-2xl grid place-items-center mb-3 transition-transform"
+                        :style="{ background: dropzoneDragOver ? '#FFFFFF' : domainAccent.bg, color: domainAccent.ink }"
+                      >
+                        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+                          <path d="M11 14V4M7 8l4-4 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                          <path d="M3 14v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                        </svg>
                       </div>
-                    </B24FormField>
+                      <div class="relative text-[14px] font-semibold tracking-tight text-[#0F1115]">
+                        {{ dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда' }}
+                      </div>
+                      <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]">XLSX, XLS, CSV · до 50 МБ</p>
+                      <div v-if="fileName" class="relative mt-1 text-[11.5px] font-semibold" :style="{ color: domainAccent.ink }">
+                        {{ fileName }}
+                      </div>
+                      <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange" />
+                      <button
+                        type="button"
+                        class="relative mt-3 h-9 px-4 text-[12.5px] rounded-xl font-semibold text-white transition-opacity hover:opacity-85 active:opacity-70"
+                        :style="{ background: domainAccent.ink }"
+                        :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                        @click.stop="openFilePicker"
+                      >
+                        Выбрать файл
+                      </button>
+                    </div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаблон</div>
+                    <div class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
+                      <div class="w-10 h-10 rounded-xl grid place-items-center shrink-0 bg-white" :style="{ color: domainAccent.ink }">
+                        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                          <rect x="3" y="3" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.6" />
+                          <path d="M3 7h12M3 11h12M7 3v12M11 3v12" stroke="currentColor" stroke-width="1.2" opacity=".6" />
+                        </svg>
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <div class="text-[12.5px] font-semibold tracking-tight" :style="{ color: domainAccent.ink }">{{ exampleTemplateDownloadMeta.title }}</div>
+                        <div class="text-[11px] mt-0.5 text-[#5A5E6E]">{{ exampleTemplateDownloadMeta.description }}</div>
+                      </div>
+                      <B24Button
+                        label="Скачать"
+                        color="air-secondary-accent-2"
+                        size="sm"
+                        :loading="busyAction === 'example-template'"
+                        :disabled="!canDownloadExampleTemplate"
+                        @click="downloadExampleTemplate"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -4285,28 +5660,80 @@ onUnmounted(() => {
                     </section>
                   </div>
 
-                  <div class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                    <B24FormField label="Файл для импорта" class="w-full">
-                      <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange">
-                      <div class="space-y-4">
-                        <div class="rounded-[16px] border border-[#e5ebf2] bg-[#fbfcfe] px-4 py-4">
-                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
-                          <div class="truncate text-sm font-medium text-[#314256]">{{ fileName || 'Файл еще не выбран' }}</div>
-                          <div class="mt-1 text-sm text-[#7f8d9c]">Поддерживаются форматы Excel и CSV, размер файла до 50 МБ</div>
-                        </div>
-                        <B24Button label="Выбрать файл" color="air-primary" size="lg" class="w-full" :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)" @click="openFilePicker" />
-                        <div class="rounded-[16px] border border-[#dce7f7] bg-[#f7fbff] px-4 py-4">
-                          <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаблон</div>
-                          <div class="mt-2 text-sm font-medium text-[#314256]">{{ exampleTemplateDownloadMeta.title }}</div>
-                          <div class="mt-1 text-xs text-[#7f92a7]">{{ exampleTemplateDownloadMeta.description }}</div>
-                        </div>
-                        <B24Button label="Скачать шаблон Excel" color="air-secondary-accent-2" size="lg" class="w-full" :loading="busyAction === 'example-template'" :disabled="!canDownloadExampleTemplate" @click="downloadExampleTemplate" />
+                  <div class="flex flex-col gap-4">
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
+                    <div
+                      class="rounded-2xl p-5 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden transition-all cursor-pointer"
+                      :style="{
+                        border: dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`,
+                        background: dropzoneDragOver ? domainAccent.bg : '#FFFFFF',
+                      }"
+                      @dragover.prevent="dropzoneDragOver = true"
+                      @dragleave.prevent="dropzoneDragOver = false"
+                      @drop.prevent="handleDropFile($event)"
+                      @click="openFilePicker"
+                    >
+                      <div
+                        class="absolute inset-0 pointer-events-none opacity-50"
+                        :style="{
+                          backgroundImage: `radial-gradient(circle, ${domainAccent.ink}15 1px, transparent 1.5px)`,
+                          backgroundSize: '18px 18px',
+                          maskImage: 'radial-gradient(ellipse at center, black 30%, transparent 75%)',
+                          WebkitMaskImage: 'radial-gradient(ellipse at center, black 30%, transparent 75%)',
+                        }"
+                      />
+                      <div
+                        class="relative w-12 h-12 rounded-2xl grid place-items-center mb-3 transition-transform"
+                        :style="{ background: dropzoneDragOver ? '#FFFFFF' : domainAccent.bg, color: domainAccent.ink }"
+                      >
+                        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+                          <path d="M11 14V4M7 8l4-4 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                          <path d="M3 14v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                        </svg>
                       </div>
-                    </B24FormField>
+                      <div class="relative text-[14px] font-semibold tracking-tight text-[#0F1115]">
+                        {{ dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда' }}
+                      </div>
+                      <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]">XLSX, XLS, CSV · до 50 МБ</p>
+                      <div v-if="fileName" class="relative mt-1 text-[11.5px] font-semibold" :style="{ color: domainAccent.ink }">
+                        {{ fileName }}
+                      </div>
+                      <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange" />
+                      <button
+                        type="button"
+                        class="relative mt-3 h-9 px-4 text-[12.5px] rounded-xl font-semibold text-white transition-opacity hover:opacity-85 active:opacity-70"
+                        :style="{ background: domainAccent.ink }"
+                        :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                        @click.stop="openFilePicker"
+                      >
+                        Выбрать файл
+                      </button>
+                    </div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаблон</div>
+                    <div class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
+                      <div class="w-10 h-10 rounded-xl grid place-items-center shrink-0 bg-white" :style="{ color: domainAccent.ink }">
+                        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                          <rect x="3" y="3" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.6" />
+                          <path d="M3 7h12M3 11h12M7 3v12M11 3v12" stroke="currentColor" stroke-width="1.2" opacity=".6" />
+                        </svg>
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <div class="text-[12.5px] font-semibold tracking-tight" :style="{ color: domainAccent.ink }">{{ exampleTemplateDownloadMeta.title }}</div>
+                        <div class="text-[11px] mt-0.5 text-[#5A5E6E]">{{ exampleTemplateDownloadMeta.description }}</div>
+                      </div>
+                      <B24Button
+                        label="Скачать"
+                        color="air-secondary-accent-2"
+                        size="sm"
+                        :loading="busyAction === 'example-template'"
+                        :disabled="!canDownloadExampleTemplate"
+                        @click="downloadExampleTemplate"
+                      />
+                    </div>
                   </div>
                 </div>
-              </section>
             </div>
+            </Transition>
           </div>
 
           <section v-if="currentStep === 2" class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
@@ -6537,5 +7964,20 @@ onUnmounted(() => {
 .history-restore-fade-enter-from,
 .history-restore-fade-leave-to {
   opacity: 0;
+}
+
+.step1-fade-enter-active {
+  transition: opacity 0.38s ease, transform 0.38s ease;
+}
+.step1-fade-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.step1-fade-enter-from {
+  opacity: 0;
+  transform: translateY(14px);
+}
+.step1-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
 }
 </style>

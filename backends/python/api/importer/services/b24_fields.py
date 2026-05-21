@@ -804,6 +804,21 @@ def normalize_bitrix_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "y", "yes"}
 
 
+def normalize_bitrix_field_type(field_meta: dict[str, Any]) -> str:
+    raw_type = str(field_meta.get("type") or field_meta.get("TYPE") or "").strip().lower()
+    raw_user_type = str(
+        field_meta.get("userTypeId")
+        or field_meta.get("USER_TYPE_ID")
+        or field_meta.get("user_type_id")
+        or ""
+    ).strip().lower()
+
+    if raw_user_type and raw_type in {"", "string"}:
+        return TASK_USERFIELD_TYPE_MAP.get(raw_user_type, raw_user_type) or "string"
+
+    return raw_type or "string"
+
+
 def normalize_field_items(items: Any) -> list[dict]:
     if isinstance(items, dict):
         normalized_items = []
@@ -944,7 +959,7 @@ def normalize_fields_result(fields_result: dict[str, Any], entity_type: str = ""
             {
                 "id": field_id,
                 "title": _resolve_bitrix_field_title(field_id, field_meta),
-                "type": str(field_meta.get("type") or field_meta.get("TYPE") or "string"),
+                "type": normalize_bitrix_field_type(field_meta),
                 "required": is_required,
                 "multiple": normalize_bitrix_bool(field_meta.get("isMultiple", field_meta.get("multiple"))),
                 "is_custom": is_custom,

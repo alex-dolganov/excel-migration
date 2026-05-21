@@ -398,6 +398,22 @@ export const useApiStore = defineStore(
       }
     }
 
+    const fetchCrmEntityFields = async (entityType: string): Promise<{ fields: { id: string, title: string, type: string, items: { value: string, label: string }[] }[] }> => {
+      return await $api('/api/crm-entity-fields', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenJWT.value}` },
+        body: JSON.stringify({ entity_type: entityType }),
+      })
+    }
+
+    const fetchCrmFileFields = async (entityType: string): Promise<{ fields: { id: string, title: string }[] }> => {
+      return await $api('/api/crm-file-fields', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenJWT.value}` },
+        body: JSON.stringify({ entity_type: entityType }),
+      })
+    }
+
     const crmFilterPreview = async (data: {
       entity_type: string
       filter: Record<string, any>
@@ -565,6 +581,8 @@ export const useApiStore = defineStore(
       downloadImportSessionReportCsv,
       downloadImportExampleTemplateXlsx,
       getImportDepartments,
+      fetchCrmEntityFields,
+      fetchCrmFileFields,
       crmFilterPreview,
       uploadBulkAttachFile,
       createBulkAttachSession,

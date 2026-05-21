@@ -2883,6 +2883,19 @@ test('step 1 supports dependent linked import selectors and keeps them mutually 
   assert.equal(importerWorkbenchSource.includes('Выберите связанную сущность'), true)
 })
 
+test('crm flavor selection syncs the visible card with the active scenario used by action buttons', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes("function selectCrmFlavor(value: 'direct' | 'linked' | 'bulk')"), true)
+  assert.equal(importerWorkbenchSource.includes("entityType.value = selectedCrmEntityType.value"), true)
+  assert.equal(importerWorkbenchSource.includes("entityType.value = resolveLinkedStrategyEntityType("), true)
+  assert.equal(importerWorkbenchSource.includes("entityType.value = selectedFileAttachEntityType.value"), true)
+  assert.equal(importerWorkbenchSource.includes("@click=\"selectCrmFlavor(f.key as 'direct' | 'linked' | 'bulk')\""), true)
+})
+
 test('final step renders compact linked import summary with paging and csv fallback note', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
@@ -2942,9 +2955,13 @@ test('step 1 places choose file button between file and template blocks', () => 
     'utf8',
   )
 
-  const fileBlockIndex = importerWorkbenchSource.indexOf(">\n                            Файл\n")
-  const chooseFileButtonIndex = importerWorkbenchSource.indexOf('label="Выбрать файл"')
-  const templateBlockIndex = importerWorkbenchSource.indexOf(">\n                            Шаблон\n")
+  const rightColumnStart = importerWorkbenchSource.indexOf('<!-- Right column: dropzone + template -->')
+  const rightColumnEnd = importerWorkbenchSource.indexOf('<!-- HR подэкран -->', rightColumnStart)
+  const rightColumnSource = importerWorkbenchSource.slice(rightColumnStart, rightColumnEnd)
+
+  const fileBlockIndex = rightColumnSource.indexOf('<!-- Dropzone -->')
+  const chooseFileButtonIndex = rightColumnSource.indexOf('Выбрать файл')
+  const templateBlockIndex = rightColumnSource.indexOf('<!-- Template download -->')
 
   assert.notEqual(fileBlockIndex, -1)
   assert.notEqual(chooseFileButtonIndex, -1)
@@ -2963,6 +2980,15 @@ test('history panel no longer renders collapsed-state helper text', () => {
     importerWorkbenchSource.includes('По умолчанию показываются только последние 2 запуска, чтобы панель не вытягивала экран.'),
     false,
   )
+})
+
+test('step 1 upload action is no longer blocked by an unrelated running session from history', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('&& !isBlockedByActiveSession.value'), false)
 })
 
 test('history panel can reopen a saved import session in the wizard', () => {

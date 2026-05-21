@@ -108,7 +108,6 @@ onMounted(async () => {
           />
           <ImporterWorkbench
             v-else
-            key="workbench"
             :initial-import-mode="selectedImportMode"
             @back-to-landing="onBackToLanding"
           />

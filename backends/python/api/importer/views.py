@@ -3501,6 +3501,92 @@ def import_roles(request: AuthorizedRequest):
 @xframe_options_exempt
 @csrf_exempt
 @require_http_methods(["POST"])
+@log_errors("crm_entity_fields")
+@auth_required
+def crm_entity_fields(request: AuthorizedRequest):
+    from .services.b24_fields import fetch_entity_fields
+
+    account = request.bitrix24_account
+    if not has_permission(account, "sessions.create"):
+        return permission_denied_response()
+
+    import json
+    try:
+        payload = json.loads(request.body)
+    except Exception:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    entity_type = str(payload.get("entity_type") or "").strip()
+    if entity_type.startswith("crm_files_"):
+        entity_type = entity_type[len("crm_files_"):]
+
+    if entity_type not in {"lead", "contact", "company", "deal"}:
+        return JsonResponse({"error": f"Unsupported entity type: {entity_type}"}, status=400)
+
+    try:
+        fields = fetch_entity_fields(account, entity_type)
+    except Exception as error:
+        return JsonResponse({"error": str(error)}, status=500)
+
+    return JsonResponse({
+        "fields": [
+            {
+                "id": f["id"],
+                "title": f["title"],
+                "type": str(f.get("type") or "string"),
+                "items": [
+                    {"value": str(item.get("id") or ""), "label": str(item.get("title") or "")}
+                    for item in (f.get("items") or [])
+                    if item and item.get("id")
+                ],
+            }
+            for f in fields
+        ]
+    })
+
+
+@xframe_options_exempt
+@csrf_exempt
+@require_http_methods(["POST"])
+@log_errors("crm_file_fields")
+@auth_required
+def crm_file_fields(request: AuthorizedRequest):
+    from .services.b24_fields import fetch_entity_fields
+
+    account = request.bitrix24_account
+    if not has_permission(account, "sessions.create"):
+        return permission_denied_response()
+
+    import json
+    try:
+        payload = json.loads(request.body)
+    except Exception:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    entity_type = str(payload.get("entity_type") or "").strip()
+    if entity_type.startswith("crm_files_"):
+        entity_type = entity_type[len("crm_files_"):]
+
+    if entity_type not in {"lead", "contact", "company", "deal"}:
+        return JsonResponse({"error": f"Unsupported entity type: {entity_type}"}, status=400)
+
+    try:
+        fields = fetch_entity_fields(account, entity_type)
+    except Exception as error:
+        return JsonResponse({"error": str(error)}, status=500)
+
+    file_fields = [
+        {"id": f["id"], "title": f["title"]}
+        for f in fields
+        if str(f.get("type") or "").lower() in ("file", "disk_file")
+    ]
+
+    return JsonResponse({"fields": file_fields})
+
+
+@xframe_options_exempt
+@csrf_exempt
+@require_http_methods(["POST"])
 @log_errors("crm_filter_preview")
 @auth_required
 def crm_filter_preview(request: AuthorizedRequest):
