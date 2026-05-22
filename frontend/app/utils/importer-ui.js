@@ -1137,12 +1137,20 @@ function normalizeCandidateSuggestions(items, fieldMap) {
   }, [])
 }
 
-export function buildMappingRows({ headers, columns, fields, candidateMapping, candidateSuggestions, savedMapping }) {
+export function buildMappingRows({
+  headers,
+  columns,
+  fields,
+  candidateMapping,
+  candidateSuggestions,
+  savedMapping,
+  preferSavedMapping = true,
+}) {
   const safeHeaders = Array.isArray(headers) ? headers : []
   const safeColumns = Array.isArray(columns) ? columns : []
   const fieldMap = buildFieldMap(fields)
   const fieldIndex = buildFieldIndex(fields)
-  const hasSavedMapping = Boolean(savedMapping && Object.keys(savedMapping).length > 0)
+  const hasSavedMapping = Boolean(preferSavedMapping && savedMapping && Object.keys(savedMapping).length > 0)
   const sourceMapping = hasSavedMapping ? savedMapping : candidateMapping
   const selectionIndex = buildSelectionIndex(hasSavedMapping ? savedMapping : candidateMapping)
 
@@ -2642,6 +2650,50 @@ export function buildImportRunSummaryFromSessionSnapshot(snapshot) {
     created_ids: Array.isArray(importRun.created_ids) ? importRun.created_ids : derivedSummary.created_ids,
     updated_ids: Array.isArray(importRun.updated_ids) ? importRun.updated_ids : derivedSummary.updated_ids,
     results,
+  }
+}
+
+export function buildImportRunCompletionNotice(importRunData, { mode = 'run' } = {}) {
+  const normalizedMode = String(mode || '').trim().toLowerCase() === 'retry' ? 'retry' : 'run'
+  const fatalError = String(importRunData?.fatal_error || '').trim()
+
+  if (fatalError) {
+    return {
+      type: 'error',
+      message: fatalError,
+    }
+  }
+
+  if (String(importRunData?.status || '').trim().toLowerCase() === 'running') {
+    return {
+      type: 'success',
+      message: `Импорт продолжает выполняться в фоне. Уже обработано ${Number(importRunData?.checked_rows || 0).toLocaleString('ru-RU')} строк.`,
+    }
+  }
+
+  if (String(importRunData?.status || '').trim().toLowerCase() === 'cancelled') {
+    return {
+      type: 'success',
+      message: normalizedMode === 'retry'
+        ? `Повтор остановлен. Не запущено строк: ${Number(importRunData?.remaining_rows || 0)}.`
+        : `Импорт остановлен. Не запущено строк: ${Number(importRunData?.remaining_rows || 0)}.`,
+    }
+  }
+
+  if (normalizedMode === 'retry') {
+    return {
+      type: 'success',
+      message: Number(importRunData?.failed_rows || 0) > 0
+        ? `Повтор выполнен. Осталось неуспешных строк: ${Number(importRunData?.failed_rows || 0)}.`
+        : `Повтор выполнен. Обработано строк: ${Number(importRunData?.retried_rows || 0)}.`,
+    }
+  }
+
+  return {
+    type: 'success',
+    message: Number(importRunData?.failed_rows || 0) > 0
+      ? 'Импорт завершен. Часть строк требует внимания.'
+      : 'Импорт завершен. Все строки обработаны.',
   }
 }
 

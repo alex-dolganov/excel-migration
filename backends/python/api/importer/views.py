@@ -73,6 +73,8 @@ MAX_IMPORT_ROWS = 100_000
 SAMPLE_PREVIEW_ROW_LIMIT = 30
 DRY_RUN_MODE_SAMPLE_PREVIEW = "sample_preview"
 DRY_RUN_MODE_PREIMPORT_SCAN = "preimport_scan"
+IMPORT_MODE_SIMPLE = "simple"
+IMPORT_MODE_ADVANCED = "advanced"
 
 _ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 _XLSX_MAGIC = b"PK\x03\x04"          # ZIP / OOXML
@@ -159,6 +161,14 @@ def normalize_dry_run_mode(value: object) -> str:
     if normalized_value == DRY_RUN_MODE_SAMPLE_PREVIEW:
         return DRY_RUN_MODE_SAMPLE_PREVIEW
     return DRY_RUN_MODE_PREIMPORT_SCAN
+
+
+def normalize_import_mode(value: object) -> str:
+    return IMPORT_MODE_SIMPLE if str(value or "").strip().lower() == IMPORT_MODE_SIMPLE else IMPORT_MODE_ADVANCED
+
+
+def is_simple_import_mode(value: object) -> bool:
+    return normalize_import_mode(value) == IMPORT_MODE_SIMPLE
 
 
 def get_dry_run_summary_key(mode: str) -> str:
@@ -552,7 +562,10 @@ def merge_import_run_results(previous_import_run: dict, retry_result: dict) -> d
             continue
         merged_results.append(item)
 
-    return build_import_result_summary(merged_results)
+    merged_summary = build_import_result_summary(merged_results)
+    merged_summary["auth_error"] = str(retry_result.get("auth_error") or "")
+    merged_summary["fatal_error"] = str(retry_result.get("fatal_error") or "")
+    return merged_summary
 
 
 def normalize_per_row_decisions(raw: object) -> dict:
@@ -1858,6 +1871,8 @@ def import_alias_rules(request: AuthorizedRequest):
         entity_type = str((request.GET or {}).get("entity_type") or "").strip()
         if not entity_type:
             return JsonResponse({"items": []})
+        if is_simple_import_mode((request.GET or {}).get("import_mode")):
+            return JsonResponse({"items": []})
 
         entity_config = {}
         if entity_type == SMART_PROCESS_ENTITY_TYPE:
@@ -2216,12 +2231,14 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
+    import_mode_source = request.GET if request.method == "GET" else request.data
+    use_alias_rules = not is_simple_import_mode((import_mode_source or {}).get("import_mode"))
     alias_rules = load_portal_alias_rules(
         portal_member_id,
         portal_domain,
         entity_type=session.entity_type,
         entity_scope_key=build_template_entity_scope(session.entity_type, get_session_entity_config(session)),
-    )
+    ) if use_alias_rules else []
     candidate_bundle = build_candidate_mapping_bundle(
         headers,
         columns,
@@ -2806,6 +2823,32 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
             )
             session.save(update_fields=["summary", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
 
+        def _on_rate_limit_pause(wait_seconds):
+            import time as _t
+            try:
+                summary = session.summary if isinstance(session.summary, dict) else {}
+                progress = summary.get("import_progress") if isinstance(summary.get("import_progress"), dict) else {}
+                progress["pause_info"] = {
+                    "wait_seconds": int(wait_seconds),
+                    "resume_at": int(_t.time()) + int(wait_seconds),
+                }
+                summary["import_progress"] = progress
+                session.summary = summary
+                session.save(update_fields=["summary", "updated_at"])
+            except Exception:
+                pass
+
+        def _on_rate_limit_resume():
+            try:
+                summary = session.summary if isinstance(session.summary, dict) else {}
+                progress = summary.get("import_progress") if isinstance(summary.get("import_progress"), dict) else {}
+                progress.pop("pause_info", None)
+                summary["import_progress"] = progress
+                session.summary = summary
+                session.save(update_fields=["summary", "updated_at"])
+            except Exception:
+                pass
+
         create_phase_result = execute_import(
             account=account,
             entity_type=session.entity_type,
@@ -2822,6 +2865,8 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
             per_row_decisions=normalized_per_row_decisions,
             progress_callback=_save_create_phase_progress,
             entity_config=get_session_entity_config(session),
+            on_rate_limit_pause=_on_rate_limit_pause,
+            on_rate_limit_resume=_on_rate_limit_resume,
         )
         _save_create_phase_progress(
             checked_rows=create_phase_result["checked_rows"],
@@ -2843,6 +2888,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
             "updated_ids": [],
             "results": [],
             "auth_error": "",
+            "fatal_error": "",
         }
 
         if not create_phase_result.get("cancelled") and duplicate_phase_total > 0:
@@ -2881,6 +2927,8 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
                 per_row_decisions=normalized_per_row_decisions,
                 progress_callback=_save_duplicate_phase_progress,
                 entity_config=get_session_entity_config(session),
+                on_rate_limit_pause=_on_rate_limit_pause,
+                on_rate_limit_resume=_on_rate_limit_resume,
             )
             _save_duplicate_phase_progress(
                 checked_rows=duplicate_phase_result["checked_rows"],
@@ -2891,6 +2939,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
 
         import_result = merge_import_execution_results(create_phase_result, duplicate_phase_result)
         import_result["auth_error"] = str(create_phase_result.get("auth_error") or duplicate_phase_result.get("auth_error") or "")
+        import_result["fatal_error"] = str(create_phase_result.get("fatal_error") or duplicate_phase_result.get("fatal_error") or "")
     except Exception as error:
         session.status = ImportSession.Status.FAILED
         session.last_error = safe_format_import_error(error)
@@ -2911,12 +2960,12 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
         "import_run": import_result,
         "import_progress": (session.summary if isinstance(session.summary, dict) else {}).get("import_progress"),
     }
-    auth_error = import_result.get("auth_error") or ""
+    terminal_error = str(import_result.get("fatal_error") or import_result.get("auth_error") or "")
     session.status = ImportSession.Status.CANCELLED if import_result.get("cancelled") else ImportSession.Status.COMPLETED
     session.processed_rows = import_result["checked_rows"]
     session.successful_rows = import_result["created_rows"] + import_result.get("updated_rows", 0)
     session.failed_rows = import_result["failed_rows"]
-    session.last_error = auth_error
+    session.last_error = terminal_error
     session.save(
         update_fields=[
             "summary",
@@ -3143,6 +3192,32 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
         session.failed_rows = failed_rows
         session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
 
+    def _on_retry_rate_limit_pause(wait_seconds):
+        import time as _t
+        try:
+            summary = session.summary if isinstance(session.summary, dict) else {}
+            progress = summary.get("import_progress") if isinstance(summary.get("import_progress"), dict) else {}
+            progress["pause_info"] = {
+                "wait_seconds": int(wait_seconds),
+                "resume_at": int(_t.time()) + int(wait_seconds),
+            }
+            summary["import_progress"] = progress
+            session.summary = summary
+            session.save(update_fields=["summary", "updated_at"])
+        except Exception:
+            pass
+
+    def _on_retry_rate_limit_resume():
+        try:
+            summary = session.summary if isinstance(session.summary, dict) else {}
+            progress = summary.get("import_progress") if isinstance(summary.get("import_progress"), dict) else {}
+            progress.pop("pause_info", None)
+            summary["import_progress"] = progress
+            session.summary = summary
+            session.save(update_fields=["summary", "updated_at"])
+        except Exception:
+            pass
+
     try:
         fields = fetch_session_entity_fields(account, session)
         _columns, rows, row_numbers = extract_preview_rows(session, str(selected_sheet_name), preview_limit=None)
@@ -3173,6 +3248,8 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
             per_row_decisions=normalize_per_row_decisions(import_settings.get("per_row_decisions")),
             progress_callback=_save_progress,
             entity_config=get_session_entity_config(session),
+            on_rate_limit_pause=_on_retry_rate_limit_pause,
+            on_rate_limit_resume=_on_retry_rate_limit_resume,
         )
     except Exception as error:
         session.status = ImportSession.Status.FAILED
@@ -3196,7 +3273,7 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
     session.processed_rows = merged_import_run["checked_rows"]
     session.successful_rows = merged_import_run["created_rows"] + merged_import_run.get("updated_rows", 0)
     session.failed_rows = merged_import_run["failed_rows"]
-    session.last_error = ""
+    session.last_error = str(retry_result.get("fatal_error") or retry_result.get("auth_error") or "")
     session.save(
         update_fields=[
             "summary",

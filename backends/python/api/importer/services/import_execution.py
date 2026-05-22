@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import logging
 
 from b24pysdk.error import BitrixOAuthInvalidGrant, BitrixRequestTimeout
 from b24pysdk.bitrix_api.requests import BitrixAPIBatchRequest, BitrixAPIRequest
@@ -19,7 +20,13 @@ from .validation import (
     split_field_values,
 )
 from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, download_attachment_source
-from .error_messages import MISSING_BITRIX_RECORD_ID_ERROR, safe_format_import_error
+from .error_messages import (
+    MISSING_BITRIX_RECORD_ID_ERROR,
+    BITRIX_USER_INVITATION_UNKNOWN_ERROR,
+    is_daily_invitation_limit_error,
+    iter_error_messages,
+    safe_format_import_error,
+)
 from .report_metadata import build_import_result_report_meta
 from .task_resolution import BitrixTaskResolver, is_task_reference_field
 from .user_resolution import BitrixUserResolver, is_task_user_reference_field
@@ -105,6 +112,7 @@ _OPERATION_TIME_LIMIT_KEYWORDS = frozenset([
     "operation time limit",
     "operation_time_limit",
     "method is blocked due to operation time limit",
+    "unknown error",  # Bitrix24 returns this for user.add when operation time limit is exceeded
 ])
 _OPERATION_TIME_LIMIT_RETRY_WAITS = [60, 180, 360]
 
@@ -195,11 +203,19 @@ def _flush_crm_batch(account, entity_type: str, pending_batch: list) -> tuple:
 
 
 def _is_rate_limit_error(error) -> bool:
-    return any(kw in str(error).lower() for kw in _RATE_LIMIT_KEYWORDS)
+    normalized_messages = [message.lower() for message in iter_error_messages(error)]
+    return any(keyword in message for message in normalized_messages for keyword in _RATE_LIMIT_KEYWORDS)
 
 
-def _is_operation_time_limit_error(error) -> bool:
-    return any(kw in str(error).lower() for kw in _OPERATION_TIME_LIMIT_KEYWORDS)
+def _is_operation_time_limit_error(error, *, allow_unknown_error: bool = True) -> bool:
+    normalized_messages = [message.lower() for message in iter_error_messages(error)]
+    for message in normalized_messages:
+        for keyword in _OPERATION_TIME_LIMIT_KEYWORDS:
+            if keyword == "unknown error" and not allow_unknown_error:
+                continue
+            if keyword in message:
+                return True
+    return False
 
 
 def _is_timeout_error(error) -> bool:
@@ -210,14 +226,16 @@ def _is_timeout_error(error) -> bool:
     return "timed out" in normalized_error or "timeout" in normalized_error
 
 
-def _bitrix_retry(fn):
+def _bitrix_retry(fn, on_pause=None, on_resume=None, allow_unknown_error_as_operation_time_limit=True):
     attempt = 0
 
     while True:
         try:
             return fn()
         except Exception as error:
-            if _is_operation_time_limit_error(error):
+            if is_daily_invitation_limit_error(error):
+                raise
+            if _is_operation_time_limit_error(error, allow_unknown_error=allow_unknown_error_as_operation_time_limit):
                 retry_waits = _OPERATION_TIME_LIMIT_RETRY_WAITS
             elif _is_rate_limit_error(error):
                 retry_waits = _RATE_LIMIT_RETRY_WAITS
@@ -227,8 +245,40 @@ def _bitrix_retry(fn):
             if attempt >= len(retry_waits):
                 raise
 
-            time.sleep(retry_waits[attempt])
+            wait_seconds = retry_waits[attempt]
+            if callable(on_pause):
+                try:
+                    on_pause(wait_seconds)
+                except Exception:
+                    pass
+            time.sleep(wait_seconds)
+            if callable(on_resume):
+                try:
+                    on_resume()
+                except Exception:
+                    pass
             attempt += 1
+
+
+def _resolve_fatal_import_error(error, *, entity_type: str) -> str:
+    if entity_type != "user":
+        return ""
+
+    normalized_messages = [message.lower() for message in iter_error_messages(error)]
+    if is_daily_invitation_limit_error(error):
+        fatal_error = safe_format_import_error(error)
+    elif any("unknown error" in message for message in normalized_messages):
+        fatal_error = BITRIX_USER_INVITATION_UNKNOWN_ERROR
+    else:
+        return ""
+
+    logging.warning(
+        "Stopping user import because Bitrix24 returned a permanent invitation error: %s | messages=%s | json_response=%s",
+        fatal_error,
+        list(iter_error_messages(error)),
+        getattr(error, "json_response", None),
+    )
+    return fatal_error
 
 
 def _flush_crm_batch_with_fallback(account, entity_type: str, pending_batch: list) -> tuple:
@@ -891,15 +941,43 @@ def _find_department_by_name(account, name: str):
 
 
 def _create_user(account, fields: dict):
-    response = BitrixAPIRequest(
-        bitrix_token=account,
-        api_method="user.add",
-        params=fields,
-    )
-    result = unwrap_bitrix_result(response)
-    if isinstance(result, dict):
-        return normalize_record_id(result.get("ID") or result.get("id") or result.get("result"))
-    return normalize_record_id(result)
+    params = {**fields}
+    params.setdefault("EXTRANET", "N")
+    params.setdefault("ACTIVE", "Y")
+    # Bitrix24 requires UF_DEPARTMENT for intranet users (EXTRANET=N)
+    if not params.get("UF_DEPARTMENT"):
+        params["UF_DEPARTMENT"] = 1
+    try:
+        req = account.client.user.add(params)
+        result = req.result
+        return normalize_record_id(result)
+    except Exception as add_error:
+        if not ("unknown error" in str(add_error).lower() and params.get("EMAIL")):
+            raise
+        # Bitrix24 returns "Unknown error." when email belongs to a deactivated (fired)
+        # user. user.get without ACTIVE filter only returns active users — must search
+        # specifically with ACTIVE:"N" to find deactivated accounts.
+        try:
+            existing = BitrixAPIRequest(
+                bitrix_token=account,
+                api_method="user.get",
+                params={"filter": {"EMAIL": params["EMAIL"], "ACTIVE": "N"}, "select": ["ID"]},
+            )
+            result = unwrap_bitrix_result(existing)
+            if isinstance(result, list) and result:
+                user_id = normalize_record_id(result[0].get("ID") or result[0].get("id"))
+                if user_id:
+                    update_params = {k: v for k, v in params.items() if k != "EMAIL"}
+                    update_params["ACTIVE"] = "Y"
+                    BitrixAPIRequest(
+                        bitrix_token=account,
+                        api_method="user.update",
+                        params={"id": user_id, **update_params},
+                    )
+                    return user_id
+        except Exception:
+            pass
+        raise
 
 
 def _update_user(account, record_id, fields: dict):
@@ -2813,6 +2891,8 @@ def execute_import(
     per_row_decisions: dict | None = None,
     progress_callback=None,
     entity_config: dict | None = None,
+    on_rate_limit_pause=None,
+    on_rate_limit_resume=None,
 ) -> dict:
     if is_linked_import_entity_type(entity_type):
         return execute_linked_import(
@@ -2869,6 +2949,7 @@ def execute_import(
     results = []
     was_cancelled = False
     oauth_abort_error: str = ""
+    fatal_error: str = ""
     use_batch = _is_batch_eligible(entity_type, normalized_dedup_settings)
     pending_batch: list = []
     report_entity_config = (import_context or {}).get("entity_config") if isinstance(import_context, dict) else None
@@ -2981,16 +3062,19 @@ def execute_import(
         except Exception as error:
             if isinstance(error, BitrixOAuthInvalidGrant):
                 oauth_abort_error = safe_format_import_error(error)
+            elif not fatal_error:
+                fatal_error = _resolve_fatal_import_error(error, entity_type=entity_type)
+            formatted_error = fatal_error or safe_format_import_error(error)
             failed_rows += 1
             results.append(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": safe_format_import_error(error),
+                    "error": formatted_error,
                     **build_import_result_report_meta(entity_type, entity_config=report_entity_config),
                 }
             )
-            if oauth_abort_error:
+            if oauth_abort_error or fatal_error:
                 break
             continue
 
@@ -3021,12 +3105,15 @@ def execute_import(
         except Exception as error:
             if isinstance(error, BitrixOAuthInvalidGrant):
                 oauth_abort_error = safe_format_import_error(error)
+            elif not fatal_error:
+                fatal_error = _resolve_fatal_import_error(error, entity_type=entity_type)
+            formatted_error = fatal_error or safe_format_import_error(error)
             failed_rows += 1
             results.append(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": safe_format_import_error(error),
+                    "error": formatted_error,
                     **build_import_result_report_meta(
                         entity_type,
                         row_payload=row_payload,
@@ -3034,7 +3121,7 @@ def execute_import(
                     ),
                 }
             )
-            if oauth_abort_error:
+            if oauth_abort_error or fatal_error:
                 break
             continue
 
@@ -3096,12 +3183,15 @@ def execute_import(
                 except Exception as error:
                     if isinstance(error, BitrixOAuthInvalidGrant):
                         oauth_abort_error = safe_format_import_error(error)
+                    elif not fatal_error:
+                        fatal_error = _resolve_fatal_import_error(error, entity_type=entity_type)
+                    formatted_error = fatal_error or safe_format_import_error(error)
                     failed_rows += 1
                     results.append(
                         {
                             "row_number": row_number,
                             "status": "failed",
-                            "error": safe_format_import_error(error),
+                            "error": formatted_error,
                             **build_import_result_report_meta(
                                 entity_type,
                                 row_payload=row_payload,
@@ -3110,7 +3200,7 @@ def execute_import(
                             ),
                         }
                     )
-                    if oauth_abort_error:
+                    if oauth_abort_error or fatal_error:
                         break
                     continue
                 updated_rows += 1
@@ -3139,12 +3229,15 @@ def execute_import(
             except Exception as error:
                 if isinstance(error, BitrixOAuthInvalidGrant):
                     oauth_abort_error = safe_format_import_error(error)
+                elif not fatal_error:
+                    fatal_error = _resolve_fatal_import_error(error, entity_type=entity_type)
+                formatted_error = fatal_error or safe_format_import_error(error)
                 failed_rows += 1
                 results.append(
                     {
                         "row_number": row_number,
                         "status": "failed",
-                        "error": safe_format_import_error(error),
+                        "error": formatted_error,
                         **build_import_result_report_meta(
                             entity_type,
                             row_payload=row_payload,
@@ -3153,7 +3246,7 @@ def execute_import(
                         ),
                     }
                 )
-                if oauth_abort_error:
+                if oauth_abort_error or fatal_error:
                     break
                 continue
 
@@ -3177,16 +3270,24 @@ def execute_import(
             continue
 
         try:
-            record_id = _bitrix_retry(lambda: create_entity_record(account, entity_type, row_payload, context=import_context))
+            record_id = _bitrix_retry(
+                lambda: create_entity_record(account, entity_type, row_payload, context=import_context),
+                on_pause=on_rate_limit_pause,
+                on_resume=on_rate_limit_resume,
+                allow_unknown_error_as_operation_time_limit=entity_type != "user",
+            )
         except Exception as error:
             if isinstance(error, BitrixOAuthInvalidGrant):
                 oauth_abort_error = safe_format_import_error(error)
+            elif not fatal_error:
+                fatal_error = _resolve_fatal_import_error(error, entity_type=entity_type)
+            formatted_error = fatal_error or safe_format_import_error(error)
             failed_rows += 1
             results.append(
                 {
                     "row_number": row_number,
                     "status": "failed",
-                    "error": safe_format_import_error(error),
+                    "error": formatted_error,
                     **build_import_result_report_meta(
                         entity_type,
                         row_payload=row_payload,
@@ -3194,7 +3295,7 @@ def execute_import(
                     ),
                 }
             )
-            if oauth_abort_error:
+            if oauth_abort_error or fatal_error:
                 break
             continue
 
@@ -3215,7 +3316,8 @@ def execute_import(
             result_item["record_id"] = record_id
         results.append(result_item)
 
-    if oauth_abort_error:
+    terminal_abort_error = str(oauth_abort_error or fatal_error or "").strip()
+    if terminal_abort_error:
         processed_row_numbers = {r["row_number"] for r in results}
         for rem_idx, rem_num in enumerate(row_numbers):
             if rem_num < data_start_row or rem_num in processed_row_numbers:
@@ -3228,7 +3330,7 @@ def execute_import(
             results.append({
                 "row_number": rem_num,
                 "status": "cancelled",
-                "error": "Import stopped: Bitrix24 authentication expired",
+                "error": terminal_abort_error,
             })
     else:
         _flush_pending_batch()
@@ -3246,4 +3348,5 @@ def execute_import(
         "updated_ids": updated_ids,
         "results": results,
         "auth_error": oauth_abort_error,
+        "fatal_error": fatal_error,
     }

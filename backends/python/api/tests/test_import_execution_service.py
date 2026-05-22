@@ -4,6 +4,10 @@ from django.test import SimpleTestCase
 
 from unittest.mock import ANY, patch
 
+from importer.services.error_messages import (
+    BITRIX_DAILY_INVITATION_LIMIT_ERROR,
+    BITRIX_USER_INVITATION_UNKNOWN_ERROR,
+)
 from importer.services.import_execution import (
     bind_contact_company,
     bind_deal_contact,
@@ -31,6 +35,20 @@ class ResultProbe:
     def result(self):
         self.touched = True
         return self.value
+
+
+class FakeBitrixInvitationLimitError(Exception):
+    def __init__(self):
+        super().__init__("Unknown error.")
+        self.json_response = {
+            "error": "ERROR_USER_INVITATION_LIMIT",
+            "error_description": "Unknown error.",
+        }
+
+
+class FakeBitrixUnknownUserInviteError(Exception):
+    def __init__(self):
+        super().__init__("Unknown error.")
 
 
 class ImportExecutionServiceTest(SimpleTestCase):
@@ -142,6 +160,93 @@ class ImportExecutionServiceTest(SimpleTestCase):
                 }
             ],
         )
+
+    @patch("importer.services.import_execution.BitrixUserResolver")
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
+    @patch("importer.services.import_execution.find_existing_record", return_value={})
+    @patch("importer.services.import_execution.create_entity_record")
+    @patch("importer.services.import_execution.build_row_payload", return_value={"EMAIL": "user@example.com", "NAME": "Alice"})
+    def test_execute_import_stops_user_import_on_daily_invitation_limit(
+        self,
+        _build_row_payload,
+        create_entity_record_mock,
+        _find_existing_record,
+        _batch_eligible,
+        _user_resolver,
+    ):
+        create_entity_record_mock.side_effect = FakeBitrixInvitationLimitError()
+
+        result = execute_import(
+            account=SimpleNamespace(),
+            entity_type="user",
+            rows=[["alice@example.com"], ["bob@example.com"]],
+            row_numbers=[2, 3],
+            columns=["A"],
+            data_start_row=2,
+            mapping={},
+            validation_summary={"issues": []},
+            fields=[],
+            dedup_settings={"strategy": "create"},
+        )
+
+        self.assertEqual(create_entity_record_mock.call_count, 1)
+        self.assertTrue(result["cancelled"])
+        self.assertEqual(result["failed_rows"], 1)
+        self.assertEqual(result["cancelled_rows"], 1)
+        self.assertEqual(result["remaining_rows"], 1)
+        self.assertEqual(result["fatal_error"], BITRIX_DAILY_INVITATION_LIMIT_ERROR)
+        self.assertEqual(len(result["results"]), 2)
+        self.assertEqual(result["results"][0]["row_number"], 2)
+        self.assertEqual(result["results"][0]["status"], "failed")
+        self.assertEqual(result["results"][0]["error"], BITRIX_DAILY_INVITATION_LIMIT_ERROR)
+        self.assertEqual(result["results"][0]["report_entity"], "Пользователь")
+        self.assertEqual(result["results"][0]["report_title"], "Alice")
+        self.assertEqual(result["results"][0]["report_record_id"], "")
+        self.assertTrue(result["results"][0]["report_date_time"])
+        self.assertEqual(
+            result["results"][1],
+            {
+                "row_number": 3,
+                "status": "cancelled",
+                "error": BITRIX_DAILY_INVITATION_LIMIT_ERROR,
+            },
+        )
+
+    @patch("importer.services.import_execution.BitrixUserResolver")
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
+    @patch("importer.services.import_execution.find_existing_record", return_value={})
+    @patch("importer.services.import_execution.create_entity_record")
+    @patch("importer.services.import_execution.build_row_payload", return_value={"EMAIL": "user@example.com", "NAME": "Alice"})
+    def test_execute_import_stops_user_import_on_unknown_invitation_error_without_retries(
+        self,
+        _build_row_payload,
+        create_entity_record_mock,
+        _find_existing_record,
+        _batch_eligible,
+        _user_resolver,
+    ):
+        create_entity_record_mock.side_effect = FakeBitrixUnknownUserInviteError()
+
+        result = execute_import(
+            account=SimpleNamespace(),
+            entity_type="user",
+            rows=[["alice@example.com"], ["bob@example.com"]],
+            row_numbers=[2, 3],
+            columns=["A"],
+            data_start_row=2,
+            mapping={},
+            validation_summary={"issues": []},
+            fields=[],
+            dedup_settings={"strategy": "create"},
+        )
+
+        self.assertEqual(create_entity_record_mock.call_count, 1)
+        self.assertTrue(result["cancelled"])
+        self.assertEqual(result["fatal_error"], BITRIX_USER_INVITATION_UNKNOWN_ERROR)
+        self.assertEqual(result["results"][0]["status"], "failed")
+        self.assertEqual(result["results"][0]["error"], BITRIX_USER_INVITATION_UNKNOWN_ERROR)
+        self.assertEqual(result["results"][1]["status"], "cancelled")
+        self.assertEqual(result["results"][1]["error"], BITRIX_USER_INVITATION_UNKNOWN_ERROR)
 
     @patch("importer.services.import_execution.BitrixUserResolver")
     @patch("importer.services.import_execution.resolve_linked_record_action_with_decision")

@@ -158,8 +158,16 @@ export const useApiStore = defineStore(
       })
     }
 
-    const getImportMapping = async (sessionId: string): Promise<{ item: Record<string, any> }> => {
-      return await $api(`/api/import-sessions/${sessionId}/mapping`, {
+    const getImportMapping = async (
+      sessionId: string,
+      importMode = '',
+    ): Promise<{ item: Record<string, any> }> => {
+      const searchParams = new URLSearchParams()
+      if (importMode) {
+        searchParams.set('import_mode', importMode)
+      }
+
+      return await $api(`/api/import-sessions/${sessionId}/mapping${searchParams.toString() ? `?${searchParams.toString()}` : ''}`, {
         headers: {
           Authorization: `Bearer ${tokenJWT.value}`
         }
@@ -207,6 +215,7 @@ export const useApiStore = defineStore(
     const getImportAliasRules = async (
       entityType: string,
       entityConfig?: Record<string, any> | null,
+      importMode = '',
     ): Promise<{ items: Record<string, any>[] }> => {
       const searchParams = new URLSearchParams()
       if (entityType) {
@@ -214,6 +223,9 @@ export const useApiStore = defineStore(
       }
       if (entityType === 'smart_process' && entityConfig?.entityTypeId) {
         searchParams.set('entity_type_id', String(entityConfig.entityTypeId))
+      }
+      if (importMode) {
+        searchParams.set('import_mode', importMode)
       }
 
       return await $api(`/api/import-alias-rules?${searchParams.toString()}`, {

@@ -1954,6 +1954,42 @@ class ImportMappingApiTest(TestCase):
         ])
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_simple_mode_mapping_ignores_saved_alias_rules_from_advanced_mode(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = self.create_account()
+
+        session = self.create_uploaded_session_with_headers(
+            ["Контрагент", "Телефон"],
+            [["ООО Альфа", "+123"]],
+            filename="leads-simple-mode.xlsx",
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        create_rule_response = self.client.post(
+            reverse("importer:alias-rules"),
+            data={
+                "session_id": str(session.id),
+                "source_label": "Контрагент",
+                "target_field_id": "TITLE",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(create_rule_response.status_code, 201)
+
+        response = self.client.get(
+            f"{reverse('importer:session-mapping', kwargs={'session_id': session.id})}?import_mode=simple",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertNotIn("TITLE", response.json()["item"]["candidate_mapping"])
+        self.assertEqual(response.json()["item"]["alias_rules"], [])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_returns_linked_preflight_warning_for_repeated_company_rows_without_identity_strategy(self, get_from_jwt_token):
         get_from_jwt_token.return_value = self.create_linked_company_contact_account()
 

@@ -30,6 +30,7 @@ import {
   buildDedupWeakeningNotice,
   buildImportRunProblemGroups,
   buildImportRunRows,
+  buildImportRunCompletionNotice,
   buildImportRunSummaryFromSessionSnapshot,
   buildImportRunStatusFilters,
   buildImportRunRetryState,
@@ -52,6 +53,21 @@ test('detects source format from uploaded filename', () => {
   assert.equal(detectSourceFormat('contacts.xlsx'), 'xlsx')
   assert.equal(detectSourceFormat('contacts.csv'), 'csv')
   assert.equal(detectSourceFormat('contacts.unknown'), '')
+})
+
+test('builds error completion notice when import stops on fatal Bitrix limit', () => {
+  assert.deepEqual(
+    buildImportRunCompletionNotice({
+      status: 'cancelled',
+      fatal_error: 'Превышен дневной лимит приглашений по e-mail.',
+      failed_rows: 1,
+      remaining_rows: 24,
+    }),
+    {
+      type: 'error',
+      message: 'Превышен дневной лимит приглашений по e-mail.',
+    },
+  )
 })
 
 test('includes task attachments in supported import entities', () => {
@@ -359,6 +375,51 @@ test('builds mapping rows with saved mapping taking priority over candidates', (
       targetFieldType: 'string',
       targetFieldTypeLabel: 'Текст',
       targetFieldRequired: false,
+      targetFieldIsCustom: false,
+      targetFieldIsMultiple: false,
+      targetFieldGuidanceHints: [],
+    },
+  ])
+})
+
+test('builds mapping rows from candidate mapping when simple mode disables saved rules', () => {
+  const rows = buildMappingRows({
+    headers: ['Название'],
+    columns: ['A'],
+    fields: [
+      { id: 'TITLE', title: 'Название сделки', required: true },
+      { id: 'STAGE_ID', title: 'Стадия', required: false },
+    ],
+    candidateMapping: {
+      TITLE: {
+        source_header: 'Название',
+        column: 'A',
+        target_field: 'TITLE',
+        match_type: 'exact',
+      },
+    },
+    savedMapping: {
+      STAGE_ID: {
+        source_header: 'Название',
+        column: 'A',
+        target_field: 'STAGE_ID',
+      },
+    },
+    preferSavedMapping: false,
+  })
+
+  assert.deepEqual(rows, [
+    {
+      key: 'A:Название',
+      column: 'A',
+      sourceHeader: 'Название',
+      targetFieldId: 'TITLE',
+      targetFieldTitle: 'Название сделки',
+      autoMatchType: 'exact',
+      autoMatchLabel: 'Точное',
+      targetFieldType: 'string',
+      targetFieldTypeLabel: 'Текст',
+      targetFieldRequired: true,
       targetFieldIsCustom: false,
       targetFieldIsMultiple: false,
       targetFieldGuidanceHints: [],
@@ -3259,9 +3320,17 @@ test('long background import keeps running status instead of fake timeout error'
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
     'utf8',
   )
+  const importerUiSource = readFileSync(
+    new URL('../app/utils/importer-ui.js', import.meta.url),
+    'utf8',
+  )
 
   assert.equal(importerWorkbenchSource.includes('const maxAttempts = 600'), true)
-  assert.equal(importerWorkbenchSource.includes('Импорт продолжает выполняться в фоне.'), true)
+  assert.equal(
+    importerWorkbenchSource.includes('Импорт продолжает выполняться в фоне.')
+      || importerUiSource.includes('Импорт продолжает выполняться в фоне.'),
+    true,
+  )
   assert.equal(importerWorkbenchSource.includes('Фоновый импорт не завершился за ожидаемое время.'), false)
 })
 
@@ -3456,6 +3525,41 @@ test('importer workbench enables duplicate step for smart processes', () => {
 
   assert.equal(importerWorkbenchSource.includes("'crm_activity', 'crm_note', 'smart_process',"), false)
   assert.equal(importerWorkbenchSource.includes("'crm_activity', 'crm_note',"), true)
+})
+
+test('importer workbench disables duplicate step configuration for users and departments', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes("'crm_activity', 'crm_note', 'department', 'user',"), true)
+  assert.equal(importerWorkbenchSource.includes('Дедупликация не применяется'), true)
+  assert.equal(importerWorkbenchSource.includes('поиск дублей не поддерживается'), true)
+})
+
+test('saving mapping for users and departments advances to the informational duplicate step', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const functionStart = importerWorkbenchSource.indexOf('async function saveMapping() {')
+  const functionEnd = importerWorkbenchSource.indexOf('async function saveDedupSettings() {')
+  const functionSource = importerWorkbenchSource.slice(functionStart, functionEnd)
+
+  assert.equal(functionSource.includes('if (!isDedupApplicable.value) {'), true)
+  assert.equal(functionSource.includes('currentStep.value = 5'), true)
+})
+
+test('validation remains available in simple mode after session mapping is saved', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('const sessionSavedMapping = computed(() => ('), true)
+  assert.equal(importerWorkbenchSource.includes('const mappingSavedCount = computed(() => ('), true)
+  assert.equal(importerWorkbenchSource.includes('sessionSavedMapping.value && typeof sessionSavedMapping.value === \'object\''), true)
 })
 
 test('final import results render 20 rows per page with compact bottom pagination', () => {

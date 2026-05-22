@@ -12,6 +12,10 @@ const importerWorkbenchSource = readFileSync(
   new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
   'utf8',
 )
+const apiStoreSource = readFileSync(
+  new URL('../app/stores/api.ts', import.meta.url),
+  'utf8',
+)
 
 test('builds simple and advanced import mode options', () => {
   assert.deepEqual(buildImportModeOptions(), [
@@ -91,6 +95,22 @@ test('importer workbench starts with simple versus advanced mode choice', () => 
   assert.equal(importerWorkbenchSource.includes('Простой импорт'), true)
   assert.equal(importerWorkbenchSource.includes('Расширенный импорт'), true)
   assert.equal(importerWorkbenchSource.includes('buildImportModeOptions'), true)
+})
+
+test('importer workbench keeps simple mode isolated from advanced alias rules while preserving session mapping', () => {
+  assert.equal(importerWorkbenchSource.includes('const sessionSavedMapping = computed(() => ('), true)
+  assert.equal(importerWorkbenchSource.includes('const effectiveSavedMapping = computed(() => sessionSavedMapping.value)'), true)
+  assert.equal(importerWorkbenchSource.includes('preferSavedMapping: Object.keys(sessionSavedMapping.value).length > 0'), true)
+  assert.equal(importerWorkbenchSource.includes('savedMapping: sessionSavedMapping.value'), true)
+})
+
+test('importer workbench requests mapping data without advanced alias rules in simple mode', () => {
+  assert.equal(importerWorkbenchSource.includes('apiStore.getImportMapping(String(session.value.id), importModeMeta.value.value)'), true)
+  assert.match(
+    importerWorkbenchSource,
+    /apiStore\.getImportAliasRules\(\s*entityType\.value,\s*selectedSmartProcessConfig\.value,\s*importModeMeta\.value\.value,\s*\)/,
+  )
+  assert.equal(apiStoreSource.includes("searchParams.set('import_mode', importMode)"), true)
 })
 
 test('importer workbench uses primary blue style for all back navigation buttons', () => {

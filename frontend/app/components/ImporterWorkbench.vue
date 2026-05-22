@@ -18,6 +18,7 @@ import {
   buildDryRunSummaryFromSessionSnapshot,
   buildImportRunProblemGroups,
   buildImportRunRows,
+  buildImportRunCompletionNotice,
   buildImportRunSummaryFromSessionSnapshot,
   buildLinkedImportRunSummary,
   buildLinkedImportEntityGroups,
@@ -533,7 +534,7 @@ const isDirectCrmEntityImport = computed(() => ['lead', 'contact', 'company', 'd
 const DEDUP_NONAPPLICABLE_TYPES = new Set([
   'task', 'task_comment', 'task_checklist_item', 'task_attachment',
   'crm_files_lead', 'crm_files_contact', 'crm_files_company', 'crm_files_deal',
-  'crm_activity', 'crm_note',
+  'crm_activity', 'crm_note', 'department', 'user',
 ])
 const isDedupApplicable = computed(() => !DEDUP_NONAPPLICABLE_TYPES.has(entityType.value))
 const linkedDedupEntityGroups = computed(() => buildLinkedImportEntityGroups(entityType.value))
@@ -622,9 +623,15 @@ const previewTotalRows = computed(() => Number(preview.value?.total_rows || sess
 const previewMaxImportRows = computed(() => Number(preview.value?.max_import_rows || 0))
 const previewRowLimitExceeded = computed(() => Boolean(preview.value?.row_limit_exceeded))
 const previewRowLimitError = computed(() => String(preview.value?.row_limit_error || '').trim())
-const mappingSavedCount = computed(() => (
+const sessionSavedMapping = computed(() => (
   mappingData.value?.saved_mapping && typeof mappingData.value.saved_mapping === 'object'
-    ? Object.keys(mappingData.value.saved_mapping).length
+    ? mappingData.value.saved_mapping
+    : {}
+))
+const effectiveSavedMapping = computed(() => sessionSavedMapping.value)
+const mappingSavedCount = computed(() => (
+  sessionSavedMapping.value && typeof sessionSavedMapping.value === 'object'
+    ? Object.keys(sessionSavedMapping.value).length
     : 0
 ))
 const requiredFieldSummary = computed(() => buildRequiredFieldSummary({
@@ -1125,7 +1132,7 @@ function normalizeTaskDefaultsForCompare(taskDefaults: Record<string, any> | nul
 }
 
 const currentMappingPayload = computed(() => normalizeMappingPayloadForCompare(buildMappingPayload(mappingRows.value)))
-const savedMappingPayload = computed(() => normalizeMappingPayloadForCompare(mappingData.value?.saved_mapping))
+const savedMappingPayload = computed(() => normalizeMappingPayloadForCompare(sessionSavedMapping.value))
 const currentTaskDefaultsPayload = computed(() => normalizeTaskDefaultsForCompare({
   default_responsible_id: taskDefaultResponsibleId.value,
   default_creator_id: taskDefaultCreatorId.value,
@@ -1490,7 +1497,7 @@ const valueMappingRows = computed<ValueMappingRow[]>(() => buildValueMappingRows
   observedValues: mappingData.value?.observed_values,
   mappingRows: mappingRows.value,
   fields: mappingData.value?.fields,
-  savedMapping: mappingData.value?.saved_mapping,
+  savedMapping: sessionSavedMapping.value,
 }))
 const valueMappingStatus = computed(() => buildValueMappingStatus(valueMappingRows.value))
 const valueMappingExpanded = ref(false)
@@ -1992,7 +1999,8 @@ function syncMappingRows() {
     fields: mappingData.value.fields,
     candidateMapping: mappingData.value.candidate_mapping,
     candidateSuggestions: mappingData.value.candidate_suggestions,
-    savedMapping: mappingData.value.saved_mapping,
+    savedMapping: sessionSavedMapping.value,
+    preferSavedMapping: Object.keys(sessionSavedMapping.value).length > 0,
   })
   importAliasRules.value = Array.isArray(mappingData.value.alias_rules) ? mappingData.value.alias_rules : []
   taskDefaultResponsibleId.value = String(mappingData.value?.task_defaults?.default_responsible_id || '')
@@ -3024,7 +3032,7 @@ async function refreshMapping() {
     return
   }
 
-  const response = await apiStore.getImportMapping(String(session.value.id))
+  const response = await apiStore.getImportMapping(String(session.value.id), importModeMeta.value.value)
   mappingData.value = response.item
   validationData.value = null
   dryRunData.value = null
@@ -3061,7 +3069,11 @@ async function refreshAliasRules() {
     return
   }
 
-  const response = await apiStore.getImportAliasRules(entityType.value, selectedSmartProcessConfig.value)
+  const response = await apiStore.getImportAliasRules(
+    entityType.value,
+    selectedSmartProcessConfig.value,
+    importModeMeta.value.value,
+  )
   importAliasRules.value = Array.isArray(response.items) ? response.items : []
 }
 
@@ -3430,6 +3442,9 @@ async function saveMapping() {
         ? `Соответствие полей сохранено. Осталось сопоставить значений: ${Number(response.item?.unmapped_value_count || 0)}.`
         : 'Соответствие полей сохранено.',
     )
+    if (!isDedupApplicable.value) {
+      currentStep.value = 5
+    }
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -3730,15 +3745,12 @@ async function executeImportRunRequest() {
     importRunData.value = queuedImportRun
     currentStep.value = 7
     importExecutionStage.value = 'idle'
-    setSuccess(
-      queuedImportRun?.status === 'running'
-        ? `Импорт продолжает выполняться в фоне. Уже обработано ${Number(queuedImportRun?.checked_rows || 0).toLocaleString('ru-RU')} строк.`
-        : queuedImportRun?.status === 'cancelled'
-        ? `Импорт остановлен. Не запущено строк: ${Number(queuedImportRun?.remaining_rows || 0)}.`
-        : importRunFailedRows.value > 0
-        ? 'Импорт завершен. Часть строк требует внимания.'
-        : 'Импорт завершен. Все строки обработаны.',
-    )
+    const completionNotice = buildImportRunCompletionNotice(queuedImportRun, { mode: 'run' })
+    if (completionNotice.type === 'error') {
+      setError(completionNotice.message)
+    } else {
+      setSuccess(completionNotice.message)
+    }
   } catch (error) {
     importExecutionStage.value = 'idle'
     setError(error instanceof Error ? error.message : String(error))
@@ -3859,13 +3871,12 @@ async function retryFailedRows() {
     const queuedImportRun = await resolveImportExecutionResult(String(session.value.id), response.item)
     importRunData.value = queuedImportRun
     currentStep.value = 7
-    setSuccess(
-      queuedImportRun?.status === 'cancelled'
-        ? `Повтор остановлен. Не запущено строк: ${Number(queuedImportRun?.remaining_rows || 0)}.`
-        : Number(queuedImportRun?.failed_rows || 0) > 0
-        ? `Повтор выполнен. Осталось неуспешных строк: ${Number(queuedImportRun?.failed_rows || 0)}.`
-        : `Повтор выполнен. Обработано строк: ${Number(queuedImportRun?.retried_rows || 0)}.`,
-    )
+    const completionNotice = buildImportRunCompletionNotice(queuedImportRun, { mode: 'retry' })
+    if (completionNotice.type === 'error') {
+      setError(completionNotice.message)
+    } else {
+      setSuccess(completionNotice.message)
+    }
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -4041,9 +4052,7 @@ function resolveRestoredCurrentStep(snapshot: Record<string, any> | null | undef
     return 6
   }
 
-  const savedMapping = mappingData.value?.saved_mapping && typeof mappingData.value.saved_mapping === 'object'
-    ? mappingData.value.saved_mapping
-    : {}
+  const savedMapping = sessionSavedMapping.value
 
   if (mappingData.value && Object.keys(savedMapping).length > 0) {
     return 5
@@ -6873,6 +6882,18 @@ onUnmounted(() => {
                     <div class="mt-1 text-xs opacity-80">{{ phase.description }}</div>
                   </div>
                 </div>
+                <div
+                  v-if="showsSessionProgress && session?.summary?.import_progress?.pause_info"
+                  class="mt-3 flex items-start gap-3 rounded-[12px] border border-[#ffe9b0] bg-[#fffbef] px-4 py-3 text-sm text-[#8a6a00]"
+                >
+                  <span class="mt-0.5 text-base">⏸</span>
+                  <div>
+                    <div class="font-semibold">Пауза: ожидаем сброса лимита Bitrix24</div>
+                    <div class="mt-0.5 text-[#b38a00]">
+                      Импорт автоматически продолжится через ~{{ session.summary.import_progress.pause_info.wait_seconds }} сек.
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div class="mb-4 flex flex-wrap items-center gap-3">
@@ -6911,7 +6932,7 @@ onUnmounted(() => {
               </div>
 
               <div
-                v-if="importExecutionStage === 'duplicate-decisions' && requiresPerRowDedupDecision && dryRunData && pendingDecisionRows.length"
+                v-if="importExecutionStage === 'duplicate-decisions' && requiresPerRowDedupDecision && dryRunData && pendingDecisionRows.length && !busyAction"
                 class="mb-4 rounded-[20px] border border-[#dce7f7] bg-white p-4"
               >
                 <div class="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -7342,6 +7363,15 @@ onUnmounted(() => {
                     @click="goBack"
                   />
                   <B24Button
+                    v-if="busyAction === 'run' || busyAction === 'retry' || cancelRequested"
+                    label="Остановить импорт"
+                    color="air-tertiary"
+                    size="lg"
+                    :loading="cancelRequested"
+                    :disabled="!canCancelActiveImport"
+                    @click="cancelActiveImport"
+                  />
+                  <B24Button
                     v-if="!busyAction"
                     label="Завершить"
                     color="air-secondary"
@@ -7349,6 +7379,7 @@ onUnmounted(() => {
                     @click="finishToEntitySelection"
                   />
                   <div
+                    v-if="!busyAction || (busyAction !== 'run' && busyAction !== 'retry')"
                     class="rounded-full px-4 py-2 text-sm font-semibold"
                     :class="importRunFailedRows > 0 ? 'border border-[#ffe1c7] bg-[#fff7ef] text-[#c77d2b]' : 'border border-[#d7e7ff] bg-[#f4f9ff] text-[#2e6bd9]'"
                   >
@@ -7382,6 +7413,47 @@ onUnmounted(() => {
             </section>
 
             <section
+              v-if="busyAction === 'run'"
+              class="rounded-[24px] border border-[#d7e7ff] bg-[#f4f9ff] p-5"
+            >
+              <div class="mb-4 flex items-center gap-3">
+                <div class="h-5 w-5 animate-spin rounded-full border-2 border-[#b8d4f8] border-t-[#2e6bd9]" />
+                <div class="text-base font-semibold text-[#2e6bd9]">
+                  Импорт в процессе…
+                </div>
+              </div>
+              <div class="mb-2 flex items-center justify-between text-sm">
+                <span class="text-[#5f7285]">Прогресс</span>
+                <span class="font-medium text-[#314256]">
+                  {{ session?.processed_rows ?? 0 }} из {{ session?.total_rows || '…' }} строк
+                </span>
+              </div>
+              <div class="mb-4 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
+                <div
+                  class="h-2 rounded-full bg-[#2e6bd9] transition-all duration-500"
+                  :style="{ width: sessionProgressPercent + '%' }"
+                />
+              </div>
+              <div class="flex flex-wrap gap-5 text-sm text-[#5f7285]">
+                <span>Обработано: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
+                <span>Успешно: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
+                <span>Ошибки: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
+              </div>
+              <div
+                v-if="session?.summary?.import_progress?.pause_info"
+                class="mt-4 flex items-start gap-3 rounded-[12px] border border-[#ffe9b0] bg-[#fffbef] px-4 py-3 text-sm text-[#8a6a00]"
+              >
+                <span class="mt-0.5 text-base">⏸</span>
+                <div>
+                  <div class="font-semibold">Пауза: ожидаем сброса лимита Bitrix24</div>
+                  <div class="mt-0.5 text-[#b38a00]">
+                    Импорт автоматически продолжится через ~{{ session.summary.import_progress.pause_info.wait_seconds }} сек.
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section
               v-if="busyAction === 'retry'"
               class="rounded-[24px] border border-[#d7e7ff] bg-[#f4f9ff] p-5"
             >
@@ -7407,6 +7479,18 @@ onUnmounted(() => {
                 <span>Обработано: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
                 <span>Успешно: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
                 <span>Ошибки: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
+              </div>
+              <div
+                v-if="session?.summary?.import_progress?.pause_info"
+                class="mt-4 flex items-start gap-3 rounded-[12px] border border-[#ffe9b0] bg-[#fffbef] px-4 py-3 text-sm text-[#8a6a00]"
+              >
+                <span class="mt-0.5 text-base">⏸</span>
+                <div>
+                  <div class="font-semibold">Пауза: ожидаем сброса лимита Bitrix24</div>
+                  <div class="mt-0.5 text-[#b38a00]">
+                    Импорт автоматически продолжится через ~{{ session.summary.import_progress.pause_info.wait_seconds }} сек.
+                  </div>
+                </div>
               </div>
             </section>
 
