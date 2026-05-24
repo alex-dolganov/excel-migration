@@ -291,6 +291,18 @@ test('builds scenario selection summary for task import with responsible field i
   })
 })
 
+test('builds scenario selection summary for task attachment bulk mode', () => {
+  assert.deepEqual(buildScenarioSelectionSummary('task_attachment'), {
+    family: 'task',
+    familyLabel: 'Импорт в задачи',
+    selectedLabel: 'Вложения задач',
+    title: 'Массовые вложения в задачи',
+    description: 'Один файл прикрепляется ко всем найденным задачам по выбранному фильтру.',
+    minimumFields: ['Фильтр задач', 'Файл-вложение'],
+    destinationLabel: 'Находит задачи по фильтру и прикрепляет к каждой выбранный файл.',
+  })
+})
+
 test('builds example template download meta for deal and task attachment', () => {
   assert.deepEqual(buildExampleTemplateDownloadMeta('deal'), {
     title: 'Шаблон для «Сделки»',
@@ -299,8 +311,8 @@ test('builds example template download meta for deal and task attachment', () =>
   })
 
   assert.deepEqual(buildExampleTemplateDownloadMeta('task_attachment'), {
-    title: 'Шаблон для «Вложения задач»',
-    description: 'Скачайте пример Excel с заголовками и одной тестовой строкой под выбранный импорт.',
+    title: 'Файл для «Вложения задач»',
+    description: 'В этом режиме Excel-шаблон не нужен: настройте фильтр задач и загрузите один файл-вложение.',
     filename: 'task_attachment-import-example.xlsx',
   })
 
@@ -2453,6 +2465,39 @@ test('builds import run summary from top-level session counters when import_run 
   })
 })
 
+test('builds cancelled import run summary from top-level session counters when import_run is absent', () => {
+  assert.deepEqual(buildImportRunSummaryFromSessionSnapshot({
+    id: 'session-contacts-3',
+    status: 'cancelled',
+    total_rows: 900,
+    processed_rows: 120,
+    successful_rows: 118,
+    failed_rows: 2,
+    summary: {
+      job: {
+        mode: 'run',
+        state: 'cancelled',
+      },
+    },
+  }), {
+    session_id: 'session-contacts-3',
+    status: 'cancelled',
+    retried_rows: 0,
+    retry_result: null,
+    checked_rows: 120,
+    created_rows: 118,
+    updated_rows: 0,
+    failed_rows: 2,
+    skipped_rows: 0,
+    cancelled: true,
+    cancelled_rows: 780,
+    remaining_rows: 780,
+    created_ids: [],
+    updated_ids: [],
+    results: [],
+  })
+})
+
 test('builds dry run summary from session snapshot when background dry run completes', () => {
   assert.deepEqual(buildDryRunSummaryFromSessionSnapshot({
     id: 'session-dry-run-1',
@@ -2534,6 +2579,35 @@ test('keeps waiting for queued import snapshot while status is still running eve
     failed_rows: 0,
     summary: {},
   }), false)
+
+  assert.equal(shouldWaitForImportExecutionSnapshot({
+    id: 'session-validated-1',
+    status: 'validated',
+    processed_rows: 902,
+    successful_rows: 902,
+    failed_rows: 0,
+    summary: {
+      job: {
+        mode: 'preimport_scan',
+        state: 'completed',
+      },
+      preimport_scan: {
+        checked_rows: 902,
+        ready_rows: 902,
+      },
+    },
+  }), false)
+
+  assert.equal(shouldWaitForImportExecutionSnapshot({
+    id: 'session-queued-1',
+    status: 'validated',
+    summary: {
+      job: {
+        mode: 'run',
+        state: 'queued',
+      },
+    },
+  }), true)
 })
 
 test('keeps waiting for queued dry run snapshot while background check is active', () => {
@@ -2748,6 +2822,17 @@ test('step 1 no longer renders inline history block, history is on a dedicated p
   )
 })
 
+test('step 1 mode selection screen uses the new return label and hr card no longer mentions roles', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.equal(importerWorkbenchSource.includes('Выбрать режим'), true)
+  assert.equal(importerWorkbenchSource.includes('Расширенный режим'), false)
+  assert.equal(importerWorkbenchSource.includes('>Роли<'), false)
+})
+
 test('builds compact migration status badge state for the sidebar card', () => {
   assert.deepEqual(buildMigrationStatusBadge({}), {
     label: 'Ожидает запуска',
@@ -2815,6 +2900,25 @@ test('builds permission-aware importer access state for operator and viewer', ()
     canCancelSessions: false,
     canViewReports: true,
     isReadOnly: true,
+  })
+
+  assert.deepEqual(buildImporterPermissionState({
+    role: 'none',
+    permissions: [],
+    isPortalAdmin: false,
+  }), {
+    role: 'none',
+    isPortalAdmin: false,
+    permissions: [],
+    canManageRoles: false,
+    canManageTemplates: false,
+    canCreateSessions: false,
+    canEditSessions: false,
+    canViewSessions: false,
+    canRunSessions: false,
+    canCancelSessions: false,
+    canViewReports: false,
+    isReadOnly: false,
   })
 })
 
@@ -3100,15 +3204,15 @@ test('step 1 no longer renders task-only sidebar minimum or family badge', () =>
   assert.equal(importerWorkbenchSource.includes('v-if="currentScenarioSummary.family === \'task\'"'), false)
 })
 
-test('importer workbench no longer renders access warning alert', () => {
+test('importer workbench renders explicit no-access state for users without importer role', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
     'utf8',
   )
 
-  assert.equal(importerWorkbenchSource.includes('Нет назначенной роли для работы с импортом.'), false)
-  assert.equal(importerWorkbenchSource.includes('title="Права доступа"'), false)
-  assert.equal(importerWorkbenchSource.includes('const importerAccessMessage = computed(() => {'), false)
+  assert.equal(importerWorkbenchSource.includes("const hasNoImporterAccess = computed(() =>"), true)
+  assert.equal(importerWorkbenchSource.includes('Нет назначенной роли для работы с импортом.'), true)
+  assert.equal(importerWorkbenchSource.includes('Обратитесь к администратору портала'), true)
 })
 
 test('importer workbench renders dedup warning banner on preview and result steps', () => {
@@ -3362,6 +3466,32 @@ test('waitForDryRunExecutionResult avoids duplicate jobMode declarations in the 
   const functionSource = importerWorkbenchSource.slice(functionStart, functionEnd)
 
   assert.equal((functionSource.match(/const jobMode =/g) || []).length, 2)
+})
+
+test('waitForImportExecutionResult handles cancelled sessions without requiring history reopen', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const functionStart = importerWorkbenchSource.indexOf('async function waitForImportExecutionResult(sessionId: string)')
+  const functionEnd = importerWorkbenchSource.indexOf('async function resolveDryRunExecutionResult(', functionStart)
+  const functionSource = importerWorkbenchSource.slice(functionStart, functionEnd)
+
+  assert.equal(functionSource.includes("if (currentStatus === 'cancelled')"), true)
+  assert.equal(functionSource.includes('buildCancelledImportRunSummary(snapshot)'), true)
+})
+
+test('cancelActiveImport refreshes stale session state instead of surfacing raw 400 errors', () => {
+  const importerWorkbenchSource = readFileSync(
+    new URL('../app/components/ImporterWorkbench.vue', import.meta.url),
+    'utf8',
+  )
+  const functionStart = importerWorkbenchSource.indexOf('async function cancelActiveImport()')
+  const functionEnd = importerWorkbenchSource.indexOf('async function downloadImportReport()', functionStart)
+  const functionSource = importerWorkbenchSource.slice(functionStart, functionEnd)
+
+  assert.equal(functionSource.includes('await apiStore.getImportSession(String(session.value.id))'), true)
+  assert.equal(functionSource.includes("Импорт уже завершён или остановлен. Остановка больше не требуется."), true)
 })
 
 test('step 5 only configures duplicate settings and step 6 owns the single full test run', () => {

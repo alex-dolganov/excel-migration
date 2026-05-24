@@ -194,8 +194,33 @@ const emit = defineEmits<{ 'back-to-landing': [] }>()
 
 const apiStore = useApiStore()
 const userStore = useUserStore()
-const MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
-const MAX_IMPORT_FILE_SIZE_LABEL = '50 МБ'
+const runtimeConfig = useRuntimeConfig()
+const DEFAULT_MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
+
+function normalizeImportFileSizeBytes(value: unknown) {
+  const normalized = Number(value)
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    return DEFAULT_MAX_IMPORT_FILE_SIZE_BYTES
+  }
+
+  return Math.floor(normalized)
+}
+
+function formatImportFileSizeLabel(sizeInBytes: number) {
+  const sizeInMegabytes = sizeInBytes / (1024 * 1024)
+  if (Number.isInteger(sizeInMegabytes)) {
+    return `${sizeInMegabytes} МБ`
+  }
+
+  return `${sizeInMegabytes.toFixed(1)} МБ`
+}
+
+const MAX_IMPORT_FILE_SIZE_BYTES = normalizeImportFileSizeBytes(runtimeConfig.public.importMaxFileSizeBytes)
+const MAX_IMPORT_FILE_SIZE_LABEL = formatImportFileSizeLabel(MAX_IMPORT_FILE_SIZE_BYTES)
+const IMPORT_FILE_PICKER_HELPER_TEXT = `Поддерживаются форматы Excel и CSV, размер файла до ${MAX_IMPORT_FILE_SIZE_LABEL}`
+const IMPORT_FILE_DROPDOWN_LIMIT_TEXT = `XLSX, XLS, CSV · до ${MAX_IMPORT_FILE_SIZE_LABEL}`
+const BULK_ATTACH_FILE_PICKER_HELPER_TEXT = `Загрузите один файл любого формата, размер файла до ${MAX_IMPORT_FILE_SIZE_LABEL}`
+const BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT = `Любой файл · до ${MAX_IMPORT_FILE_SIZE_LABEL}`
 const PER_ROW_DEDUP_DECISION_VALUES = new Set(['create', 'update', 'skip'])
 const DRY_RUN_RESULTS_PAGE_SIZE = 20
 const COLLAPSIBLE_TEXT_LIMIT = 220
@@ -505,6 +530,11 @@ const importerPermissionState = computed(() => buildImporterPermissionState({
   permissions: userStore.importerPermissions,
   isPortalAdmin: userStore.importerIsPortalAdmin,
 }))
+const hasNoImporterAccess = computed(() => (
+  importerPermissionState.value.role === 'none'
+  && importerPermissionState.value.permissions.length === 0
+  && !importerPermissionState.value.isPortalAdmin
+))
 
 const historyRows = computed(() => buildSessionHistoryRows(recentSessions.value))
 const fileName = computed(() => selectedFile.value?.name || String(session.value?.original_filename || ''))
@@ -527,7 +557,15 @@ const fileAttachCrmEntityItems = computed(() =>
   Object.values(FILE_ATTACH_IMPORT_SCENARIOS).map((s) => ({ value: s.value, label: s.entityLabel })),
 )
 const isFileAttachMode = computed(() => String(entityType.value || '').startsWith('crm_files_'))
-const selectedBulkAttachEntityType = computed(() => String(selectedFileAttachEntityType.value || '').replace(/^crm_files_/, ''))
+const isTaskBulkAttachFlow = computed(() => (
+  selectedFamily.value === 'task'
+  && entityType.value === 'task_attachment'
+))
+const selectedBulkAttachEntityType = computed(() => (
+  isTaskBulkAttachFlow.value
+    ? 'task'
+    : String(selectedFileAttachEntityType.value || '').replace(/^crm_files_/, '')
+))
 const currentScenarioSummary = computed(() => buildScenarioSelectionSummary(entityType.value))
 const isTaskEntityImport = computed(() => entityType.value === 'task')
 const isDirectCrmEntityImport = computed(() => ['lead', 'contact', 'company', 'deal'].includes(entityType.value))
@@ -760,8 +798,16 @@ const canStart = computed(() => (
 const canDownloadExampleTemplate = computed(() => (
   importerPermissionState.value.canCreateSessions
   && Boolean(entityType.value)
+  && entityType.value !== 'task_attachment'
   && (entityType.value !== 'smart_process' || Boolean(selectedSmartProcessConfig.value?.entityTypeId))
   && !busyAction.value
+))
+const isSpreadsheetUploadRequired = computed(() => !isBulkAttachFlow.value)
+const currentFilePickerHelperText = computed(() => (
+  isBulkAttachFlow.value ? BULK_ATTACH_FILE_PICKER_HELPER_TEXT : IMPORT_FILE_PICKER_HELPER_TEXT
+))
+const currentFileDropdownLimitText = computed(() => (
+  isBulkAttachFlow.value ? BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT : IMPORT_FILE_DROPDOWN_LIMIT_TEXT
 ))
 const canApplyStructure = computed(() => (
   importerPermissionState.value.canEditSessions
@@ -981,8 +1027,8 @@ const currentStepMeta = computed(() => {
   return items[currentStep.value] || items[1]
 })
 const isBulkAttachFlow = computed(() => (
-  selectedFamily.value === 'crm'
-  && crmFlavor.value === 'bulk'
+  (selectedFamily.value === 'crm' && crmFlavor.value === 'bulk')
+  || isTaskBulkAttachFlow.value
 ))
 const bulkFlowStep = computed<BulkFlowStep>(() => {
   if (showBulkAttachExecutionState.value) return 'execution'
@@ -994,17 +1040,23 @@ const bulkFlowStepMeta = computed(() => {
     setup: {
       eyebrow: 'Шаг 1 · Назначение',
       title: 'Назначение',
-      description: 'Выберите CRM-сущность, поле для файлов и настройте фильтр отбора.',
+      description: isTaskBulkAttachFlow.value
+        ? 'Настройте фильтр задач и подготовьте один файл-вложение.'
+        : 'Выберите CRM-сущность, поле для файлов и настройте фильтр отбора.',
     },
     review: {
       eyebrow: 'Шаг 2 · Файл и выборка',
       title: 'Файл и выборка',
-      description: 'Загрузите файл, проверьте найденные записи и подготовьте массовую загрузку.',
+      description: isTaskBulkAttachFlow.value
+        ? 'Проверьте найденные задачи и подготовьте массовое добавление вложения.'
+        : 'Загрузите файл, проверьте найденные записи и подготовьте массовую загрузку.',
     },
     execution: {
       eyebrow: 'Шаг 3 · Загрузка',
-      title: 'Загрузка файлов',
-      description: 'Следите за прогрессом загрузки, при необходимости остановите импорт и завершите сценарий.',
+      title: isTaskBulkAttachFlow.value ? 'Загрузка вложений' : 'Загрузка файлов',
+      description: isTaskBulkAttachFlow.value
+        ? 'Следите за прогрессом прикрепления файла к найденным задачам.'
+        : 'Следите за прогрессом загрузки, при необходимости остановите импорт и завершите сценарий.',
     },
   }
 
@@ -1253,16 +1305,20 @@ const visibleSteps = computed(() => (
     : importSteps.value
 ))
 const selectedBulkFileFieldLabel = computed(() => (
-  bulkFileFields.value.find((field) => field.value === selectedBulkFileField.value)?.label
-  || String(selectedBulkFileField.value || '').trim()
-  || 'Не выбрано'
+  isTaskBulkAttachFlow.value
+    ? 'Вложение задачи'
+    : (
+      bulkFileFields.value.find((field) => field.value === selectedBulkFileField.value)?.label
+      || String(selectedBulkFileField.value || '').trim()
+      || 'Не выбрано'
+    )
 ))
 const sidebarFacts = computed(() => {
   if (isBulkAttachFlow.value && currentStep.value === 1) {
     const selectedRowsTotal = bulkFilterPreview.value?.total || bulkAttachProgressTotal.value || 0
     return [
-      { label: 'CRM-сущность', value: currentScenarioSummary.value.selectedLabel },
-      { label: 'Поле файла', value: selectedBulkFileFieldLabel.value },
+      { label: isTaskBulkAttachFlow.value ? 'Сценарий' : 'CRM-сущность', value: currentScenarioSummary.value.selectedLabel },
+      ...(isTaskBulkAttachFlow.value ? [] : [{ label: 'Поле файла', value: selectedBulkFileFieldLabel.value }]),
       { label: 'Файл', value: fileName.value || 'Не выбран' },
       { label: 'Записей', value: selectedRowsTotal ? String(selectedRowsTotal) : '—' },
     ]
@@ -1340,12 +1396,13 @@ const headerNotice = computed(() => {
   return null
 })
 const isBulkFilePickerReady = computed(() => (
-  crmFlavor.value !== 'bulk'
+  !isBulkAttachFlow.value
+  || isTaskBulkAttachFlow.value
   || (Boolean(String(selectedFileAttachEntityType.value || '').trim()) && Boolean(String(selectedBulkFileField.value || '').trim()))
 ))
 const bulkAttachSessionStatusNormalized = computed(() => String(bulkAttachSessionStatus.value || '').trim().toLowerCase())
 const isBulkAttachExecutionLocked = computed(() => (
-  crmFlavor.value === 'bulk'
+  isBulkAttachFlow.value
   && (
     busyAction.value === 'bulk-attach-run'
     || busyAction.value === 'bulk-attach-cancel'
@@ -1379,6 +1436,9 @@ const bulkAttachActionLabel = computed(() => {
   if (normalizedStatus === 'cancelled') return 'Запустить заново'
   return 'Начать загрузку'
 })
+const bulkPreviewActionLabel = computed(() => (
+  isTaskBulkAttachFlow.value ? 'Показать задачи →' : 'Далее →'
+))
 const isBulkAttachActionDisabled = computed(() => {
   if (
     busyAction.value === 'bulk-attach-run'
@@ -1391,10 +1451,9 @@ const isBulkAttachActionDisabled = computed(() => {
 
   if (
     !bulkFilterPreview.value
-    || !selectedFileAttachEntityType.value
-    || !selectedBulkFileField.value
+    || !selectedBulkAttachEntityType.value
+    || (!isTaskBulkAttachFlow.value && !selectedBulkFileField.value)
     || !selectedFile.value
-    || !sourceFormat.value
   ) {
     return true
   }
@@ -1897,6 +1956,28 @@ async function loadBulkAttachEntityFields(entityType: string) {
 
   loadingBulkFileFields.value = true
   try {
+    if (normalizedValue === 'task_attachment') {
+      const response = await apiStore.getImportFields('task')
+      const rawItems = Array.isArray(response.items) ? response.items : []
+      bulkFileFields.value = []
+      bulkEntityFields.value = rawItems
+        .map((item: any) => ({
+          id: String(item?.id || '').trim(),
+          title: String(item?.title || item?.id || '').trim(),
+          type: String(item?.type || '').trim(),
+          items: Array.isArray(item?.items)
+            ? item.items
+              .map((option: any) => ({
+                value: String(option?.id ?? option?.value ?? '').trim(),
+                label: String(option?.title ?? option?.label ?? option?.id ?? option?.value ?? '').trim(),
+              }))
+              .filter((option: { value: string, label: string }) => option.value && option.label)
+            : [],
+        }))
+        .filter((field: { id: string, title: string }) => field.id && field.title)
+      return
+    }
+
     const [fileResult, allResult] = await Promise.all([
       apiStore.fetchCrmFileFields(normalizedValue),
       apiStore.fetchCrmEntityFields(normalizedValue),
@@ -2297,6 +2378,44 @@ watch(selectedFileAttachEntityType, async (value) => {
   await loadBulkAttachEntityFields(value)
 })
 
+watch(selectedTaskEntityType, async (value, previousValue) => {
+  if (isRestoringImporterSession.value) {
+    return
+  }
+
+  const normalizedValue = String(value || '').trim()
+  const normalizedPreviousValue = String(previousValue || '').trim()
+  if (normalizedValue === normalizedPreviousValue) {
+    return
+  }
+
+  if (normalizedValue === 'task_attachment') {
+    selectedBulkFileField.value = ''
+    bulkFileFields.value = []
+    bulkEntityFields.value = []
+    bulkFilterPreview.value = null
+    bulkFilterConditions.value = []
+    resetBulkAttachExecutionState()
+    clearSelectedFile()
+    isAddingBulkFilterField.value = false
+    pendingBulkFilterFieldId.value = ''
+    await loadBulkAttachEntityFields('task_attachment')
+    return
+  }
+
+  if (normalizedPreviousValue === 'task_attachment') {
+    selectedBulkFileField.value = ''
+    bulkFileFields.value = []
+    bulkEntityFields.value = []
+    bulkFilterPreview.value = null
+    bulkFilterConditions.value = []
+    resetBulkAttachExecutionState()
+    clearSelectedFile()
+    isAddingBulkFilterField.value = false
+    pendingBulkFilterFieldId.value = ''
+  }
+})
+
 watch(selectedBulkFileField, (value, previousValue) => {
   if (String(value || '').trim() === String(previousValue || '').trim()) {
     return
@@ -2537,8 +2656,8 @@ function selectFamily(family: string) {
 }
 
 async function runBulkFilterPreview() {
-  if (!selectedFileAttachEntityType.value) return
-  const plainType = selectedFileAttachEntityType.value.replace(/^crm_files_/, '')
+  const plainType = String(selectedBulkAttachEntityType.value || '').trim()
+  if (!plainType) return
   const filter = buildBulkFilterPayload()
   loadingBulkFilterPreview.value = true
   resetBulkAttachExecutionState()
@@ -2917,20 +3036,22 @@ function selectBulkFileAttachEntityType(value: string) {
 function startBulkAttachSetup() {
   resetMessages()
 
-  const normalizedEntityType = String(selectedFileAttachEntityType.value || '').trim()
+  const normalizedEntityType = String(selectedBulkAttachEntityType.value || '').trim()
   const normalizedFieldId = String(selectedBulkFileField.value || '').trim()
 
   if (!normalizedEntityType) {
-    setError('Выберите CRM-сущность для массового добавления файлов.')
+    setError(isTaskBulkAttachFlow.value
+      ? 'Выберите сценарий «Вложения задач».'
+      : 'Выберите CRM-сущность для массового добавления файлов.')
     return
   }
 
-  if (!normalizedFieldId) {
+  if (!isTaskBulkAttachFlow.value && !normalizedFieldId) {
     setError('Выберите поле типа «Файл», куда нужно прикреплять вложение.')
     return
   }
 
-  if (!selectedFile.value || !sourceFormat.value) {
+  if (!selectedFile.value) {
     setError('Выберите файл для массового добавления.')
     return
   }
@@ -2955,7 +3076,7 @@ function startBulkAttachSetup() {
         filter,
         file_id: String(uploadResponse.file_id || '').trim(),
         file_name: String(uploadResponse.file_name || selectedFile.value?.name || '').trim(),
-        field_id: normalizedFieldId,
+        ...(isTaskBulkAttachFlow.value ? {} : { field_id: normalizedFieldId }),
       })
 
       const sessionId = String(created.item?.id || '').trim()
@@ -3081,7 +3202,7 @@ function openFilePicker() {
   if (
     !importerPermissionState.value.canCreateSessions
     || busyAction.value
-    || (crmFlavor.value === 'bulk' && isBulkFilePickerLocked.value)
+    || (isBulkAttachFlow.value && isBulkFilePickerLocked.value)
   ) {
     return
   }
@@ -3099,7 +3220,7 @@ function handleFileChange(event: Event) {
   importExecutionStage.value = 'idle'
 
   const nextFile = target.files?.[0] || null
-  if (nextFile && !detectSourceFormat(nextFile.name)) {
+  if (nextFile && isSpreadsheetUploadRequired.value && !detectSourceFormat(nextFile.name)) {
     selectedFile.value = null
     target.value = ''
     setError('Неподдерживаемый формат файла. Загрузите файл в формате .xlsx, .xls или .csv.')
@@ -3120,7 +3241,7 @@ function handleDropFile(event: DragEvent) {
   if (
     !importerPermissionState.value.canCreateSessions
     || busyAction.value
-    || (crmFlavor.value === 'bulk' && isBulkFilePickerLocked.value)
+    || (isBulkAttachFlow.value && isBulkFilePickerLocked.value)
   ) return
   const file = event.dataTransfer?.files?.[0] || null
   if (!file) return
@@ -3130,7 +3251,7 @@ function handleDropFile(event: DragEvent) {
   preimportScanData.value = null
   importRunData.value = null
   importExecutionStage.value = 'idle'
-  if (!detectSourceFormat(file.name)) {
+  if (isSpreadsheetUploadRequired.value && !detectSourceFormat(file.name)) {
     setError('Неподдерживаемый формат файла. Загрузите файл в формате .xlsx, .xls или .csv.')
     return
   }
@@ -3197,6 +3318,7 @@ async function startImporterSetup() {
       entity_type: entityType.value,
       source_format: sourceFormat.value,
       original_filename: selectedFile.value.name,
+      import_mode: importModeMeta.value.value,
       ...(selectedSmartProcessConfig.value ? { entity_config: selectedSmartProcessConfig.value } : {}),
     })
     session.value = createResponse.item
@@ -3424,6 +3546,7 @@ async function saveMapping() {
       String(session.value.id),
       buildMappingPayload(mappingRows.value),
       currentDedupSettingsPayload.value,
+      importModeMeta.value.value,
       {
         default_responsible_id: taskDefaultResponsibleId.value,
         default_creator_id: taskDefaultCreatorId.value,
@@ -3494,6 +3617,7 @@ async function persistDedupSettings() {
     String(session.value.id),
     buildMappingPayload(mappingRows.value),
     currentDedupSettingsPayload.value,
+    importModeMeta.value.value,
     {
       default_responsible_id: taskDefaultResponsibleId.value,
       default_creator_id: taskDefaultCreatorId.value,
@@ -3902,6 +4026,26 @@ async function cancelActiveImport() {
         : 'Остановка запрошена. Текущая строка завершится, после чего импорт остановится.',
     )
   } catch (error) {
+    const cancelErrorStatus = Number((error as any)?.statusCode || (error as any)?.response?.status || 0)
+    if (cancelErrorStatus === 400 && session.value?.id) {
+      try {
+        const latestResponse = await apiStore.getImportSession(String(session.value.id))
+        const latestSession = latestResponse?.item && typeof latestResponse.item === 'object'
+          ? latestResponse.item
+          : null
+
+        if (latestSession && String(latestSession.status || '').trim().toLowerCase() !== 'running') {
+          session.value = session.value ? { ...session.value, ...latestSession } : latestSession
+          syncRestoredExecutionState(latestSession)
+          cancelRequested.value = false
+          setSuccess('Импорт уже завершён или остановлен. Остановка больше не требуется.')
+          return
+        }
+      } catch {
+        // Ignore reload errors and show the original cancel error below.
+      }
+    }
+
     cancelRequested.value = false
     setError(error instanceof Error ? error.message : String(error))
   }
@@ -4187,26 +4331,40 @@ async function resumeHistorySession(sessionId: string) {
       const bulkAttachSummary = snapshot.summary?.bulk_attach && typeof snapshot.summary.bulk_attach === 'object'
         ? snapshot.summary.bulk_attach
         : {}
+      const bulkAttachMode = String(bulkAttachSummary.mode || '').trim().toLowerCase()
       const rawEntityType = String(bulkAttachSummary.entity_type || snapshot.entity_type || '').trim()
-      const normalizedEntityType = rawEntityType.startsWith('crm_files_') ? rawEntityType : `crm_files_${rawEntityType}`
       const fieldId = String(bulkAttachSummary.field_id || '').trim()
       const filter = bulkAttachSummary.filter && typeof bulkAttachSummary.filter === 'object' ? bulkAttachSummary.filter : {}
 
       session.value = snapshot
       importMode.value = 'advanced'
-      selectedFamily.value = 'crm'
-      crmFlavor.value = 'bulk'
       selectedCrmEntityType.value = ''
       selectedTaskEntityType.value = ''
       selectedLinkedPrimaryEntityType.value = ''
       selectedLinkedSecondaryEntityType.value = ''
       selectedHrEntityType.value = ''
       selectedSmartProcessId.value = ''
-      selectedFileAttachEntityType.value = normalizedEntityType
-      entityType.value = normalizedEntityType
       currentView.value = 'wizard'
 
-      await loadBulkAttachEntityFields(normalizedEntityType)
+      if (
+        bulkAttachMode === 'task'
+        || rawEntityType === 'task'
+        || String(snapshot.entity_type || '').trim() === 'task_attachment'
+      ) {
+        selectedFamily.value = 'task'
+        crmFlavor.value = 'direct'
+        selectedFileAttachEntityType.value = ''
+        selectedTaskEntityType.value = 'task_attachment'
+        entityType.value = 'task_attachment'
+        await loadBulkAttachEntityFields('task_attachment')
+      } else {
+        const normalizedEntityType = rawEntityType.startsWith('crm_files_') ? rawEntityType : `crm_files_${rawEntityType}`
+        selectedFamily.value = 'crm'
+        crmFlavor.value = 'bulk'
+        selectedFileAttachEntityType.value = normalizedEntityType
+        entityType.value = normalizedEntityType
+        await loadBulkAttachEntityFields(normalizedEntityType)
+      }
 
       selectedBulkFileField.value = fieldId
       bulkFilterConditions.value = Object.entries(filter).map(([filterFieldId, value]) => ({
@@ -4281,6 +4439,26 @@ function buildCancelledDryRunSummary(snapshot: Record<string, any> | null | unde
   }
 }
 
+function buildCancelledImportRunSummary(snapshot: Record<string, any> | null | undefined) {
+  const processedRows = Number(snapshot?.processed_rows || 0)
+  const totalRows = Number(snapshot?.total_rows || 0)
+  return {
+    session_id: getSessionSnapshotId(snapshot),
+    status: 'cancelled',
+    checked_rows: processedRows,
+    created_rows: Number(snapshot?.successful_rows || 0),
+    updated_rows: 0,
+    failed_rows: Number(snapshot?.failed_rows || 0),
+    skipped_rows: 0,
+    cancelled: true,
+    cancelled_rows: Math.max(0, totalRows - processedRows),
+    remaining_rows: Math.max(0, totalRows - processedRows),
+    created_ids: [],
+    updated_ids: [],
+    results: [],
+  }
+}
+
 async function waitForDryRunExecutionResult(sessionId: string) {
   const maxAttempts = 600
 
@@ -4349,6 +4527,9 @@ async function waitForImportExecutionResult(sessionId: string) {
     if (currentStatus === 'failed') {
       throw new Error(String(snapshot?.last_error || 'Импорт завершился с ошибкой в фоновом worker.'))
     }
+    if (currentStatus === 'cancelled') {
+      return resolvedImportRun || buildCancelledImportRunSummary(snapshot)
+    }
 
     if (!shouldWaitForImportExecutionSnapshot(snapshot)) {
       throw new Error('Импорт завершился без итогового отчета.')
@@ -4363,6 +4544,9 @@ async function waitForImportExecutionResult(sessionId: string) {
   const resolvedImportRun = buildImportRunFromSnapshot(snapshot)
   if (resolvedImportRun) {
     return resolvedImportRun
+  }
+  if (String(snapshot?.status || '') === 'cancelled') {
+    return buildCancelledImportRunSummary(snapshot)
   }
 
   throw new Error('Импорт запущен, но не удалось получить его текущее состояние.')
@@ -4747,6 +4931,7 @@ onUnmounted(() => {
                 label="История"
                 color="air-primary"
                 size="lg"
+                :disabled="!importerPermissionState.canViewSessions"
                 @click="currentView = 'history'"
               />
               <div class="flex flex-wrap gap-2 xl:justify-end">
@@ -4777,6 +4962,21 @@ onUnmounted(() => {
         </div>
 
         <div class="min-w-0 flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8 sm:py-8">
+          <div
+            v-if="hasNoImporterAccess"
+            class="rounded-[24px] border border-[#ffe0a6] bg-[#fff8eb] px-5 py-5 text-[#8a5b12] shadow-[0_8px_24px_rgba(175,124,18,0.08)]"
+          >
+            <div class="text-sm font-semibold uppercase tracking-[0.12em] text-[#b07a18]">
+              Права доступа
+            </div>
+            <div class="mt-2 text-lg font-semibold text-[#6d4710]">
+              Нет назначенной роли для работы с импортом.
+            </div>
+            <div class="mt-2 max-w-[760px] text-sm leading-relaxed text-[#8a5b12]">
+              Обратитесь к администратору портала, чтобы получить роль оператора или доступ на просмотр истории и отчетов.
+            </div>
+          </div>
+
           <div v-if="currentStep === 1">
             <Transition name="step1-fade" mode="out-in">
             <!-- No import mode: simple prompt -->
@@ -4814,11 +5014,12 @@ onUnmounted(() => {
                     class="h-10 rounded-xl border border-[#d7e7ff] bg-[#f4f9ff] px-4 text-[13px] font-medium text-[#2e6bd9] transition-colors hover:bg-[#ddeeff]"
                     @click="emit('back-to-landing')"
                   >
-                    Расширенный режим
+                    Выбрать режим
                   </button>
                   <button
                     type="button"
                     class="h-10 rounded-xl bg-[#2e6bd9] px-4 text-[13px] font-medium text-white transition-colors hover:bg-[#2560c5]"
+                    :disabled="!importerPermissionState.canViewSessions"
                     @click="currentView = 'history'"
                   >
                     История
@@ -4926,7 +5127,6 @@ onUnmounted(() => {
                       <div class="mt-3 flex flex-wrap gap-1.5">
                         <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">Сотрудники</span>
                         <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">Отделы</span>
-                        <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">Роли</span>
                       </div>
                     </div>
                   </button>
@@ -5002,7 +5202,7 @@ onUnmounted(() => {
                       ← Назад
                     </button>
                     <B24Button
-                      v-if="!(selectedFamily === 'crm' && crmFlavor === 'bulk')"
+                      v-if="!isBulkAttachFlow"
                       label="Загрузить файл"
                       color="air-primary"
                       size="lg"
@@ -5012,11 +5212,11 @@ onUnmounted(() => {
                     />
                     <B24Button
                       v-else-if="!bulkFilterPreview"
-                      label="Далее →"
+                      :label="bulkPreviewActionLabel"
                       color="air-primary"
                       size="lg"
                       :loading="loadingBulkFilterPreview"
-                      :disabled="!selectedFileAttachEntityType || !selectedBulkFileField || Boolean(busyAction) || loadingBulkFileFields || loadingBulkFilterPreview"
+                      :disabled="!selectedBulkAttachEntityType || (!isTaskBulkAttachFlow && !selectedBulkFileField) || Boolean(busyAction) || loadingBulkFileFields || loadingBulkFilterPreview"
                       @click="runBulkFilterPreview"
                     />
                     <B24Button
@@ -5459,17 +5659,17 @@ onUnmounted(() => {
                                 : 'Сначала выберите CRM-сущность и поле для файлов')
                             : (dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда') }}
                         </div>
-                        <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]">
+                        <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="currentFilePickerHelperText">
                           {{ crmFlavor === 'bulk' && isBulkFilePickerLocked
                             ? (isBulkAttachExecutionLocked
                                 ? 'Загрузка уже выполняется. Чтобы заменить файл, сначала остановите текущую сессию.'
                                 : 'Правый блок станет активным после выбора поля назначения.')
-                            : 'XLSX, XLS, CSV · до 50 МБ' }}
+                            : currentFileDropdownLimitText }}
                         </p>
                         <div v-if="fileName" class="relative mt-1 text-[11.5px] font-semibold" :style="{ color: domainAccent.ink }">
                           {{ fileName }}
                         </div>
-                        <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange" />
+                        <input ref="fileInputRef" type="file" :accept="isSpreadsheetUploadRequired ? '.xlsx,.xls,.csv' : undefined" class="hidden" @change="handleFileChange" />
                         <button
                           type="button"
                           class="relative mt-3 h-9 px-4 text-[12.5px] rounded-xl font-semibold text-white transition-opacity hover:opacity-85 active:opacity-70"
@@ -5532,16 +5732,219 @@ onUnmounted(() => {
                         />
                       </B24FormField>
                     </section>
+
+                    <section v-if="selectedTaskEntityType === 'task_attachment'" class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
+                      <div class="text-sm font-semibold text-[#314256]">Массовое добавление вложений</div>
+                      <div class="mt-1 text-sm text-[#6f8194]">Найдём задачи по фильтру и прикрепим к каждой один и тот же файл.</div>
+
+                      <div v-if="selectedTaskEntityType === 'task_attachment' && !bulkFilterPreview" class="mt-5 space-y-4">
+                        <div class="text-[12px] font-medium text-[#5A5E6E]">Фильтр задач:</div>
+
+                        <div
+                          v-for="condition in bulkFilterConditions"
+                          :key="condition.fieldId"
+                          class="rounded-[16px] border border-[#e5ebf2] bg-white px-4 py-4"
+                        >
+                          <div class="flex items-center justify-between gap-3">
+                            <div class="text-sm font-semibold text-[#314256]">
+                              {{ resolveBulkFilterField(condition.fieldId)?.title || condition.fieldId }}
+                            </div>
+                            <button
+                              type="button"
+                              class="rounded-full border border-[#f3d3c2] bg-white px-3 py-1 text-xs font-medium text-[#8a4a28] transition hover:border-[#f0b7b7] hover:text-[#c24b53]"
+                              @click="removeBulkFilterField(condition.fieldId)"
+                            >
+                              Удалить
+                            </button>
+                          </div>
+
+                          <B24SelectMenu
+                            v-if="getBulkFilterValueOptions(condition.fieldId).length"
+                            :model-value="condition.value"
+                            class="mt-3 w-full"
+                            placeholder="Выберите значение Bitrix24"
+                            :items="getBulkFilterValueOptions(condition.fieldId)"
+                            value-key="value"
+                            :filter-fields="['label']"
+                            :search-input="{ placeholder: 'Поиск значения Bitrix24' }"
+                            @update:model-value="condition.value = String($event || '')"
+                          />
+                          <input
+                            v-else
+                            v-model="condition.value"
+                            type="text"
+                            :placeholder="`Введите значение для поля «${resolveBulkFilterField(condition.fieldId)?.title || condition.fieldId}»`"
+                            class="mt-3 w-full rounded-[10px] border border-[#f3d3c2] px-3 py-2 text-sm text-[#314256] outline-none focus:border-[#D8632A]"
+                          />
+                        </div>
+
+                        <div v-if="isAddingBulkFilterField" class="rounded-[16px] border border-[#f3d3c2] bg-[#FFF8F3] px-4 py-4">
+                          <B24SelectMenu
+                            :model-value="pendingBulkFilterFieldId"
+                            class="w-full"
+                            placeholder="Выберите поле задачи"
+                            :items="bulkFilterFieldOptions"
+                            value-key="value"
+                            :filter-fields="['label']"
+                            :search-input="{ placeholder: 'Поиск поля Bitrix24' }"
+                            @update:model-value="addBulkFilterField(String($event || ''))"
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          class="inline-flex items-center rounded-full border border-dashed border-[#f0c5ad] bg-transparent px-4 py-2 text-sm font-medium text-[#8a4a28] transition hover:border-[#D8632A] hover:text-[#D8632A]"
+                          :disabled="Boolean(busyAction)"
+                          @click="openAddBulkFilterField"
+                        >
+                          Добавить поле
+                        </button>
+
+                        <div class="rounded-[16px] border border-[#f3d3c2] bg-[#FFF8F3] px-4 py-3 text-[12px] text-[#8a4a28]">
+                          Если фильтр не задан, будут выбраны все доступные задачи.
+                        </div>
+                      </div>
+
+                      <div v-else-if="selectedTaskEntityType === 'task_attachment'" class="mt-5 space-y-4">
+                        <div class="rounded-2xl border border-[#ECEEF3] bg-white p-5">
+                          <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-2xl grid place-items-center shrink-0" :style="{ background: domainAccent.bg }">
+                              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                <circle cx="10" cy="10" r="7.5" :stroke="domainAccent.ink" stroke-width="1.6" />
+                                <path d="M10 6.5v4M10 12.5v.5" :stroke="domainAccent.ink" stroke-width="1.6" stroke-linecap="round" />
+                              </svg>
+                            </div>
+                            <div>
+                              <div class="text-[13px] font-semibold text-[#0F1115]">
+                                Найдено задач: <span :style="{ color: domainAccent.ink }">{{ bulkFilterPreview.total }}</span>
+                              </div>
+                              <div class="text-[11.5px] text-[#5A5E6E] mt-0.5">
+                                Один файл будет прикреплён ко всем найденным задачам
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div v-if="showBulkAttachExecutionState" class="rounded-2xl border border-[#ECEEF3] bg-[#fbfcfe] p-5">
+                          <div class="flex items-center justify-between gap-3">
+                            <div>
+                              <div class="text-[13px] font-semibold text-[#0F1115]">Загрузка вложения</div>
+                              <div class="mt-0.5 text-[11.5px] text-[#5A5E6E]">
+                                <template v-if="busyAction === 'bulk-attach-run'">Подготавливаем файл и создаём сессию загрузки.</template>
+                                <template v-else-if="bulkAttachSessionStatus === 'running'">Файл уже прикрепляется, статус обновляется автоматически.</template>
+                                <template v-else-if="bulkAttachSessionStatus === 'completed'">Загрузка завершена.</template>
+                                <template v-else-if="bulkAttachSessionStatus === 'failed'">Во время загрузки произошла ошибка.</template>
+                                <template v-else-if="bulkAttachSessionStatus === 'cancelled'">Загрузка была остановлена.</template>
+                              </div>
+                            </div>
+                            <span
+                              class="inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold"
+                              :style="bulkAttachSessionStatus === 'completed'
+                                ? { background: '#E8F6EE', color: '#1E8A52' }
+                                : bulkAttachSessionStatus === 'failed'
+                                  ? { background: '#FDECEC', color: '#C24B53' }
+                                  : { background: domainAccent.bg, color: domainAccent.ink }"
+                            >
+                              {{ busyAction === 'bulk-attach-run' ? 'Подготовка' : bulkAttachActionLabel }}
+                            </span>
+                          </div>
+
+                          <div class="mt-4 h-2 overflow-hidden rounded-full bg-[#E8EDF4]">
+                            <div
+                              class="h-full rounded-full transition-all"
+                              :style="{ width: `${bulkAttachProgressPercent}%`, background: domainAccent.ink }"
+                            />
+                          </div>
+
+                          <div class="mt-3 flex items-center justify-between text-[12px] text-[#5A5E6E]">
+                            <span>Обработано: {{ bulkAttachProgressProcessed }} / {{ bulkAttachProgressTotal || bulkFilterPreview.total }}</span>
+                            <span>{{ bulkAttachProgressPercent }}%</span>
+                          </div>
+
+                          <div
+                            v-if="bulkAttachSessionStatus === 'completed' || bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled'"
+                            class="mt-4 grid grid-cols-3 gap-3"
+                          >
+                            <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
+                              <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Всего</div>
+                              <div class="mt-1 text-lg font-semibold text-[#0F1115]">{{ bulkAttachResultTotal }}</div>
+                            </div>
+                            <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
+                              <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Успешно</div>
+                              <div class="mt-1 text-lg font-semibold text-[#1E8A52]">{{ bulkAttachResultSuccessful }}</div>
+                            </div>
+                            <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
+                              <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Ошибки</div>
+                              <div class="mt-1 text-lg font-semibold text-[#C24B53]">{{ bulkAttachResultFailed }}</div>
+                            </div>
+                          </div>
+
+                          <div class="mt-4 flex flex-wrap gap-3">
+                            <B24Button
+                              v-if="canCancelBulkAttach || busyAction === 'bulk-attach-cancel'"
+                              label="Остановить"
+                              color="air-tertiary"
+                              size="lg"
+                              :loading="busyAction === 'bulk-attach-cancel'"
+                              :disabled="!canCancelBulkAttach"
+                              @click="cancelBulkAttachExecution"
+                            />
+                            <B24Button
+                              v-if="bulkAttachSessionStatus === 'completed' || bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled'"
+                              label="Завершить"
+                              color="air-primary"
+                              size="lg"
+                              @click="finishInlineBulkAttachFlow"
+                            />
+                          </div>
+                        </div>
+
+                        <div v-else class="rounded-2xl border border-[#ECEEF3] bg-white p-5">
+                          <div class="flex items-center justify-between gap-3">
+                            <div>
+                              <div class="text-[13px] font-semibold text-[#0F1115]">Показаны первые 5 задач</div>
+                              <div class="mt-0.5 text-[11.5px] text-[#5A5E6E]">Проверьте выборку перед запуском прикрепления.</div>
+                            </div>
+                            <button
+                              type="button"
+                              class="rounded-full border border-[#f0c5ad] bg-white px-3 py-1 text-xs font-medium text-[#8a4a28] transition hover:border-[#D8632A] hover:text-[#D8632A]"
+                              @click="goBackFromBulkPreview"
+                            >
+                              Изменить фильтр
+                            </button>
+                          </div>
+
+                          <div class="mt-4 space-y-3">
+                            <div
+                              v-for="sample in bulkFilterPreview.sample"
+                              :key="sample.id"
+                              class="rounded-[14px] border border-[#f4e0d4] bg-[#fffaf7] px-4 py-3"
+                            >
+                              <div class="text-sm font-semibold text-[#314256]">#{{ sample.id }}</div>
+                              <div class="mt-1 text-[12.5px] text-[#5A5E6E]">{{ sample.title || 'Без названия' }}</div>
+                            </div>
+                            <div v-if="!bulkFilterPreview.sample.length" class="rounded-[14px] border border-dashed border-[#f0c5ad] bg-[#fffaf7] px-4 py-4 text-[12px] text-[#8a4a28]">
+                              Превью пустое. Проверьте фильтр или загрузите файл и запустите прикрепление для всей выборки.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
                   </div>
                   <div class="flex flex-col gap-4">
                     <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
                     <div
-                      class="rounded-2xl p-5 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden transition-all cursor-pointer"
+                      class="rounded-2xl p-5 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden transition-all"
+                      :class="isBulkAttachFlow && isBulkFilePickerLocked ? 'cursor-not-allowed' : 'cursor-pointer'"
                       :style="{
-                        border: dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`,
-                        background: dropzoneDragOver ? domainAccent.bg : '#FFFFFF',
+                        border: isBulkAttachFlow && isBulkFilePickerLocked
+                          ? '1.5px dashed #D8E1EB'
+                          : (dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`),
+                        background: isBulkAttachFlow && isBulkFilePickerLocked
+                          ? '#F8FAFC'
+                          : (dropzoneDragOver ? domainAccent.bg : '#FFFFFF'),
                       }"
-                      @dragover.prevent="dropzoneDragOver = true"
+                      @dragover.prevent="!isBulkFilePickerLocked && (dropzoneDragOver = true)"
                       @dragleave.prevent="dropzoneDragOver = false"
                       @drop.prevent="handleDropFile($event)"
                       @click="openFilePicker"
@@ -5565,44 +5968,73 @@ onUnmounted(() => {
                         </svg>
                       </div>
                       <div class="relative text-[14px] font-semibold tracking-tight text-[#0F1115]">
-                        {{ dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда' }}
+                        {{ isBulkAttachFlow && isBulkFilePickerLocked
+                          ? (isBulkAttachExecutionLocked
+                              ? 'Загрузка уже выполняется'
+                              : 'Сначала настройте выборку задач')
+                          : (dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда') }}
                       </div>
-                      <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]">XLSX, XLS, CSV · до 50 МБ</p>
+                      <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="currentFilePickerHelperText">
+                        {{ isBulkAttachFlow && isBulkFilePickerLocked
+                          ? (isBulkAttachExecutionLocked
+                              ? 'Загрузка уже выполняется. Чтобы заменить файл, сначала остановите текущую сессию.'
+                              : 'Правый блок станет активным после проверки выборки задач.')
+                          : currentFileDropdownLimitText }}
+                      </p>
                       <div v-if="fileName" class="relative mt-1 text-[11.5px] font-semibold" :style="{ color: domainAccent.ink }">
                         {{ fileName }}
                       </div>
-                      <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange" />
+                      <input ref="fileInputRef" type="file" :accept="isSpreadsheetUploadRequired ? '.xlsx,.xls,.csv' : undefined" class="hidden" @change="handleFileChange" />
                       <button
                         type="button"
                         class="relative mt-3 h-9 px-4 text-[12.5px] rounded-xl font-semibold text-white transition-opacity hover:opacity-85 active:opacity-70"
-                        :style="{ background: domainAccent.ink }"
-                        :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
+                        :style="isBulkAttachFlow && isBulkFilePickerLocked
+                          ? { background: '#C8D2DE' }
+                          : { background: domainAccent.ink }"
+                        :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction) || isBulkFilePickerLocked"
                         @click.stop="openFilePicker"
                       >
                         Выбрать файл
                       </button>
                     </div>
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаблон</div>
-                    <div class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
-                      <div class="w-10 h-10 rounded-xl grid place-items-center shrink-0 bg-white" :style="{ color: domainAccent.ink }">
-                        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                          <rect x="3" y="3" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.6" />
-                          <path d="M3 7h12M3 11h12M7 3v12M11 3v12" stroke="currentColor" stroke-width="1.2" opacity=".6" />
-                        </svg>
+                    <template v-if="selectedTaskEntityType === 'task_attachment'">
+                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Режим</div>
+                      <div class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
+                        <div class="w-10 h-10 rounded-xl grid place-items-center shrink-0 bg-white" :style="{ color: domainAccent.ink }">
+                          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                            <path d="M6 5.5h6a2 2 0 0 1 0 4H7.5a2.5 2.5 0 0 0 0 5H11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                            <path d="M9.5 7.5h1.5a2 2 0 1 1 0 4H8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".55" />
+                          </svg>
+                        </div>
+                        <div class="min-w-0 flex-1">
+                          <div class="text-[12.5px] font-semibold tracking-tight" :style="{ color: domainAccent.ink }">Excel-шаблон здесь не нужен</div>
+                          <div class="text-[11px] mt-0.5 text-[#5A5E6E]">Настройте фильтр задач, загрузите один файл и запустите прикрепление ко всем найденным задачам.</div>
+                        </div>
                       </div>
-                      <div class="min-w-0 flex-1">
-                        <div class="text-[12.5px] font-semibold tracking-tight" :style="{ color: domainAccent.ink }">{{ exampleTemplateDownloadMeta.title }}</div>
-                        <div class="text-[11px] mt-0.5 text-[#5A5E6E]">{{ exampleTemplateDownloadMeta.description }}</div>
+                    </template>
+                    <template v-else>
+                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаблон</div>
+                      <div class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
+                        <div class="w-10 h-10 rounded-xl grid place-items-center shrink-0 bg-white" :style="{ color: domainAccent.ink }">
+                          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                            <rect x="3" y="3" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.6" />
+                            <path d="M3 7h12M3 11h12M7 3v12M11 3v12" stroke="currentColor" stroke-width="1.2" opacity=".6" />
+                          </svg>
+                        </div>
+                        <div class="min-w-0 flex-1">
+                          <div class="text-[12.5px] font-semibold tracking-tight" :style="{ color: domainAccent.ink }">{{ exampleTemplateDownloadMeta.title }}</div>
+                          <div class="text-[11px] mt-0.5 text-[#5A5E6E]">{{ exampleTemplateDownloadMeta.description }}</div>
+                        </div>
+                        <B24Button
+                          label="Скачать"
+                          color="air-secondary-accent-2"
+                          size="sm"
+                          :loading="busyAction === 'example-template'"
+                          :disabled="!canDownloadExampleTemplate"
+                          @click="downloadExampleTemplate"
+                        />
                       </div>
-                      <B24Button
-                        label="Скачать"
-                        color="air-secondary-accent-2"
-                        size="sm"
-                        :loading="busyAction === 'example-template'"
-                        :disabled="!canDownloadExampleTemplate"
-                        @click="downloadExampleTemplate"
-                      />
-                    </div>
+                    </template>
                   </div>
                 </div>
 
@@ -5703,7 +6135,7 @@ onUnmounted(() => {
                       <div class="relative text-[14px] font-semibold tracking-tight text-[#0F1115]">
                         {{ dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда' }}
                       </div>
-                      <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]">XLSX, XLS, CSV · до 50 МБ</p>
+                      <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="IMPORT_FILE_PICKER_HELPER_TEXT">{{ IMPORT_FILE_DROPDOWN_LIMIT_TEXT }}</p>
                       <div v-if="fileName" class="relative mt-1 text-[11.5px] font-semibold" :style="{ color: domainAccent.ink }">
                         {{ fileName }}
                       </div>

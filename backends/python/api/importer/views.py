@@ -83,7 +83,14 @@ _MAX_UPLOAD_FILENAME_LENGTH = 200
 
 
 def get_max_import_file_size_bytes() -> int:
-    return int(getattr(settings, "DATA_UPLOAD_MAX_MEMORY_SIZE", 50 * 1024 * 1024) or 50 * 1024 * 1024)
+    return int(
+        getattr(
+            settings,
+            "IMPORT_MAX_FILE_SIZE_BYTES",
+            getattr(settings, "DATA_UPLOAD_MAX_MEMORY_SIZE", 50 * 1024 * 1024),
+        )
+        or 50 * 1024 * 1024
+    )
 
 
 def get_max_import_file_size_megabytes() -> int:
@@ -169,6 +176,73 @@ def normalize_import_mode(value: object) -> str:
 
 def is_simple_import_mode(value: object) -> bool:
     return normalize_import_mode(value) == IMPORT_MODE_SIMPLE
+
+
+def resolve_import_mode_marker(value: object) -> str:
+    normalized_value = str(value or "").strip().lower()
+    if normalized_value in {IMPORT_MODE_SIMPLE, IMPORT_MODE_ADVANCED}:
+        return normalized_value
+    return ""
+
+
+def resolve_session_mode_settings(import_settings: object, import_mode: object) -> tuple[str, dict, dict, dict]:
+    safe_import_settings = import_settings if isinstance(import_settings, dict) else {}
+    normalized_import_mode = normalize_import_mode(import_mode)
+    stored_import_mode = resolve_import_mode_marker(safe_import_settings.get("import_mode"))
+
+    def _resolve_setting(setting_key: str) -> dict:
+        scoped_settings = safe_import_settings.get(f"{setting_key}_by_mode")
+        if isinstance(scoped_settings, dict):
+            scoped_value = scoped_settings.get(normalized_import_mode)
+            if isinstance(scoped_value, dict):
+                return scoped_value
+
+        legacy_value = safe_import_settings.get(setting_key, {})
+        if not isinstance(legacy_value, dict):
+            legacy_value = {}
+
+        if normalized_import_mode == IMPORT_MODE_SIMPLE:
+            return legacy_value if stored_import_mode == IMPORT_MODE_SIMPLE else {}
+
+        return legacy_value
+
+    return (
+        normalized_import_mode,
+        _resolve_setting("mapping"),
+        _resolve_setting("dedup"),
+        _resolve_setting("task_defaults"),
+    )
+
+
+def build_mode_scoped_import_settings(
+    import_settings: object,
+    *,
+    import_mode: object,
+    mapping: dict,
+    dedup: dict,
+    task_defaults: dict,
+) -> dict:
+    safe_import_settings = import_settings if isinstance(import_settings, dict) else {}
+    normalized_import_mode = normalize_import_mode(import_mode)
+
+    def _merge_mode_bucket(setting_key: str, setting_value: dict) -> dict:
+        existing_bucket = safe_import_settings.get(f"{setting_key}_by_mode")
+        safe_bucket = existing_bucket if isinstance(existing_bucket, dict) else {}
+        return {
+            **safe_bucket,
+            normalized_import_mode: setting_value,
+        }
+
+    return {
+        **safe_import_settings,
+        "import_mode": normalized_import_mode,
+        "mapping": mapping,
+        "dedup": dedup,
+        "task_defaults": task_defaults,
+        "mapping_by_mode": _merge_mode_bucket("mapping", mapping),
+        "dedup_by_mode": _merge_mode_bucket("dedup", dedup),
+        "task_defaults_by_mode": _merge_mode_bucket("task_defaults", task_defaults),
+    }
 
 
 def get_dry_run_summary_key(mode: str) -> str:
@@ -1732,6 +1806,8 @@ def import_sessions(request: AuthorizedRequest):
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
+    import_mode = normalize_import_mode(payload.get("import_mode"))
+
     session = ImportSession.objects.create(
         portal_member_id=portal_member_id,
         portal_domain=portal_domain,
@@ -1740,7 +1816,10 @@ def import_sessions(request: AuthorizedRequest):
         source_format=source_format,
         status=ImportSession.Status.DRAFT,
         original_filename=original_filename,
-        import_settings={"entity_config": entity_config} if entity_config else {},
+        import_settings={
+            **({"entity_config": entity_config} if entity_config else {}),
+            "import_mode": import_mode,
+        },
     )
 
     return JsonResponse({"item": serialize_session(session)}, status=201)
@@ -2060,9 +2139,15 @@ def import_session_apply_template(request: AuthorizedRequest, session_id):
         "headers": structure["headers"],
     }
     session.import_settings = {
-        **(session.import_settings if isinstance(session.import_settings, dict) else {}),
-        "mapping": saved_mapping,
-        "dedup": saved_dedup,
+        **build_mode_scoped_import_settings(
+            session.import_settings,
+            import_mode=IMPORT_MODE_ADVANCED,
+            mapping=saved_mapping,
+            dedup=saved_dedup,
+            task_defaults=normalize_task_defaults(
+                (session.import_settings if isinstance(session.import_settings, dict) else {}).get("task_defaults", {}),
+            ),
+        ),
         "applied_template_id": str(template.id),
     }
     session.last_error = ""
@@ -2232,7 +2317,8 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
         return JsonResponse({"error": str(error)}, status=400)
 
     import_mode_source = request.GET if request.method == "GET" else request.data
-    use_alias_rules = not is_simple_import_mode((import_mode_source or {}).get("import_mode"))
+    requested_import_mode = normalize_import_mode((import_mode_source or {}).get("import_mode"))
+    use_alias_rules = not is_simple_import_mode(requested_import_mode)
     alias_rules = load_portal_alias_rules(
         portal_member_id,
         portal_domain,
@@ -2252,12 +2338,13 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
         ],
     )
     import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
-    saved_mapping = import_settings.get("mapping", {})
-    if not isinstance(saved_mapping, dict):
-        saved_mapping = {}
-    task_defaults = normalize_task_defaults(import_settings.get("task_defaults", {}))
+    _resolved_import_mode, saved_mapping, saved_dedup_source, saved_task_defaults_source = resolve_session_mode_settings(
+        import_settings,
+        requested_import_mode,
+    )
+    task_defaults = normalize_task_defaults(saved_task_defaults_source)
     try:
-        saved_dedup = normalize_entity_dedup_settings(session.entity_type, import_settings.get("dedup", {}))
+        saved_dedup = normalize_entity_dedup_settings(session.entity_type, saved_dedup_source)
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
 
@@ -2275,19 +2362,20 @@ def import_session_mapping(request: AuthorizedRequest, session_id):
                     "default_responsible_id": (request.data or {}).get("default_responsible_id"),
                     "default_creator_id": (request.data or {}).get("default_creator_id"),
                     "default_comment_author_id": (request.data or {}).get("default_comment_author_id"),
-                    "task_defaults": import_settings.get("task_defaults", {}),
+                    "task_defaults": saved_task_defaults_source,
                 },
                 account=account,
             )
         except ValueError as error:
             return JsonResponse({"error": str(error)}, status=400)
 
-        session.import_settings = {
-            **import_settings,
-            "mapping": saved_mapping,
-            "dedup": saved_dedup,
-            "task_defaults": task_defaults,
-        }
+        session.import_settings = build_mode_scoped_import_settings(
+            import_settings,
+            import_mode=requested_import_mode,
+            mapping=saved_mapping,
+            dedup=saved_dedup,
+            task_defaults=task_defaults,
+        )
         session.last_error = ""
         session.save(update_fields=["import_settings", "last_error", "updated_at"])
 
@@ -3681,7 +3769,8 @@ def crm_filter_preview(request: AuthorizedRequest):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
     entity_type = str(payload.get("entity_type") or "").strip()
-    if entity_type not in SUPPORTED_ENTITY_TYPES:
+    is_task_preview = entity_type == "task"
+    if entity_type not in SUPPORTED_ENTITY_TYPES and not is_task_preview:
         return JsonResponse({"error": f"Unsupported entity type: {entity_type}"}, status=400)
 
     filter_params = payload.get("filter") or {}
@@ -3689,7 +3778,11 @@ def crm_filter_preview(request: AuthorizedRequest):
         filter_params = {}
 
     try:
-        page = fetch_crm_entities_page(account, entity_type, filter_params, start=0)
+        if is_task_preview:
+            from .services.task_bulk_attach import fetch_task_entities_page
+            page = fetch_task_entities_page(account, filter_params, start=0)
+        else:
+            page = fetch_crm_entities_page(account, entity_type, filter_params, start=0)
     except Exception as error:
         return JsonResponse({"error": str(error)}, status=500)
 
@@ -3699,7 +3792,11 @@ def crm_filter_preview(request: AuthorizedRequest):
             raw_id = item.get("ID") or item.get("id")
             sample.append({
                 "id": int(raw_id) if raw_id is not None else None,
-                "title": _extract_entity_title(entity_type, item),
+                "title": (
+                    str(item.get("title") or item.get("TITLE") or raw_id or "").strip()
+                    if is_task_preview
+                    else _extract_entity_title(entity_type, item)
+                ),
             })
 
     return JsonResponse({
@@ -3758,7 +3855,8 @@ def bulk_attach_session_create(request: AuthorizedRequest):
     from .services.bulk_attach import SUPPORTED_ENTITY_TYPES, CRM_FILES_ENTITY_TYPES
 
     entity_type = str(payload.get("entity_type") or "").strip()
-    if entity_type not in SUPPORTED_ENTITY_TYPES:
+    is_task_bulk_attach = entity_type == "task"
+    if entity_type not in SUPPORTED_ENTITY_TYPES and not is_task_bulk_attach:
         return JsonResponse({"error": f"Unsupported entity type: {entity_type}"}, status=400)
 
     file_url = str(payload.get("file_url") or "").strip()
@@ -3769,7 +3867,7 @@ def bulk_attach_session_create(request: AuthorizedRequest):
         return JsonResponse({"error": "file_url or file_id is required"}, status=400)
 
     field_id = str(payload.get("field_id") or "").strip()
-    if not field_id:
+    if not field_id and not is_task_bulk_attach:
         return JsonResponse({"error": "field_id is required"}, status=400)
 
     filter_params = payload.get("filter") or {}
@@ -3779,7 +3877,7 @@ def bulk_attach_session_create(request: AuthorizedRequest):
     portal_member_id = getattr(account, "member_id", "")
     portal_domain = getattr(account, "domain_url", "")
 
-    entity_labels = {"lead": "Лиды", "contact": "Контакты", "company": "Компании", "deal": "Сделки"}
+    entity_labels = {"lead": "Лиды", "contact": "Контакты", "company": "Компании", "deal": "Сделки", "task": "Задачи"}
     display_name = file_name or (file_id and "загруженный файл") or "файл из URL"
     original_filename = f"Массовое добавление — {entity_labels.get(entity_type, entity_type)}: {display_name}"
 
@@ -3787,18 +3885,19 @@ def bulk_attach_session_create(request: AuthorizedRequest):
         portal_member_id=portal_member_id,
         portal_domain=portal_domain,
         created_by_b24_user_id=getattr(account, "b24_user_id", 0),
-        entity_type=CRM_FILES_ENTITY_TYPES[entity_type],
+        entity_type=ImportSession.EntityType.TASK_ATTACHMENT if is_task_bulk_attach else CRM_FILES_ENTITY_TYPES[entity_type],
         source_format="bulk_attach",
         status=ImportSession.Status.DRAFT,
         original_filename=original_filename,
         summary={
             "bulk_attach": {
+                "mode": "task" if is_task_bulk_attach else "crm",
                 "entity_type": entity_type,
                 "filter": filter_params,
                 "file_url": file_url,
                 "file_id": file_id,
-                "field_id": field_id,
                 "file_name": file_name,
+                **({"field_id": field_id} if field_id else {}),
             }
         },
     )
@@ -3838,9 +3937,14 @@ def bulk_attach_session_run(request: AuthorizedRequest, session_id):
         enqueue_bulk_attach_session_run(session, account)
         return JsonResponse({"item": serialize_session(session)})
 
-    from .services.bulk_attach import execute_bulk_attach
+    bulk_config = (session.summary or {}).get("bulk_attach") or {}
+    is_task_bulk_attach = str(bulk_config.get("mode") or "").strip() == "task"
+    if is_task_bulk_attach:
+        from .services.task_bulk_attach import execute_task_bulk_attach
+    else:
+        from .services.bulk_attach import execute_bulk_attach
     try:
-        result = execute_bulk_attach(session=session, account=account)
+        result = execute_task_bulk_attach(session=session, account=account) if is_task_bulk_attach else execute_bulk_attach(session=session, account=account)
     except Exception as error:
         session.refresh_from_db()
         session.status = ImportSession.Status.FAILED

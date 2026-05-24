@@ -88,6 +88,7 @@ export const useApiStore = defineStore(
       entity_type: string
       source_format: string
       original_filename: string
+      import_mode?: string
       entity_config?: Record<string, any>
     }): Promise<{ item: Record<string, any> }> => {
       return await $api('/api/import-sessions', {
@@ -268,6 +269,7 @@ export const useApiStore = defineStore(
       sessionId: string,
       mapping: Record<string, any>,
       dedup: Record<string, any>,
+      importMode = '',
       options: {
         default_responsible_id?: string
         default_creator_id?: string
@@ -279,7 +281,7 @@ export const useApiStore = defineStore(
         headers: {
           Authorization: `Bearer ${tokenJWT.value}`
         },
-        body: JSON.stringify({ mapping, dedup, ...options }),
+        body: JSON.stringify({ mapping, dedup, import_mode: importMode, ...options }),
       })
     }
 
@@ -452,7 +454,7 @@ export const useApiStore = defineStore(
       filter: Record<string, any>
       file_url?: string
       file_id?: string
-      field_id: string
+      field_id?: string
       file_name?: string
     }): Promise<{ item: Record<string, any> }> => {
       return await $api('/api/bulk-attach-sessions', {

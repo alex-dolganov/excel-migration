@@ -158,7 +158,7 @@ test('bulk mode uses dedicated step labels and headings instead of the regular i
   assert.equal(importerWorkbenchSource.includes("eyebrow: 'Шаг 3 · Загрузка'"), true)
   assert.equal(importerWorkbenchSource.includes("title: 'Назначение'"), true)
   assert.equal(importerWorkbenchSource.includes("title: 'Файл и выборка'"), true)
-  assert.equal(importerWorkbenchSource.includes("title: 'Загрузка файлов'"), true)
+  assert.equal(importerWorkbenchSource.includes("title: isTaskBulkAttachFlow.value ? 'Загрузка вложений' : 'Загрузка файлов'"), true)
   assert.equal(importerWorkbenchSource.includes('const visibleSteps = computed(() => ('), true)
   assert.equal(importerWorkbenchSource.includes('{{ selectedFamilyHeaderMeta.eyebrow }}'), true)
   assert.equal(importerWorkbenchSource.includes('{{ selectedFamilyHeaderMeta.title }}'), true)
@@ -234,8 +234,8 @@ test('bulk file picker handlers respect the full lock state while execution is a
 
   assert.equal(openSource.includes("crmFlavor.value === 'bulk' && !isBulkFilePickerReady.value"), false)
   assert.equal(dropSource.includes("crmFlavor.value === 'bulk' && !isBulkFilePickerReady.value"), false)
-  assert.equal(openSource.includes("crmFlavor.value === 'bulk' && isBulkFilePickerLocked.value"), true)
-  assert.equal(dropSource.includes("crmFlavor.value === 'bulk' && isBulkFilePickerLocked.value"), true)
+  assert.equal(openSource.includes("isBulkAttachFlow.value && isBulkFilePickerLocked.value"), true)
+  assert.equal(dropSource.includes("isBulkAttachFlow.value && isBulkFilePickerLocked.value"), true)
 })
 
 test('bulk flow step is derived from preview and execution state so restored sessions reopen the correct substep', () => {
@@ -263,8 +263,7 @@ test('resuming bulk attach from history restores the new inline crm bulk flow in
   const resumeEnd = importerWorkbenchSource.indexOf('function getStepStatus(step: number): StepState {', resumeStart)
   const resumeSource = importerWorkbenchSource.slice(resumeStart, resumeEnd)
   const bulkBranchStart = resumeSource.indexOf('if (isBulkAttach) {')
-  const bulkBranchEnd = resumeSource.indexOf('} else {', bulkBranchStart)
-  const bulkBranchSource = resumeSource.slice(bulkBranchStart, bulkBranchEnd)
+  const bulkBranchSource = resumeSource.slice(bulkBranchStart)
 
   assert.equal(bulkBranchSource.includes("selectedFamily.value = 'crm'"), true)
   assert.equal(bulkBranchSource.includes("crmFlavor.value = 'bulk'"), true)

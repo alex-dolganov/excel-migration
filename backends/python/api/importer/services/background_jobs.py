@@ -125,14 +125,19 @@ def enqueue_bulk_attach_session_run(session: ImportSession, account) -> str:
 
 
 def execute_bulk_attach_background(*, session_id: str, account_id: str):
-    from importer.services.bulk_attach import execute_bulk_attach
-
     session, account = _load_background_context(session_id, account_id)
     if session.status == ImportSession.Status.CANCELLED:
         return {"session_id": str(session.id), "status": session.status}
 
+    bulk_config = (session.summary or {}).get("bulk_attach", {})
+    is_task_bulk_attach = str(bulk_config.get("mode") or "").strip() == "task"
+    if is_task_bulk_attach:
+        from importer.services.task_bulk_attach import execute_task_bulk_attach
+    else:
+        from importer.services.bulk_attach import execute_bulk_attach
+
     try:
-        result = execute_bulk_attach(session=session, account=account)
+        result = execute_task_bulk_attach(session=session, account=account) if is_task_bulk_attach else execute_bulk_attach(session=session, account=account)
     except Exception as error:
         error_message = safe_format_import_error(error)
         session.refresh_from_db()

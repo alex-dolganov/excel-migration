@@ -143,19 +143,19 @@ const TASK_IMPORT_SCENARIOS = {
     value: 'task_attachment',
     label: 'Вложения задач',
     family: 'task',
-    title: 'Вложения в задачи',
-    description: 'Каждая строка прикладывает файл к выбранной задаче.',
-    minimumFields: ['TASK_ID', 'FILE_URL'],
-    destinationLabel: 'Прикрепляет файл к существующей задаче по TASK_ID.',
+    title: 'Массовые вложения в задачи',
+    description: 'Один файл прикрепляется ко всем найденным задачам по выбранному фильтру.',
+    minimumFields: ['Фильтр задач', 'Файл-вложение'],
+    destinationLabel: 'Находит задачи по фильтру и прикрепляет к каждой выбранный файл.',
     guide: {
-      title: 'Импорт вложений в задачи',
-      description: 'Каждая строка скачивает файл из источника и прикрепляет его к выбранной задаче.',
+      title: 'Массовое добавление вложений в задачи',
+      description: 'Настройте фильтр задач, загрузите один файл и прикрепите его ко всем найденным задачам.',
       highlights: [
-        'Минимум для импорта: TASK_ID и FILE_URL.',
-        'TASK_ID можно передавать как Bitrix ID задачи или XML_ID.',
-        'FILE_NAME можно указать отдельно, чтобы переименовать вложение при импорте.',
+        'Excel-файл здесь не нужен: сценарий работает по фильтру задач.',
+        'Один загруженный файл будет добавлен во все найденные задачи.',
+        'Перед запуском можно проверить выборку и количество найденных задач.',
       ],
-      exampleColumns: ['TASK_ID', 'FILE_URL', 'FILE_NAME'],
+      exampleColumns: [],
     },
   },
 }
@@ -806,6 +806,14 @@ export function buildLinkedImportEntityGroups(entityType) {
 export function buildExampleTemplateDownloadMeta(entityType) {
   const normalizedEntityType = String(entityType || '').trim()
   const summary = buildScenarioSelectionSummary(normalizedEntityType)
+
+  if (normalizedEntityType === 'task_attachment') {
+    return {
+      title: `Файл для «${summary.selectedLabel}»`,
+      description: 'В этом режиме Excel-шаблон не нужен: настройте фильтр задач и загрузите один файл-вложение.',
+      filename: 'task_attachment-import-example.xlsx',
+    }
+  }
 
   return {
     title: `Шаблон для «${summary.selectedLabel}»`,
@@ -2403,9 +2411,21 @@ function hasOwnImportRunField(importRun, fieldName) {
 }
 
 export function shouldWaitForImportExecutionSnapshot(snapshot) {
+  const summary = snapshot?.summary && typeof snapshot.summary === 'object' ? snapshot.summary : {}
+  const job = summary?.job && typeof summary.job === 'object' ? summary.job : {}
+  const jobMode = String(job?.mode || '').trim().toLowerCase()
+  const jobState = String(job?.state || '').trim().toLowerCase()
   const status = String(snapshot?.status || '').trim().toLowerCase()
 
-  return ['draft', 'uploaded', 'validated', 'ready', 'running'].includes(status)
+  if (['completed', 'failed', 'cancelled'].includes(status)) {
+    return false
+  }
+
+  if (status === 'running') {
+    return true
+  }
+
+  return ['run', 'retry'].includes(jobMode) && ['queued', 'running'].includes(jobState)
 }
 
 export function shouldWaitForDryRunExecutionSnapshot(snapshot) {
@@ -2598,6 +2618,9 @@ export function buildImportRunSummaryFromSessionSnapshot(snapshot) {
   const processedRows = Number(snapshot?.processed_rows || 0)
   const successfulRows = Number(snapshot?.successful_rows || 0)
   const failedRows = Number(snapshot?.failed_rows || 0)
+  const totalRows = Number(importRun.total_rows || snapshot?.total_rows || 0)
+  const normalizedStatus = String(snapshot?.status || '').trim().toLowerCase()
+  const isCancelledSession = normalizedStatus === 'cancelled'
   const hasSessionLevelCounters = processedRows > 0 || successfulRows > 0 || failedRows > 0
 
   if (!rawImportRun && !hasSessionLevelCounters) {
@@ -2640,13 +2663,23 @@ export function buildImportRunSummaryFromSessionSnapshot(snapshot) {
         : 0,
     cancelled: hasOwnImportRunField(importRun, 'cancelled')
       ? Boolean(importRun.cancelled)
-      : derivedSummary.cancelled,
+      : results.length > 0
+        ? derivedSummary.cancelled
+        : isCancelledSession,
     cancelled_rows: hasOwnImportRunField(importRun, 'cancelled_rows')
       ? Number(importRun.cancelled_rows || 0)
-      : derivedSummary.cancelled_rows,
+      : results.length > 0
+        ? derivedSummary.cancelled_rows
+        : isCancelledSession
+          ? Math.max(0, totalRows - processedRows)
+          : 0,
     remaining_rows: hasOwnImportRunField(importRun, 'remaining_rows')
       ? Number(importRun.remaining_rows || 0)
-      : derivedSummary.remaining_rows,
+      : results.length > 0
+        ? derivedSummary.remaining_rows
+        : isCancelledSession
+          ? Math.max(0, totalRows - processedRows)
+          : 0,
     created_ids: Array.isArray(importRun.created_ids) ? importRun.created_ids : derivedSummary.created_ids,
     updated_ids: Array.isArray(importRun.updated_ids) ? importRun.updated_ids : derivedSummary.updated_ids,
     results,

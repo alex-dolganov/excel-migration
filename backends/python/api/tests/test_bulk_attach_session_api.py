@@ -81,21 +81,74 @@ class BulkAttachSessionCreateApiTest(TestCase):
         self.assertIn("field_id", response.json()["error"])
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_create_session_rejects_unsupported_entity_type(self, get_from_jwt_token):
+    def test_create_task_session_persists_task_attachment_entity_without_field_id(self, get_from_jwt_token):
         get_from_jwt_token.return_value = _make_account()
 
         response = self.client.post(
             reverse("importer:bulk-attach-session-create"),
             data=json.dumps({
                 "entity_type": "task",
+                "filter": {"STATUS": "2"},
                 "file_id": "some-uuid",
-                "field_id": "UF_TASK_FILE",
+                "file_name": "brief.pdf",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertIn("item", body)
+        self.assertEqual(body["item"]["status"], "draft")
+
+        session = ImportSession.objects.get(id=body["item"]["id"])
+        self.assertEqual(session.entity_type, "task_attachment")
+        self.assertEqual(session.source_format, "bulk_attach")
+        self.assertEqual(
+            session.summary["bulk_attach"],
+            {
+                "mode": "task",
+                "entity_type": "task",
+                "filter": {"STATUS": "2"},
+                "file_url": "",
+                "file_id": "some-uuid",
+                "file_name": "brief.pdf",
+            },
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_create_session_rejects_unsupported_entity_type(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = _make_account()
+
+        response = self.client.post(
+            reverse("importer:bulk-attach-session-create"),
+            data=json.dumps({
+                "entity_type": "project",
+                "file_id": "some-uuid",
             }),
             content_type="application/json",
             HTTP_AUTHORIZATION="Bearer test-token",
         )
 
         self.assertEqual(response.status_code, 400)
+
+
+class BulkAttachPreviewApiTest(TestCase):
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_preview_accepts_task_entity_type(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = _make_account()
+
+        response = self.client.post(
+            reverse("importer:crm-filter-preview"),
+            data=json.dumps({
+                "entity_type": "task",
+                "filter": {"STATUS": "2"},
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
 
 
 class BulkAttachUploadApiTest(TestCase):
