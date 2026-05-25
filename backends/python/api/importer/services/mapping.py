@@ -31,6 +31,14 @@ TOKEN_ALIASES = {
     "город": "city",
     "источник": "source",
     "тип": "type",
+    "ответственный": "responsible",
+    "исполнитель": "responsible",
+    "постановщик": "creator",
+    "описание": "description",
+    "приоритет": "priority",
+    "теги": "tags",
+    "задача": "task",
+    "задачи": "task",
     "названиекомпании": "title",
     "telefon": "phone",
     "nazvanie": "title",
@@ -38,6 +46,10 @@ TOKEN_ALIASES = {
     "pochta": "email",
     "imya": "name",
     "kontragent": "title",
+    "контакта": "контакт",
+    "сделки": "сделка",
+    "компании": "компания",
+    "лида": "лид",
 }
 TOKEN_SEQUENCE_ALIASES = {
     ("внешний", "ключ"): ("externalkey",),
@@ -55,16 +67,31 @@ TOKEN_SEQUENCE_ALIASES = {
     ("e", "mail"): ("email",),
     ("эл", "почта"): ("email",),
     ("электронная", "почта"): ("email",),
+    ("title", "компания"): ("title",),
     ("title", "компании"): ("title",),
+    ("title", "сделка"): ("title",),
     ("title", "сделки"): ("title",),
+    ("title", "лид"): ("title",),
     ("title", "лида"): ("title",),
     ("title", "задачи"): ("title",),
+    ("крайний", "срок"): ("deadline",),
+    ("source", "сделка"): ("source",),
+    ("source", "компания"): ("source",),
+    ("type", "сделка"): ("type",),
     ("type", "сделки"): ("type",),
+    ("стадия", "сделка"): ("стадия",),
+    ("фамилия", "контакт"): ("фамилия",),
+    ("phone", "компания"): ("phone",),
     ("phone", "компании"): ("phone",),
+    ("phone", "контакт"): ("phone",),
     ("phone", "контакта"): ("phone",),
+    ("name", "контакт"): ("name",),
     ("name", "контакта"): ("name",),
+    ("email", "контакт"): ("email",),
     ("email", "контакта"): ("email",),
+    ("city", "компания"): ("city",),
     ("city", "компании"): ("city",),
+    ("city", "контакт"): ("city",),
     ("city", "контакта"): ("city",),
     ("доступна", "для", "всех"): ("opened",),
     ("доступно", "для", "всех"): ("opened",),
@@ -140,6 +167,8 @@ def score_fuzzy_match(header_tokens: list[str], header_signature: str, field_key
 
     best_score = 0.0
     best_reason = ""
+    canonical_header_tokens = canonicalize_tokens(header_tokens)
+    canonical_header_token_set = set(canonical_header_tokens)
     for candidate in (
         field_keys.get("fuzzy_title"),
         field_keys.get("fuzzy_id"),
@@ -148,6 +177,10 @@ def score_fuzzy_match(header_tokens: list[str], header_signature: str, field_key
         if not candidate:
             continue
         if header_signature == candidate:
+            return 1.0, _build_match_reason(header_tokens)
+
+        candidate_tokens = [token for token in str(candidate).split(" ") if token]
+        if candidate_tokens and canonical_header_token_set == set(candidate_tokens):
             return 1.0, _build_match_reason(header_tokens)
 
         similarity = SequenceMatcher(None, header_signature, candidate).ratio()

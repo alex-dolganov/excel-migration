@@ -4,3 +4,9 @@
 @theme static {
 
 }
+
+html,
+body,
+#__nuxt {
+  height: 100%;
+}

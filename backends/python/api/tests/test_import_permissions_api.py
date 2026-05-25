@@ -45,7 +45,7 @@ class ImportPermissionsApiTest(TestCase):
             original_filename="leads.xlsx",
         )
 
-    def test_permission_service_resolves_portal_admin_operator_and_viewer(self):
+    def test_permission_service_grants_full_access_regardless_of_admin_flag_or_local_role(self):
         admin_account = self.create_account(user_id=11, is_admin=True)
         operator_account = self.create_account(user_id=12, is_admin=False)
         viewer_account = self.create_account(user_id=13, is_admin=False)
@@ -56,13 +56,14 @@ class ImportPermissionsApiTest(TestCase):
         self.create_role(user_id=13, role=ROLE_VIEWER)
 
         self.assertEqual(resolve_role(admin_account), ROLE_PORTAL_ADMIN)
-        self.assertEqual(resolve_role(operator_account), ROLE_OPERATOR)
-        self.assertEqual(resolve_role(viewer_account), ROLE_VIEWER)
+        self.assertEqual(resolve_role(operator_account), ROLE_PORTAL_ADMIN)
+        self.assertEqual(resolve_role(viewer_account), ROLE_PORTAL_ADMIN)
         self.assertEqual(resolve_role(unknown_account), ROLE_PORTAL_ADMIN)
         self.assertTrue(has_permission(admin_account, "roles.manage"))
         self.assertTrue(has_permission(operator_account, "sessions.run"))
-        self.assertFalse(has_permission(viewer_account, "sessions.run"))
+        self.assertTrue(has_permission(viewer_account, "sessions.run"))
         self.assertTrue(has_permission(unknown_account, "roles.manage"))
+        self.assertTrue(has_permission(unknown_account, "sessions.run"))
         self.assertTrue(is_session_owner(operator_account, owned_session))
         self.assertFalse(is_session_owner(viewer_account, owned_session))
 
@@ -82,8 +83,8 @@ class ImportPermissionsApiTest(TestCase):
         self.assertEqual(response.json()["item"]["permissions"], sorted(PERMISSION_CODES[ROLE_PORTAL_ADMIN]))
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_permissions_me_returns_local_viewer_payload(self, get_from_jwt_token):
-        self.create_role(user_id=7, role=ROLE_VIEWER)
+    def test_permissions_me_ignores_local_viewer_role_and_returns_full_access_payload(self, get_from_jwt_token):
+        self.create_role(user_id=7, role="viewer")
         get_from_jwt_token.return_value = self.create_account(is_admin=False)
 
         response = self.client.get(
@@ -92,9 +93,9 @@ class ImportPermissionsApiTest(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["item"]["role"], ROLE_VIEWER)
-        self.assertEqual(response.json()["item"]["is_portal_admin"], False)
-        self.assertEqual(response.json()["item"]["permissions"], sorted(PERMISSION_CODES[ROLE_VIEWER]))
+        self.assertEqual(response.json()["item"]["role"], ROLE_PORTAL_ADMIN)
+        self.assertEqual(response.json()["item"]["is_portal_admin"], True)
+        self.assertEqual(response.json()["item"]["permissions"], sorted(PERMISSION_CODES[ROLE_PORTAL_ADMIN]))
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_permissions_me_returns_full_access_for_user_without_local_role(self, get_from_jwt_token):
@@ -107,7 +108,7 @@ class ImportPermissionsApiTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["item"]["role"], ROLE_PORTAL_ADMIN)
-        self.assertEqual(response.json()["item"]["is_portal_admin"], False)
+        self.assertEqual(response.json()["item"]["is_portal_admin"], True)
         self.assertEqual(response.json()["item"]["permissions"], sorted(PERMISSION_CODES[ROLE_PORTAL_ADMIN]))
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
@@ -140,7 +141,7 @@ class ImportPermissionsApiTest(TestCase):
         )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_non_admin_cannot_manage_roles(self, get_from_jwt_token):
+    def test_non_admin_can_manage_roles_when_import_access_is_open(self, get_from_jwt_token):
         self.create_role(user_id=7, role=ROLE_OPERATOR)
         get_from_jwt_token.return_value = self.create_account(is_admin=False)
 
@@ -158,12 +159,13 @@ class ImportPermissionsApiTest(TestCase):
             HTTP_AUTHORIZATION="Bearer test-token",
         )
 
-        self.assertEqual(list_response.status_code, 403)
-        self.assertEqual(create_response.status_code, 403)
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(create_response.status_code, 200)
+        self.assertEqual(create_response.json()["item"]["role"], "viewer")
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_viewer_can_view_sessions_but_cannot_mutate_importer_state(self, get_from_jwt_token):
-        self.create_role(user_id=7, role=ROLE_VIEWER)
+    def test_any_user_can_view_and_mutate_importer_state_when_import_access_is_open(self, get_from_jwt_token):
+        self.create_role(user_id=7, role="viewer")
         session = self.create_session(created_by=12)
         get_from_jwt_token.return_value = self.create_account(is_admin=False)
 
@@ -195,12 +197,12 @@ class ImportPermissionsApiTest(TestCase):
         )
 
         self.assertEqual(list_response.status_code, 200)
-        self.assertEqual(create_response.status_code, 403)
-        self.assertEqual(mapping_response.status_code, 403)
-        self.assertEqual(run_response.status_code, 403)
+        self.assertNotEqual(create_response.status_code, 403)
+        self.assertNotEqual(mapping_response.status_code, 403)
+        self.assertNotEqual(run_response.status_code, 403)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_operator_can_edit_own_session_but_not_foreign_one(self, get_from_jwt_token):
+    def test_any_user_can_edit_foreign_session_when_import_access_is_open(self, get_from_jwt_token):
         self.create_role(user_id=7, role=ROLE_OPERATOR)
         own_session = self.create_session(created_by=7)
         foreign_session = self.create_session(created_by=21)
@@ -220,4 +222,4 @@ class ImportPermissionsApiTest(TestCase):
         )
 
         self.assertNotEqual(own_response.status_code, 403)
-        self.assertEqual(foreign_response.status_code, 403)
+        self.assertNotEqual(foreign_response.status_code, 403)

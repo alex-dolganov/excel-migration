@@ -2,13 +2,20 @@
 const emit = defineEmits<{ select: [mode: string] }>()
 
 const hover = ref<string | null>(null)
+const runtimeConfig = useRuntimeConfig()
 
 const palette = {
   simple:   { bg: '#E8F6EE', ink: '#1E8A52', glow: 'rgba(30,138,82,0.18)' },
   advanced: { bg: '#EEF2FF', ink: '#3B47D6', glow: 'rgba(59,71,214,0.18)' },
 }
 
-const simpleFeatures  = ['Файл XLSX / CSV до 50 МБ', 'Автосопоставление полей', 'Базовая защита от дублей']
+const defaultImportMaxFileSizeBytes = 50 * 1024 * 1024
+const normalizedImportMaxFileSizeBytes = Math.max(1, Number(runtimeConfig.public.importMaxFileSizeBytes || defaultImportMaxFileSizeBytes))
+const importMaxFileSizeLabel = normalizedImportMaxFileSizeBytes % (1024 * 1024) === 0
+  ? `${normalizedImportMaxFileSizeBytes / (1024 * 1024)} МБ`
+  : `${(normalizedImportMaxFileSizeBytes / (1024 * 1024)).toFixed(1)} МБ`
+
+const simpleFeatures  = [`Файл XLSX / CSV до ${importMaxFileSizeLabel}`, 'Автосопоставление полей', 'Базовая защита от дублей']
 const advancedFeatures = ['Сохранённые шаблоны маппинга', 'Гибкие правила поиска дублей', 'Построчный отчёт + откат']
 </script>
 

@@ -23,7 +23,8 @@ docker-compose --env-file .env run --rm api-python python manage.py test tests.t
 
 ## Uploads And Timeouts
 
-- [ ] Nginx `client_max_body_size` is at least `50m`.
+- [ ] Nginx config is rendered from `infrastructure/nginx/python-app.conf.template`.
+- [ ] `client_max_body_size` comes from `NGINX_CLIENT_MAX_BODY_SIZE` or is derived from `IMPORT_MAX_FILE_SIZE_BYTES`.
 - [ ] Nginx `proxy_read_timeout` and `proxy_send_timeout` are at least `600s`.
 - [ ] Gunicorn timeout is aligned with importer runtime expectations.
 - [ ] Queue backlog does not block HTTP upload response handling.

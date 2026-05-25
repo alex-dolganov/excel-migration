@@ -93,7 +93,7 @@ class ImportExampleTemplatesApiTest(TestCase):
                 self.assertNotIn(str(value), sheet_xml)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_viewer_cannot_download_example_template(self, get_from_jwt_token):
+    def test_viewer_can_download_example_template_when_import_access_is_open(self, get_from_jwt_token):
         self.create_role(user_id=7, role=ROLE_VIEWER)
         get_from_jwt_token.return_value = self.create_account(is_admin=False)
 
@@ -102,7 +102,7 @@ class ImportExampleTemplatesApiTest(TestCase):
             HTTP_AUTHORIZATION="Bearer test-token",
         )
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_download_example_template_rejects_unknown_entity_type(self, get_from_jwt_token):
@@ -237,7 +237,6 @@ class ImportExampleTemplatesApiTest(TestCase):
 
         sheet_xml = read_sheet_xml_from_xlsx(response.content)
         for value in [
-            "Внешний ключ контакта",
             "Имя контакта",
             "Фамилия контакта",
             "Телефон контакта",
@@ -247,11 +246,14 @@ class ImportExampleTemplatesApiTest(TestCase):
         ]:
             self.assertIn(value, sheet_xml)
 
+        self.assertNotIn("Внешний ключ контакта", sheet_xml)
+
         for value in [
-            "contact_001",
             "Алиса",
             "Иванова",
             "+79990001122",
+            "Борис",
+            "Петров",
             "ООО Альфа",
             "+78005550101",
         ]:

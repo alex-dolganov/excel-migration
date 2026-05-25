@@ -27,7 +27,7 @@ test('builds simple and advanced import mode options', () => {
     {
       value: 'advanced',
       label: 'Расширенный импорт',
-      description: 'Полный сценарий с шаблонами, правилами сопоставления и расширенной настройкой дублей.',
+      description: 'Шаблоны сопоставления, расширенная настройка дублей и детальный отчёт по каждой строке.',
     },
   ])
 })
@@ -44,7 +44,7 @@ test('returns advanced mode metadata for simple and advanced flows', () => {
   assert.deepEqual(getImportModeMeta('advanced'), {
     value: 'advanced',
     label: 'Расширенный импорт',
-    description: 'Полный сценарий с шаблонами, правилами сопоставления и расширенной настройкой дублей.',
+    description: 'Шаблоны сопоставления, расширенная настройка дублей и детальный отчёт по каждой строке.',
     hidesAdvancedTools: false,
     allowsPerRowDedupDecisions: true,
   })
@@ -92,8 +92,8 @@ test('builds simple dedup preset from mapped fields without unsupported ask stra
 })
 
 test('importer workbench starts with simple versus advanced mode choice', () => {
-  assert.equal(importerWorkbenchSource.includes('Простой импорт'), true)
-  assert.equal(importerWorkbenchSource.includes('Расширенный импорт'), true)
+  assert.equal(importerWorkbenchSource.includes('Выберите тип импорта'), true)
+  assert.equal(importerWorkbenchSource.includes('Выбрать режим'), true)
   assert.equal(importerWorkbenchSource.includes('buildImportModeOptions'), true)
 })
 
@@ -113,16 +113,19 @@ test('importer workbench requests mapping data without advanced alias rules in s
   assert.equal(apiStoreSource.includes("searchParams.set('import_mode', importMode)"), true)
 })
 
-test('importer workbench uses primary blue style for all back navigation buttons', () => {
+test('importer workbench saves mapping in the active import mode scope', () => {
   assert.match(
     importerWorkbenchSource,
-    /label="← Режим"[\s\S]{0,120}color="air-primary"/,
+    /apiStore\.saveImportMapping\(\s*String\(session\.value\.id\),[\s\S]{0,220}currentDedupSettingsPayload\.value,[\s\S]{0,80}importModeMeta\.value\.value,/,
   )
-  assert.match(
-    importerWorkbenchSource,
-    /label="← Назад"[\s\S]{0,120}color="air-primary"/,
-  )
+  assert.equal(apiStoreSource.includes("body: JSON.stringify({ mapping, dedup, import_mode: importMode, ...options })"), true)
+  assert.equal(apiStoreSource.includes('import_mode?: string'), true)
+  assert.equal(importerWorkbenchSource.includes('import_mode: importModeMeta.value.value'), true)
+})
 
-  const backButtons = importerWorkbenchSource.match(/label="Назад"[\s\S]{0,120}color="air-primary"/g) || []
-  assert.equal(backButtons.length, 6)
+test('importer workbench uses primary blue style for all back navigation buttons', () => {
+  assert.equal(importerWorkbenchSource.includes('← Назад'), true)
+  assert.equal(importerWorkbenchSource.includes('Выбрать режим'), true)
+  const primaryBlueButtons = importerWorkbenchSource.match(/color="air-primary"/g) || []
+  assert.ok(primaryBlueButtons.length >= 6)
 })

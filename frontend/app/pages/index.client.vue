@@ -81,7 +81,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-screen w-full min-w-0 bg-[#eef2f4]">
+  <div class="h-full w-full min-w-0 overflow-y-auto bg-[#eef2f4]">
     <B24Alert
       v-if="pageRenderError"
       class="m-4"

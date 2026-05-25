@@ -31,6 +31,14 @@
 Sample Nginx config for the Python app:
 
 - [infrastructure/nginx/python-app.conf](./infrastructure/nginx/python-app.conf)
+- [infrastructure/nginx/python-app.conf.template](./infrastructure/nginx/python-app.conf.template)
+- [infrastructure/nginx/render-python-app-conf.mjs](./infrastructure/nginx/render-python-app-conf.mjs)
+
+Render the Nginx config from the shared importer env contract:
+
+```bash
+node infrastructure/nginx/render-python-app-conf.mjs infrastructure/nginx/python-app.conf.template infrastructure/nginx/python-app.conf
+```
 
 Release checklist:
 

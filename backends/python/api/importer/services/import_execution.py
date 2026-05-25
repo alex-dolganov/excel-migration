@@ -2479,7 +2479,17 @@ def execute_linked_import(
         duplicate_decision_summary = build_linked_duplicate_decision_summary(linked_actions, entity_type)
 
         if parent_action.get("mode") == "pending_decision" or child_action.get("mode") == "pending_decision":
-            raise ValueError("Run a dry run and choose an action for each duplicate before import execution")
+            skipped_rows += 1
+            results.append(
+                {
+                    "row_number": row_number,
+                    "status": "skipped_duplicate",
+                    "error": "Duplicate skipped: no decision provided",
+                    **duplicate_decision_summary,
+                    **build_import_result_report_meta(entity_type, linked_payload=linked_payload),
+                }
+            )
+            continue
 
         if parent_action.get("mode") == "skip_row" or child_action.get("mode") == "skip_row":
             skipped_rows += 1

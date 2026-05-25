@@ -161,6 +161,7 @@ class ImportValidationApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     lead=SimpleNamespace(
@@ -212,6 +213,7 @@ class ImportValidationApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     company=SimpleNamespace(

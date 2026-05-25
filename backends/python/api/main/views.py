@@ -36,6 +36,46 @@ def _coerce_bool(value):
     return False
 
 
+def _extract_admin_user_ids(payload) -> set[int]:
+    if not isinstance(payload, (list, tuple, set)):
+        return set()
+
+    admin_user_ids = set()
+    for item in payload:
+        candidate = item
+        if isinstance(item, dict):
+            candidate = item.get("ID") or item.get("id") or item.get("USER_ID") or item.get("user_id")
+
+        try:
+            normalized_candidate = int(candidate)
+        except (TypeError, ValueError):
+            continue
+
+        if normalized_candidate > 0:
+            admin_user_ids.add(normalized_candidate)
+
+    return admin_user_ids
+
+
+def refresh_portal_admin_flag(account) -> None:
+    try:
+        admin_users_response = account.client.user.admin()
+        admin_user_ids = _extract_admin_user_ids(getattr(admin_users_response, "result", None))
+    except Exception:
+        return
+
+    current_user_id = int(getattr(account, "b24_user_id", 0) or 0)
+    if current_user_id <= 0:
+        return
+
+    is_portal_admin = current_user_id in admin_user_ids
+    if bool(getattr(account, "is_b24_user_admin", False)) == is_portal_admin:
+        return
+
+    account.is_b24_user_admin = is_portal_admin
+    account.save(update_fields=["is_b24_user_admin"])
+
+
 @xframe_options_exempt
 @require_GET
 @log_errors("root")
@@ -112,11 +152,6 @@ def install(request: AuthorizedRequest):
 @auth_required
 def get_token(request: AuthorizedRequest):
     bitrix24_account = request.bitrix24_account
-
-    if "IS_ADMIN" in request.data:
-        is_portal_admin = _coerce_bool(request.data.get("IS_ADMIN"))
-        if bitrix24_account.is_b24_user_admin != is_portal_admin:
-            bitrix24_account.is_b24_user_admin = is_portal_admin
-            bitrix24_account.save(update_fields=["is_b24_user_admin"])
+    refresh_portal_admin_flag(bitrix24_account)
 
     return JsonResponse({"token": bitrix24_account.create_jwt_token(minutes=480)})

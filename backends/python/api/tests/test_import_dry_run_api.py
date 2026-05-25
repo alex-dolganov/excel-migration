@@ -127,6 +127,7 @@ class ImportDryRunApiTest(TestCase):
             member_id="member-1",
             domain_url="test.bitrix24.ru",
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     lead=SimpleNamespace(

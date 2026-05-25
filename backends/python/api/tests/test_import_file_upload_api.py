@@ -136,6 +136,44 @@ class ImportFileUploadApiTest(TestCase):
         self.assertEqual(session.file_size_bytes, None)
         self.assertFalse(session.stored_file)
 
+    @override_settings(
+        IMPORT_MAX_FILE_SIZE_BYTES=4,
+        DATA_UPLOAD_MAX_MEMORY_SIZE=52428800,
+        FILE_UPLOAD_MAX_MEMORY_SIZE=52428800,
+    )
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_upload_uses_import_max_file_size_setting(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+        )
+
+        session = ImportSession.objects.create(
+            portal_member_id="member-1",
+            portal_domain="test.bitrix24.ru",
+            created_by_b24_user_id=7,
+            entity_type=ImportSession.EntityType.LEAD,
+            source_format=ImportSession.SourceFormat.XLSX,
+            status=ImportSession.Status.DRAFT,
+            original_filename="draft.xlsx",
+        )
+
+        upload = SimpleUploadedFile(
+            "huge.xlsx",
+            b"PK\x03\x04x",
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        response = self.client.post(
+            reverse("importer:session-upload", kwargs={"session_id": session.id}),
+            data={"file": upload},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Файл слишком большой. Максимум для импорта — 1 МБ.")
+
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_upload_is_limited_to_current_portal_session(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(

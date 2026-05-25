@@ -168,6 +168,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     lead=SimpleNamespace(
@@ -205,20 +206,50 @@ class ImportExecutionApiTest(TestCase):
         account.list_calls = list_calls
         return account
 
-    def create_contact_account(self, *, member_id="member-1", domain_url="test.bitrix24.ru"):
+    def create_contact_account(
+        self,
+        *,
+        member_id="member-1",
+        domain_url="test.bitrix24.ru",
+        duplicates_by_filter=None,
+    ):
         created_fields = []
+        updated_records = []
+        list_calls = []
         record_id_sequence = itertools.count(start=701)
+        duplicates_by_filter = duplicates_by_filter or {}
 
         def add(fields, *, params=None, timeout=None):
             normalized_fields = dict(fields)
             created_fields.append(normalized_fields)
             return FakeAddRequest(next(record_id_sequence))
 
+        def list_method(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            list_calls.append(
+                {
+                    "filter": dict(filter or {}),
+                    "select": list(select or []),
+                }
+            )
+            return FakeListRequest(duplicates_by_filter.get(normalized_filter, []))
+
+        def update(record_id, fields, *, params=None, timeout=None):
+            normalized_fields = dict(fields)
+            updated_records.append(
+                {
+                    "id": record_id,
+                    "fields": normalized_fields,
+                }
+            )
+            return FakeUpdateRequest(True)
+
         account = SimpleNamespace(
             id=f"account-{member_id}-{domain_url}",
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     contact=SimpleNamespace(
@@ -238,12 +269,16 @@ class ImportExecutionApiTest(TestCase):
                                 },
                             }
                         ),
+                        list=list_method,
+                        update=update,
                         add=add,
                     )
                 )
             ),
         )
         account.created_fields = created_fields
+        account.updated_records = updated_records
+        account.list_calls = list_calls
         return account
 
     def create_task_account(
@@ -286,6 +321,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 user=SimpleNamespace(
                     get=get_users,
@@ -343,20 +379,49 @@ class ImportExecutionApiTest(TestCase):
         )
         return session
 
-    def create_company_account(self, *, member_id="member-1", domain_url="test.bitrix24.ru"):
+    def create_company_account(
+        self,
+        *,
+        member_id="member-1",
+        domain_url="test.bitrix24.ru",
+        duplicates_by_filter=None,
+    ):
         created_fields = []
+        updated_records = []
+        list_calls = []
         record_id_sequence = itertools.count(start=601)
+        duplicates_by_filter = duplicates_by_filter or {}
 
         def add(fields, *, params=None, timeout=None):
             normalized_fields = dict(fields)
             created_fields.append(normalized_fields)
             return FakeAddRequest(next(record_id_sequence))
 
+        def list_method(*, filter=None, select=None, order=None, start=None):
+            normalized_filter = tuple(sorted((filter or {}).items()))
+            list_calls.append(
+                {
+                    "filter": dict(filter or {}),
+                    "select": list(select or []),
+                }
+            )
+            return FakeListRequest(duplicates_by_filter.get(normalized_filter, []))
+
+        def update(record_id, fields, *, params=None, timeout=None):
+            updated_records.append(
+                {
+                    "id": record_id,
+                    "fields": dict(fields),
+                }
+            )
+            return FakeUpdateRequest(True)
+
         account = SimpleNamespace(
             id=f"account-{member_id}-{domain_url}",
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     company=SimpleNamespace(
@@ -382,12 +447,16 @@ class ImportExecutionApiTest(TestCase):
                                 },
                             }
                         ),
+                        list=list_method,
+                        update=update,
                         add=add,
                     )
                 )
             ),
         )
         account.created_fields = created_fields
+        account.updated_records = updated_records
+        account.list_calls = list_calls
         return account
 
     def create_uploaded_company_session(self, rows):
@@ -452,6 +521,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     deal=SimpleNamespace(
@@ -545,6 +615,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(),
         )
 
@@ -872,6 +943,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     company=SimpleNamespace(
@@ -1000,6 +1072,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     company=SimpleNamespace(
@@ -1126,6 +1199,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     contact=SimpleNamespace(
@@ -1270,6 +1344,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     contact=SimpleNamespace(
@@ -1398,6 +1473,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     deal=SimpleNamespace(
@@ -1542,6 +1618,7 @@ class ImportExecutionApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     deal=SimpleNamespace(
@@ -3909,6 +3986,150 @@ class ImportExecutionApiTest(TestCase):
                 }
             ],
         )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_updates_existing_contact_when_dedup_strategy_is_update(self, get_from_jwt_token):
+        account = self.create_contact_account(
+            duplicates_by_filter={
+                (("PHONE", "+123456789"),): [{"ID": 921}],
+            }
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_contact_session(
+            [
+                ["First name", "Phone"],
+                ["Alice", "+123456789"],
+            ]
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        mapping_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "mapping": {
+                    "NAME": {
+                        "source_header": "First name",
+                        "column": "A",
+                    },
+                    "PHONE": {
+                        "source_header": "Phone",
+                        "column": "B",
+                    },
+                }
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(mapping_response.status_code, 200)
+
+        validation_response = self.client.post(
+            reverse("importer:session-validate", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(validation_response.status_code, 200)
+
+        session.refresh_from_db()
+        session.import_settings = {
+            **session.import_settings,
+            "dedup": {
+                "strategy": "update",
+                "fields": ["PHONE"],
+            },
+        }
+        session.save(update_fields=["import_settings", "updated_at"])
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 0)
+        self.assertEqual(response.json()["item"]["updated_rows"], 1)
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
+            {
+                "row_number": 2,
+                "status": "updated",
+                "record_id": 921,
+                "duplicate_match_fields": ["PHONE"],
+                "updated_fields": ["NAME", "PHONE"],
+            }
+        ])
+        self.assertEqual(account.created_fields, [])
+        self.assertEqual(account.list_calls, [{"filter": {"PHONE": "+123456789"}, "select": ["ID"]}])
+        self.assertEqual(account.updated_records, [
+            {
+                "id": 921,
+                "fields": {
+                    "NAME": "Alice",
+                    "PHONE": [
+                        {
+                            "VALUE": "+123456789",
+                            "VALUE_TYPE": "WORK",
+                        }
+                    ],
+                },
+            }
+        ])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_run_skips_duplicate_company_when_dedup_strategy_is_skip(self, get_from_jwt_token):
+        account = self.create_company_account(
+            duplicates_by_filter={
+                (("EMAIL", "hello@alpha.example"),): [{"ID": 922}],
+            }
+        )
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_company_session(
+            [
+                ["Company title", "Phone", "Email"],
+                ["ООО Альфа", "+78005550101", "hello@alpha.example"],
+            ]
+        )
+        self.prepare_company_session(session, validate=True)
+        session.refresh_from_db()
+        session.import_settings = {
+            **session.import_settings,
+            "dedup": {
+                "strategy": "skip",
+                "fields": ["EMAIL"],
+            },
+        }
+        session.save(update_fields=["import_settings", "updated_at"])
+
+        response = self.client.post(
+            reverse("importer:session-run", kwargs={"session_id": session.id}),
+            data={},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["item"]["created_rows"], 0)
+        self.assertEqual(response.json()["item"]["updated_rows"], 0)
+        self.assertEqual(response.json()["item"]["skipped_rows"], 1)
+        self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
+            {
+                "row_number": 2,
+                "status": "skipped_duplicate",
+                "record_id": 922,
+                "duplicate_match_fields": ["EMAIL"],
+                "error": "Duplicate matched existing record",
+            }
+        ])
+        self.assertEqual(account.created_fields, [])
+        self.assertEqual(account.list_calls, [{"filter": {"EMAIL": "hello@alpha.example"}, "select": ["ID"]}])
+        self.assertEqual(account.updated_records, [])
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_run_skips_duplicate_rows_when_dedup_strategy_is_skip(self, get_from_jwt_token):

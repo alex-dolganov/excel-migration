@@ -105,8 +105,15 @@ MEDIA_URL = "api/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# 50 MB file upload limit
-DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800
-FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
+def _read_positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return max(1, int(default))
+
+
+IMPORT_MAX_FILE_SIZE_BYTES = _read_positive_int_env("IMPORT_MAX_FILE_SIZE_BYTES", 50 * 1024 * 1024)
+DATA_UPLOAD_MAX_MEMORY_SIZE = IMPORT_MAX_FILE_SIZE_BYTES
+FILE_UPLOAD_MAX_MEMORY_SIZE = IMPORT_MAX_FILE_SIZE_BYTES
 
 CORS_ALLOW_ALL_ORIGINS = True

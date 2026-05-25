@@ -100,6 +100,7 @@ class ImportMappingApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     lead=SimpleNamespace(
@@ -145,6 +146,7 @@ class ImportMappingApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     company=SimpleNamespace(
@@ -192,6 +194,7 @@ class ImportMappingApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     company=SimpleNamespace(
@@ -245,6 +248,7 @@ class ImportMappingApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     contact=SimpleNamespace(
@@ -316,6 +320,7 @@ class ImportMappingApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     contact=SimpleNamespace(
@@ -387,6 +392,7 @@ class ImportMappingApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     deal=SimpleNamespace(
@@ -458,6 +464,7 @@ class ImportMappingApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     deal=SimpleNamespace(
@@ -517,6 +524,7 @@ class ImportMappingApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     deal=SimpleNamespace(
@@ -566,6 +574,7 @@ class ImportMappingApiTest(TestCase):
             member_id=member_id,
             domain_url=domain_url,
             b24_user_id=7,
+            is_b24_user_admin=True,
             client=SimpleNamespace(
                 crm=SimpleNamespace(
                     lead=SimpleNamespace(
@@ -1896,6 +1905,87 @@ class ImportMappingApiTest(TestCase):
         self.assertNotIn("isPinned", field_ids)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_auto_matches_russian_task_headers_when_task_field_catalog_is_english(self, get_from_jwt_token):
+        def get_users(*, filter=None, select=None):
+            return FakeUsersRequest([])
+
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                tasks=SimpleNamespace(
+                    task=SimpleNamespace(
+                        getFields=lambda: FakeFieldsRequest(
+                            {
+                                "fields": {
+                                    "TITLE": {
+                                        "title": "Title",
+                                        "type": "string",
+                                        "required": True,
+                                    },
+                                    "RESPONSIBLE_ID": {
+                                        "title": "Responsible",
+                                        "type": "integer",
+                                        "required": True,
+                                    },
+                                    "DEADLINE": {
+                                        "title": "Deadline",
+                                        "type": "datetime",
+                                        "required": False,
+                                    },
+                                }
+                            }
+                        )
+                    )
+                ),
+                user=SimpleNamespace(
+                    get=get_users,
+                ),
+            ),
+        )
+
+        session = self.create_uploaded_task_session_with_headers(
+            ["Название задачи", "Ответственный", "Крайний срок"],
+            [["Подготовить КП", "59", "2026-12-31 18:45"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        response = self.client.get(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(
+            response.json()["item"]["candidate_mapping"],
+            {
+                "TITLE": {
+                    "source_header": "Название задачи",
+                    "column": "A",
+                    "target_field": "TITLE",
+                    "match_type": "fuzzy",
+                },
+                "RESPONSIBLE_ID": {
+                    "source_header": "Ответственный",
+                    "column": "B",
+                    "target_field": "RESPONSIBLE_ID",
+                    "match_type": "fuzzy",
+                },
+                "DEADLINE": {
+                    "source_header": "Крайний срок",
+                    "column": "C",
+                    "target_field": "DEADLINE",
+                    "match_type": "fuzzy",
+                },
+            },
+        )
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_applies_saved_alias_rule_to_candidate_mapping(self, get_from_jwt_token):
         get_from_jwt_token.return_value = self.create_account()
 
@@ -1955,7 +2045,9 @@ class ImportMappingApiTest(TestCase):
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_simple_mode_mapping_ignores_saved_alias_rules_from_advanced_mode(self, get_from_jwt_token):
-        get_from_jwt_token.return_value = self.create_account()
+        account = self.create_account()
+        account.is_b24_user_admin = True
+        get_from_jwt_token.return_value = account
 
         session = self.create_uploaded_session_with_headers(
             ["Контрагент", "Телефон"],
@@ -1988,6 +2080,120 @@ class ImportMappingApiTest(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         self.assertNotIn("TITLE", response.json()["item"]["candidate_mapping"])
         self.assertEqual(response.json()["item"]["alias_rules"], [])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_mapping_keeps_simple_and_advanced_saved_rules_isolated(self, get_from_jwt_token):
+        account = self.create_deal_account_with_generic_titles()
+        account.is_b24_user_admin = True
+        get_from_jwt_token.return_value = account
+
+        session = self.create_uploaded_deal_session_with_headers(
+            ["Title", "Source"],
+            [["Website redesign", "Advertising"]],
+        )
+        preview_response = self.client.get(
+            reverse("importer:session-preview", kwargs={"session_id": session.id}),
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(preview_response.status_code, 200)
+
+        advanced_response = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "import_mode": "advanced",
+                "mapping": {
+                    "SOURCE_ID": {
+                        "source_header": "Title",
+                        "column": "A",
+                    },
+                },
+                "dedup": {
+                    "strategy": "create",
+                    "fields": [],
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(advanced_response.status_code, 200, advanced_response.content)
+        self.assertEqual(advanced_response.json()["item"]["saved_mapping"], {
+            "SOURCE_ID": {
+                "source_header": "Title",
+                "column": "A",
+                "target_field": "SOURCE_ID",
+            },
+        })
+
+        simple_response_before_save = self.client.get(
+            f"{reverse('importer:session-mapping', kwargs={'session_id': session.id})}?import_mode=simple",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(simple_response_before_save.status_code, 200, simple_response_before_save.content)
+        self.assertEqual(simple_response_before_save.json()["item"]["saved_mapping"], {})
+        self.assertEqual(simple_response_before_save.json()["item"]["candidate_mapping"]["TITLE"], {
+            "source_header": "Title",
+            "column": "A",
+            "target_field": "TITLE",
+            "match_type": "exact",
+        })
+
+        simple_response_after_save = self.client.patch(
+            reverse("importer:session-mapping", kwargs={"session_id": session.id}),
+            data={
+                "import_mode": "simple",
+                "mapping": {
+                    "TITLE": {
+                        "source_header": "Title",
+                        "column": "A",
+                    },
+                },
+                "dedup": {
+                    "strategy": "update",
+                    "fields": ["TITLE"],
+                },
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(simple_response_after_save.status_code, 200, simple_response_after_save.content)
+        self.assertEqual(simple_response_after_save.json()["item"]["saved_mapping"], {
+            "TITLE": {
+                "source_header": "Title",
+                "column": "A",
+                "target_field": "TITLE",
+            },
+        })
+
+        simple_response = self.client.get(
+            f"{reverse('importer:session-mapping', kwargs={'session_id': session.id})}?import_mode=simple",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(simple_response.status_code, 200, simple_response.content)
+        self.assertEqual(simple_response.json()["item"]["saved_mapping"], {
+            "TITLE": {
+                "source_header": "Title",
+                "column": "A",
+                "target_field": "TITLE",
+            },
+        })
+        self.assertEqual(simple_response.json()["item"]["saved_dedup"], {
+            "strategy": "update",
+            "condition": "any",
+            "fields": ["TITLE"],
+        })
+
+        advanced_response_after_simple_save = self.client.get(
+            f"{reverse('importer:session-mapping', kwargs={'session_id': session.id})}?import_mode=advanced",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+        self.assertEqual(advanced_response_after_simple_save.status_code, 200, advanced_response_after_simple_save.content)
+        self.assertEqual(advanced_response_after_simple_save.json()["item"]["saved_mapping"], {
+            "SOURCE_ID": {
+                "source_header": "Title",
+                "column": "A",
+                "target_field": "SOURCE_ID",
+            },
+        })
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_mapping_returns_linked_preflight_warning_for_repeated_company_rows_without_identity_strategy(self, get_from_jwt_token):

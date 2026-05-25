@@ -9,6 +9,20 @@ import requests
 from importer.services.import_execution import _bitrix_retry, _flush_crm_batch, _flush_crm_batch_with_fallback
 
 
+class FakeBitrixInvitationLimitError(Exception):
+    def __init__(self):
+        super().__init__("Unknown error.")
+        self.json_response = {
+            "error": "ERROR_USER_INVITATION_LIMIT",
+            "error_description": "Unknown error.",
+        }
+
+
+class FakeBitrixUnknownUserInviteError(Exception):
+    def __init__(self):
+        super().__init__("Unknown error.")
+
+
 class ImportExecutionBatchTest(SimpleTestCase):
     @patch("importer.services.import_execution.time.sleep")
     def test_bitrix_retry_waits_and_retries_when_bitrix_blocks_method_by_operation_time(self, sleep):
@@ -25,6 +39,26 @@ class ImportExecutionBatchTest(SimpleTestCase):
         self.assertEqual(result, 907)
         self.assertEqual(attempts["count"], 3)
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [60, 180])
+
+    @patch("importer.services.import_execution.time.sleep")
+    def test_bitrix_retry_does_not_sleep_for_daily_invitation_limit_error(self, sleep):
+        def broken_call():
+            raise FakeBitrixInvitationLimitError()
+
+        with self.assertRaises(FakeBitrixInvitationLimitError):
+            _bitrix_retry(broken_call)
+
+        sleep.assert_not_called()
+
+    @patch("importer.services.import_execution.time.sleep")
+    def test_bitrix_retry_does_not_sleep_for_unknown_error_when_unknown_retry_is_disabled(self, sleep):
+        def broken_call():
+            raise FakeBitrixUnknownUserInviteError()
+
+        with self.assertRaises(FakeBitrixUnknownUserInviteError):
+            _bitrix_retry(broken_call, allow_unknown_error_as_operation_time_limit=False)
+
+        sleep.assert_not_called()
 
     @patch("importer.services.import_execution.BitrixAPIBatchRequest")
     def test_flush_crm_batch_reads_record_ids_from_list_result(self, bitrix_api_batch_request):

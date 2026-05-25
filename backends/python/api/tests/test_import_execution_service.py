@@ -51,6 +51,15 @@ class FakeBitrixUnknownUserInviteError(Exception):
         super().__init__("Unknown error.")
 
 
+class FakeBitrixPermissionDeniedError(Exception):
+    def __init__(self, message="Недостаточно прав для создания сделки"):
+        super().__init__("Permission denied.")
+        self.json_response = {
+            "error": "ACCESS_DENIED",
+            "error_description": message,
+        }
+
+
 class ImportExecutionServiceTest(SimpleTestCase):
     @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
     def test_bind_deal_contact_executes_request(self, bitrix_api_request):
@@ -247,6 +256,38 @@ class ImportExecutionServiceTest(SimpleTestCase):
         self.assertEqual(result["results"][0]["error"], BITRIX_USER_INVITATION_UNKNOWN_ERROR)
         self.assertEqual(result["results"][1]["status"], "cancelled")
         self.assertEqual(result["results"][1]["error"], BITRIX_USER_INVITATION_UNKNOWN_ERROR)
+
+    @patch("importer.services.import_execution.BitrixUserResolver")
+    @patch("importer.services.import_execution._is_batch_eligible", return_value=False)
+    @patch("importer.services.import_execution.find_existing_record", return_value={})
+    @patch("importer.services.import_execution.create_entity_record", side_effect=FakeBitrixPermissionDeniedError())
+    @patch("importer.services.import_execution.build_row_payload", return_value={"TITLE": "Сделка 1"})
+    def test_execute_import_surfaces_bitrix_permission_error_description_for_crm_create(
+        self,
+        _build_row_payload,
+        _create_entity_record,
+        _find_existing_record,
+        _batch_eligible,
+        _user_resolver,
+    ):
+        result = execute_import(
+            account=SimpleNamespace(),
+            entity_type="deal",
+            rows=[["Сделка 1"]],
+            row_numbers=[2],
+            columns=["A"],
+            data_start_row=2,
+            mapping={},
+            validation_summary={"issues": []},
+            fields=[],
+            dedup_settings={"strategy": "create"},
+        )
+
+        self.assertEqual(result["failed_rows"], 1)
+        self.assertEqual(
+            result["results"][0]["error"],
+            "Недостаточно прав для создания сделки",
+        )
 
     @patch("importer.services.import_execution.BitrixUserResolver")
     @patch("importer.services.import_execution.resolve_linked_record_action_with_decision")

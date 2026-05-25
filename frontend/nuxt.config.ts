@@ -22,7 +22,8 @@ export default defineNuxtConfig({
     public: {
       appUrl: '',
       apiUrl: '',
-      telemetryEnabled: ''
+      telemetryEnabled: '',
+      importMaxFileSizeBytes: process.env.NUXT_PUBLIC_IMPORT_MAX_FILE_SIZE_BYTES || process.env.IMPORT_MAX_FILE_SIZE_BYTES || '52428800',
     }
   },
 

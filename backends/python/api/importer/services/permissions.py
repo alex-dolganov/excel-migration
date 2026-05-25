@@ -1,11 +1,10 @@
-from importer.models import ImporterUserRole
-
-
+ROLE_NONE = "none"
 ROLE_PORTAL_ADMIN = "portal_admin"
 ROLE_OPERATOR = "operator"
 ROLE_VIEWER = "viewer"
 ASSIGNABLE_ROLES = {ROLE_OPERATOR, ROLE_VIEWER}
 PERMISSION_CODES = {
+    ROLE_NONE: set(),
     ROLE_PORTAL_ADMIN: {
         "roles.manage",
         "templates.manage",
@@ -33,25 +32,13 @@ PERMISSION_CODES = {
 
 
 def is_portal_admin(account) -> bool:
-    admin_flag = getattr(account, "is_b24_user_admin", None)
-    if admin_flag is None:
-        return True
-    return bool(admin_flag)
+    # Temporary rollback: keep importer fully available regardless of Bitrix24
+    # portal admin status or assigned local importer role.
+    return True
 
 
 def resolve_role(account):
-    if is_portal_admin(account):
-        return ROLE_PORTAL_ADMIN
-
-    assignment = ImporterUserRole.objects.filter(
-        portal_member_id=str(getattr(account, "member_id", "")),
-        b24_user_id=int(getattr(account, "b24_user_id", 0) or 0),
-    ).only("role").first()
-
-    if assignment is None:
-        return ROLE_PORTAL_ADMIN
-
-    return str(assignment.role)
+    return ROLE_PORTAL_ADMIN
 
 
 def get_permissions(role) -> list[str]:

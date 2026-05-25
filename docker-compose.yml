@@ -81,7 +81,9 @@ services:
     environment:
       NUXT_PUBLIC_APP_URL: ${VIRTUAL_HOST}
       NUXT_PUBLIC_API_URL: ${VIRTUAL_HOST}
+      IMPORT_MAX_FILE_SIZE_BYTES: ${IMPORT_MAX_FILE_SIZE_BYTES:-52428800}
       NUXT_PUBLIC_TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-false}
+      NUXT_PUBLIC_IMPORT_MAX_FILE_SIZE_BYTES: ${IMPORT_MAX_FILE_SIZE_BYTES:-52428800}
       HTTP: frontend:3000
     expose:
       - '3000'
@@ -185,6 +187,7 @@ services:
       DB_HOST: database
       PORT: 8000
       NUXT_PUBLIC_API_URL: ${VIRTUAL_HOST}
+      IMPORT_MAX_FILE_SIZE_BYTES: ${IMPORT_MAX_FILE_SIZE_BYTES:-52428800}
     expose:
       - "8000"
     ports:
@@ -214,6 +217,7 @@ services:
       DB_HOST: database
       PORT: 8000
       NUXT_PUBLIC_API_URL: ${VIRTUAL_HOST}
+      IMPORT_MAX_FILE_SIZE_BYTES: ${IMPORT_MAX_FILE_SIZE_BYTES:-52428800}
     command:
       - sh
       - ./scripts/start-worker.sh

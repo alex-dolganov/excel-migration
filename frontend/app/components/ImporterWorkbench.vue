@@ -354,6 +354,22 @@ function getPerRowDedupDecision(rowNumber: string, entityId = ''): string {
   return normalizePerRowEntityDecision(rowDecision)
 }
 
+function extractMatchFieldDisplayValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (item && typeof item === 'object' && 'VALUE' in item) {
+        const v = String((item as Record<string, unknown>).VALUE || '').trim()
+        if (v) return v
+      } else {
+        const v = String(item || '').trim()
+        if (v) return v
+      }
+    }
+    return ''
+  }
+  return String(value ?? '').trim()
+}
+
 function getPendingDecisionMatchFieldsLabel(row: Record<string, any> | null | undefined, entityId = ''): string {
   const normalizedEntityId = String(entityId || '').trim().toLowerCase()
   const rawFieldIds = normalizedEntityId
@@ -368,10 +384,18 @@ function getPendingDecisionMatchFieldsLabel(row: Record<string, any> | null | un
     ? linkedDedupEntityGroups.value.find((item) => item.id === normalizedEntityId)
     : null
   const prefix = String(linkedEntityGroup?.prefix || '').trim().toUpperCase()
+  const rowFields = row?.fields && typeof row.fields === 'object' ? row.fields as Record<string, unknown> : {}
+
   const labels = rawFieldIds
     .map((fieldId) => String(fieldId || '').trim())
     .filter(Boolean)
-    .map((fieldId) => resolveImporterFieldLabel(prefix ? `${prefix}${fieldId}` : fieldId))
+    .map((fieldId) => {
+      const prefixedKey = prefix ? `${prefix}${fieldId}` : fieldId
+      const label = resolveImporterFieldLabel(prefixedKey)
+      if (!label) return ''
+      const displayValue = extractMatchFieldDisplayValue(rowFields[prefixedKey])
+      return displayValue ? `${label}: ${displayValue}` : label
+    })
     .filter(Boolean)
 
   return labels.length ? labels.join(', ') : (normalizedEntityId ? 'Совпадение найдено' : '—')
@@ -2197,6 +2221,14 @@ function buildPreflightIssueDescription(issue: Record<string, any>) {
   if (code === 'linked_company_identity_missing') {
     const companyRowLabel = rowCount > 0 ? ` Повторяющихся строк: ${rowCount}.` : ''
     return `В связанных данных компании повторяются по названию без явного идентификатора. Добавьте COMPANY__XML_ID или настройте дедупликацию компании.${companyRowLabel}`
+  }
+  if (code === 'linked_contact_identity_missing') {
+    const rowLabel = rowCount > 0 ? ` Повторяющихся строк: ${rowCount}.` : ''
+    return `В файле есть строки с одинаковыми данными контакта. Без явного идентификатора каждая такая строка создаст отдельный контакт в Битрикс24 — возникнут дубли. Добавьте колонку с уникальным внешним ключом контакта или настройте дедупликацию по email / телефону.${rowLabel}`
+  }
+  if (code === 'linked_deal_identity_missing') {
+    const rowLabel = rowCount > 0 ? ` Повторяющихся строк: ${rowCount}.` : ''
+    return `В файле есть строки с одинаковыми данными сделки. Без явного идентификатора каждая такая строка создаст отдельную сделку в Битрикс24 — возникнут дубли. Добавьте колонку с уникальным внешним ключом сделки или настройте дедупликацию по названию.${rowLabel}`
   }
   return code || 'Проблема предварительной проверки.'
 }

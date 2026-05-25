@@ -34,3 +34,6 @@ node_modules
 # dev/build outputs
 backends/php/vendor
 
+# Runtime app artifacts
+backends/python/api/media/
+
