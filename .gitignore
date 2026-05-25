@@ -28,8 +28,9 @@ node_modules
 !.env.example
 !.env.dev.example
 !.env.prod.example
-!backends/php/.env*
+!backends/php/.env
+!backends/php/.env.test
 
 # dev/build outputs
-backend/php/vendor
+backends/php/vendor
 

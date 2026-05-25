@@ -27,19 +27,15 @@ LABEL "org.opencontainers.image.source"="https://github.com/bitrix-tools/ai-hack
 ARG UID=10001
 ARG GID=10001
 
-RUN <<EOF
-  groupmod --gid=${GID} www-data
-  usermod --uid=${UID} --gid=${GID} www-data
-EOF
+RUN groupmod --gid=${GID} www-data \
+    && usermod --uid=${UID} --gid=${GID} www-data
 
-RUN <<EOF
-  apt-get update
-  apt-get install --no-install-recommends --no-install-suggests -q -y \
-          unzip \
-          default-mysql-client
-  apt-get clean
-  rm -rf /var/lib/apt/lists/*
-EOF
+RUN apt-get update \
+    && apt-get install --no-install-recommends --no-install-suggests -q -y \
+        unzip \
+        default-mysql-client \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN install-php-extensions amqp bcmath excimer intl pcntl opcache yaml zip pdo_pgsql pdo_mysql pgsql sockets
 
