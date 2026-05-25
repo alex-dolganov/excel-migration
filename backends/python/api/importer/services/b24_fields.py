@@ -619,7 +619,6 @@ STATIC_FIELD_CATALOGS = {
     "crm_files_contact": CRM_FILES_FIELDS,
     "crm_files_company": CRM_FILES_FIELDS,
     "crm_files_deal": CRM_FILES_FIELDS,
-    "user": USER_FIELDS,
     "department": DEPARTMENT_FIELDS,
     "crm_activity": CRM_ACTIVITY_FIELDS,
     "crm_note": CRM_NOTE_FIELDS,
@@ -1590,6 +1589,67 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
         return sorted(
             normalized_task_fields_by_id.values(),
             key=lambda item: (item["is_custom"], item["title"], item["id"]),
+        )
+
+    if entity_type == "user":
+        static_fields_by_id = {str(f["id"]): dict(f) for f in USER_FIELDS}
+
+        # user.userfield.list returns full metadata (type + items) for portal-created UF_USR_* fields
+        userfield_meta_by_id: dict[str, dict[str, Any]] = {}
+        try:
+            userfield_list = unwrap_bitrix_result(account.client.user.userfield.list())
+            if isinstance(userfield_list, list):
+                for uf in userfield_list:
+                    field_name = str(uf.get("FIELD_NAME") or "").strip()
+                    if not field_name:
+                        continue
+                    userfield_meta_by_id[field_name] = {
+                        "USER_TYPE_ID": uf.get("USER_TYPE_ID"),
+                        "MULTIPLE": uf.get("MULTIPLE"),
+                        "MANDATORY": uf.get("MANDATORY"),
+                        "items": normalize_field_items(uf.get("LIST")),
+                    }
+        except Exception:
+            pass
+
+        # user.fields returns titles for all user fields including UF_* ones
+        try:
+            user_fields_result = unwrap_bitrix_result(
+                BitrixAPIRequest(bitrix_token=account, api_method="user.fields", params={})
+            )
+        except Exception:
+            user_fields_result = None
+
+        if isinstance(user_fields_result, dict):
+            for field_id, field_meta in user_fields_result.items():
+                normalized_id = str(field_id or "").strip()
+                if not normalized_id.upper().startswith("UF_"):
+                    continue
+                if normalized_id in static_fields_by_id:
+                    continue
+                # user.fields returns either a plain string title or a metadata dict
+                if isinstance(field_meta, str):
+                    title = field_meta.strip() or normalized_id
+                    field_meta_dict: dict[str, Any] = {}
+                else:
+                    field_meta_dict = field_meta if isinstance(field_meta, dict) else {}
+                    title = _resolve_bitrix_field_title(normalized_id, field_meta_dict)
+                # enrich with type and items from user.userfield.list if available
+                rich = userfield_meta_by_id.get(normalized_id, {})
+                rich_field_meta = {**field_meta_dict, "USER_TYPE_ID": rich.get("USER_TYPE_ID")} if rich.get("USER_TYPE_ID") else field_meta_dict
+                static_fields_by_id[normalized_id] = {
+                    "id": normalized_id,
+                    "title": title,
+                    "type": normalize_bitrix_field_type(rich_field_meta),
+                    "required": normalize_bitrix_bool(rich.get("MANDATORY") or field_meta_dict.get("isRequired", False)),
+                    "multiple": normalize_bitrix_bool(rich.get("MULTIPLE") or field_meta_dict.get("isMultiple", False)),
+                    "is_custom": True,
+                    "items": rich.get("items") or normalize_field_items(field_meta_dict.get("items")),
+                }
+
+        return sorted(
+            static_fields_by_id.values(),
+            key=lambda f: (f["is_custom"], f["title"], f["id"]),
         )
 
     static_catalog = STATIC_FIELD_CATALOGS.get(entity_type)

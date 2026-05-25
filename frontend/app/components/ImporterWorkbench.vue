@@ -6992,6 +6992,28 @@ onUnmounted(() => {
                 </div>
               </div>
 
+              <!-- Предупреждение о несопоставленных значениях — показывается всегда, не зависит от дедупликации -->
+              <div
+                v-if="unmappedValueSummary.hasUnmappedValues"
+                class="mb-5 rounded-[16px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-3 text-sm text-[#8f5b18]"
+              >
+                <div class="font-semibold text-[#a96017]">
+                  Перед проверкой нужно сопоставить значений: {{ unmappedValueSummary.totalValues }}
+                </div>
+                <div class="mt-1 text-xs text-[#a9783d]">
+                  Вернитесь к шагу «Соответствие полей» и заполните соответствие значений для отмеченных полей.
+                </div>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <span
+                    v-for="group in unmappedValueSummary.groups"
+                    :key="group.fieldId"
+                    class="rounded-full border border-[#f2d1ac] bg-white px-3 py-1.5 text-xs font-medium text-[#8a5a24]"
+                  >
+                    {{ `${group.fieldTitle}: ${group.count}` }}
+                  </span>
+                </div>
+              </div>
+
               <!-- Дедупликация не применима для задач и файлового импорта -->
               <div v-if="!isDedupApplicable" class="rounded-[16px] border border-[#e5ebf2] bg-white px-5 py-5">
                 <div class="flex items-start gap-3">
