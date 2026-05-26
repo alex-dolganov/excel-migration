@@ -1758,7 +1758,7 @@ def apply_preview_structure_overrides(columns, preview_rows, row_numbers, struct
 
 @xframe_options_exempt
 @csrf_exempt
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET", "POST", "DELETE"])
 @log_errors("import_sessions")
 @auth_required
 def import_sessions(request: AuthorizedRequest):
@@ -1777,6 +1777,37 @@ def import_sessions(request: AuthorizedRequest):
         ).order_by("-created_at")
 
         return JsonResponse({"items": [serialize_session_history_item(item) for item in sessions]})
+
+    if request.method == "DELETE":
+        if not has_permission(account, "sessions.create"):
+            return permission_denied_response()
+
+        deletable_statuses = [
+            ImportSession.Status.COMPLETED,
+            ImportSession.Status.FAILED,
+            ImportSession.Status.CANCELLED,
+            ImportSession.Status.UPLOADED,
+            ImportSession.Status.VALIDATED,
+            ImportSession.Status.DRAFT,
+        ]
+        sessions_to_delete = ImportSession.objects.filter(
+            portal_member_id=portal_member_id,
+            status__in=deletable_statuses,
+        )
+        deleted_count = 0
+        for session in sessions_to_delete:
+            try:
+                if session.stored_file and session.stored_file.name:
+                    try:
+                        session.stored_file.delete(save=False)
+                    except Exception:
+                        pass
+                session.delete()
+                deleted_count += 1
+            except Exception as exc:
+                logging.warning("Failed to delete session %s: %s", session.id, exc)
+
+        return JsonResponse({"deleted": deleted_count})
 
     if not has_permission(account, "sessions.create"):
         return permission_denied_response()

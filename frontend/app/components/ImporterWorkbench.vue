@@ -4151,6 +4151,26 @@ async function loadHistory() {
   }
 }
 
+const clearingHistory = ref(false)
+const clearHistoryConfirm = ref(false)
+
+async function clearHistory() {
+  if (!clearHistoryConfirm.value) {
+    clearHistoryConfirm.value = true
+    return
+  }
+  clearingHistory.value = true
+  clearHistoryConfirm.value = false
+  try {
+    await apiStore.clearImportHistory()
+    recentSessions.value = []
+  } catch (error) {
+    historyLoadError.value = error instanceof Error ? error.message : 'Не удалось очистить историю.'
+  } finally {
+    clearingHistory.value = false
+  }
+}
+
 function syncSessionSnapshot(snapshot: Record<string, any> | null | undefined) {
   if (!snapshot || typeof snapshot !== 'object') {
     return
@@ -4674,21 +4694,52 @@ onUnmounted(() => {
       class="overflow-hidden rounded-[30px] border border-[#dfe5eb] bg-white shadow-[0_24px_60px_rgba(23,54,110,0.10)]"
     >
       <div class="border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbfe_100%)] px-6 py-5 sm:px-8">
-        <div class="flex items-center gap-5">
-          <button
-            type="button"
-            class="flex shrink-0 items-center gap-1.5 rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9] transition hover:bg-[#ddeeff]"
-            @click="currentView = 'wizard'"
-          >
-            ← Назад
-          </button>
-          <div>
-            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
-              Excel Migration
+        <div class="flex items-center justify-between gap-5">
+          <div class="flex items-center gap-5">
+            <button
+              type="button"
+              class="flex shrink-0 items-center gap-1.5 rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9] transition hover:bg-[#ddeeff]"
+              @click="currentView = 'wizard'; clearHistoryConfirm = false"
+            >
+              ← Назад
+            </button>
+            <div>
+              <div class="text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
+                Excel Migration
+              </div>
+              <h1 class="mt-1 text-[26px] font-semibold leading-[1.1] text-[#2f4254]">
+                История импортов
+              </h1>
             </div>
-            <h1 class="mt-1 text-[26px] font-semibold leading-[1.1] text-[#2f4254]">
-              История импортов
-            </h1>
+          </div>
+
+          <div v-if="historyRows.length > 0" class="flex items-center gap-2">
+            <Transition name="clear-confirm-fade" mode="out-in">
+              <span
+                v-if="clearHistoryConfirm"
+                key="confirm"
+                class="text-[13px] text-[#8ea0b2]"
+              >
+                Удалить все записи?
+              </span>
+            </Transition>
+            <button
+              v-if="clearHistoryConfirm"
+              type="button"
+              class="rounded-full border border-[#ffd0d0] bg-[#fff4f4] px-3 py-1.5 text-[13px] font-medium text-[#c24b53] transition hover:bg-[#ffe0e0]"
+              :disabled="clearingHistory"
+              @click="clearHistory"
+            >
+              Да, удалить
+            </button>
+            <button
+              type="button"
+              class="rounded-full border border-[#e3e9f0] bg-[#f7f9fb] px-3 py-1.5 text-[13px] font-medium text-[#6e8193] transition hover:bg-[#edf1f5]"
+              :disabled="clearingHistory"
+              @click="clearHistoryConfirm ? (clearHistoryConfirm = false) : clearHistory()"
+            >
+              {{ clearHistoryConfirm ? 'Отмена' : clearingHistory ? 'Очистка...' : 'Очистить историю' }}
+            </button>
           </div>
         </div>
       </div>

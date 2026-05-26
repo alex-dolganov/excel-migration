@@ -116,6 +116,15 @@ export const useApiStore = defineStore(
       })
     }
 
+    const clearImportHistory = async (): Promise<{ deleted: number }> => {
+      return await $api('/api/import-sessions', {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${tokenJWT.value}`
+        },
+      })
+    }
+
     const getImportSession = async (sessionId: string): Promise<{ item: Record<string, any> }> => {
       return await $api(`/api/import-sessions/${sessionId}`, {
         headers: {
@@ -572,6 +581,7 @@ export const useApiStore = defineStore(
       createImportSession,
       getImportSmartProcesses,
       listImportSessions,
+      clearImportHistory,
       getImportSession,
       uploadImportFile,
       getImportPreview,
