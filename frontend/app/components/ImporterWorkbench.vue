@@ -4977,7 +4977,7 @@ onUnmounted(() => {
                   {{ currentScenarioSummary.selectedLabel }}
                 </div>
                 <div
-                  v-if="sourceFormat"
+                  v-if="sourceFormat && sourceFormat !== 'bulk_attach'"
                   class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium uppercase text-[#2e6bd9]"
                 >
                   {{ sourceFormat }}
@@ -5212,7 +5212,7 @@ onUnmounted(() => {
                       {{ currentScenarioSummary.selectedLabel }}
                     </div>
                     <div
-                      v-if="sourceFormat"
+                      v-if="sourceFormat && sourceFormat !== 'bulk_attach'"
                       class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium uppercase text-[#2e6bd9]"
                     >
                       {{ sourceFormat }}
