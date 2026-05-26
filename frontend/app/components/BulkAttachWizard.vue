@@ -762,13 +762,20 @@ function reset() {
 
         <div class="mb-4">
           <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-[#9aa9b8]">Файл <span class="text-[#c24b53]">*</span></label>
-          <label class="flex cursor-pointer items-center gap-3 rounded-[10px] border border-dashed border-[#c6d7ee] bg-[#f8fbff] px-4 py-3 transition hover:border-[#2e6bd9]">
+          <label
+            class="flex cursor-pointer items-center gap-3 rounded-[10px] border px-4 py-3 transition hover:opacity-90"
+            :style="uploadingFile
+              ? 'border-color:#2e6bd9; border-style:solid; background:#eef4ff;'
+              : selectedUploadFileLabel
+                ? 'border-color:#4caf7d; border-style:solid; background:#f2fbf6;'
+                : 'border-color:#c6d7ee; border-style:dashed; background:#f8fbff;'"
+          >
             <input type="file" class="hidden" :disabled="uploadingFile" @change="handleFileSelect" />
             <span class="text-base">📎</span>
-            <span v-if="uploadingFile" class="text-sm text-[#6f8194]">Загрузка...</span>
+            <span v-if="uploadingFile" class="text-sm text-[#2e6bd9]">Загрузка...</span>
             <span v-else-if="selectedUploadFileLabel" class="text-sm font-medium text-[#314256]">{{ selectedUploadFileLabel }}</span>
             <span v-else class="text-sm text-[#9aa9b8]">Выберите файл с компьютера</span>
-            <span v-if="selectedUploadFileLabel && !uploadingFile" class="ml-auto text-xs text-[#4caf7d]">✓ готов</span>
+            <span v-if="selectedUploadFileLabel && !uploadingFile" class="ml-auto text-xs font-medium text-[#4caf7d]">✓ готов</span>
           </label>
           <p class="mt-1 text-xs text-[#9aa9b8]">Файл будет прикреплён к каждой из {{ previewTotal }} записей</p>
         </div>

@@ -5654,10 +5654,10 @@ onUnmounted(() => {
                         :style="{
                           border: crmFlavor === 'bulk' && isBulkFilePickerLocked
                             ? '1.5px dashed #D8E1EB'
-                            : (dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`),
+                            : (dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : (fileName ? `1.5px solid ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`)),
                           background: crmFlavor === 'bulk' && isBulkFilePickerLocked
                             ? '#F8FAFC'
-                            : (dropzoneDragOver ? domainAccent.bg : '#FFFFFF'),
+                            : (dropzoneDragOver || fileName ? domainAccent.bg : '#FFFFFF'),
                         }"
                         @dragover.prevent="!isBulkFilePickerLocked && (dropzoneDragOver = true)"
                         @dragleave.prevent="dropzoneDragOver = false"
@@ -5689,18 +5689,17 @@ onUnmounted(() => {
                             ? (isBulkAttachExecutionLocked
                                 ? 'Загрузка уже выполняется'
                                 : 'Сначала выберите CRM-сущность и поле для файлов')
-                            : (dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда') }}
+                            : dropzoneDragOver
+                              ? 'Отпустите для загрузки'
+                              : (fileName || 'Перетащите файл сюда') }}
                         </div>
                         <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="currentFilePickerHelperText">
                           {{ crmFlavor === 'bulk' && isBulkFilePickerLocked
                             ? (isBulkAttachExecutionLocked
                                 ? 'Загрузка уже выполняется. Чтобы заменить файл, сначала остановите текущую сессию.'
                                 : 'Правый блок станет активным после выбора поля назначения.')
-                            : currentFileDropdownLimitText }}
+                            : (fileName ? 'Нажмите, чтобы заменить файл' : currentFileDropdownLimitText) }}
                         </p>
-                        <div v-if="fileName" class="relative mt-1 text-[11.5px] font-semibold" :style="{ color: domainAccent.ink }">
-                          {{ fileName }}
-                        </div>
                         <input ref="fileInputRef" type="file" :accept="isSpreadsheetUploadRequired ? '.xlsx,.xls,.csv' : undefined" class="hidden" @change="handleFileChange" />
                         <button
                           type="button"
@@ -5971,10 +5970,10 @@ onUnmounted(() => {
                       :style="{
                         border: isBulkAttachFlow && isBulkFilePickerLocked
                           ? '1.5px dashed #D8E1EB'
-                          : (dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`),
+                          : (dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : (fileName ? `1.5px solid ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`)),
                         background: isBulkAttachFlow && isBulkFilePickerLocked
                           ? '#F8FAFC'
-                          : (dropzoneDragOver ? domainAccent.bg : '#FFFFFF'),
+                          : (dropzoneDragOver || fileName ? domainAccent.bg : '#FFFFFF'),
                       }"
                       @dragover.prevent="!isBulkFilePickerLocked && (dropzoneDragOver = true)"
                       @dragleave.prevent="dropzoneDragOver = false"
@@ -6004,18 +6003,17 @@ onUnmounted(() => {
                           ? (isBulkAttachExecutionLocked
                               ? 'Загрузка уже выполняется'
                               : 'Сначала настройте выборку задач')
-                          : (dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда') }}
+                          : dropzoneDragOver
+                            ? 'Отпустите для загрузки'
+                            : (fileName || 'Перетащите файл сюда') }}
                       </div>
                       <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="currentFilePickerHelperText">
                         {{ isBulkAttachFlow && isBulkFilePickerLocked
                           ? (isBulkAttachExecutionLocked
                               ? 'Загрузка уже выполняется. Чтобы заменить файл, сначала остановите текущую сессию.'
                               : 'Правый блок станет активным после проверки выборки задач.')
-                          : currentFileDropdownLimitText }}
+                          : (fileName ? 'Нажмите, чтобы заменить файл' : currentFileDropdownLimitText) }}
                       </p>
-                      <div v-if="fileName" class="relative mt-1 text-[11.5px] font-semibold" :style="{ color: domainAccent.ink }">
-                        {{ fileName }}
-                      </div>
                       <input ref="fileInputRef" type="file" :accept="isSpreadsheetUploadRequired ? '.xlsx,.xls,.csv' : undefined" class="hidden" @change="handleFileChange" />
                       <button
                         type="button"
@@ -6138,8 +6136,8 @@ onUnmounted(() => {
                     <div
                       class="rounded-2xl p-5 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden transition-all cursor-pointer"
                       :style="{
-                        border: dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`,
-                        background: dropzoneDragOver ? domainAccent.bg : '#FFFFFF',
+                        border: dropzoneDragOver ? `1.5px dashed ${domainAccent.ink}` : (fileName ? `1.5px solid ${domainAccent.ink}` : `1.5px dashed ${domainAccent.ink}55`),
+                        background: dropzoneDragOver || fileName ? domainAccent.bg : '#FFFFFF',
                       }"
                       @dragover.prevent="dropzoneDragOver = true"
                       @dragleave.prevent="dropzoneDragOver = false"
@@ -6165,12 +6163,11 @@ onUnmounted(() => {
                         </svg>
                       </div>
                       <div class="relative text-[14px] font-semibold tracking-tight text-[#0F1115]">
-                        {{ dropzoneDragOver ? 'Отпустите для загрузки' : 'Перетащите файл сюда' }}
+                        {{ dropzoneDragOver ? 'Отпустите для загрузки' : (fileName || 'Перетащите файл сюда') }}
                       </div>
-                      <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="IMPORT_FILE_PICKER_HELPER_TEXT">{{ IMPORT_FILE_DROPDOWN_LIMIT_TEXT }}</p>
-                      <div v-if="fileName" class="relative mt-1 text-[11.5px] font-semibold" :style="{ color: domainAccent.ink }">
-                        {{ fileName }}
-                      </div>
+                      <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="IMPORT_FILE_PICKER_HELPER_TEXT">
+                        {{ fileName ? 'Нажмите, чтобы заменить файл' : IMPORT_FILE_DROPDOWN_LIMIT_TEXT }}
+                      </p>
                       <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange" />
                       <button
                         type="button"
