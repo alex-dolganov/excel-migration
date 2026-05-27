@@ -99,12 +99,16 @@ def _read_positive_int_env(name: str, default: int) -> int:
         return max(1, int(default))
 
 
-BITRIX_ROW_DELAY = _read_non_negative_float_env("BITRIX_ROW_DELAY", 0.0)
-BITRIX_BATCH_DELAY = _read_non_negative_float_env("BITRIX_BATCH_DELAY", 0.5)
+BITRIX_ROW_DELAY = _read_non_negative_float_env("BITRIX_ROW_DELAY", 0.3)
+BITRIX_BATCH_DELAY = _read_non_negative_float_env("BITRIX_BATCH_DELAY", 2.0)
 BATCH_SIZE = _read_positive_int_env("BATCH_SIZE", 50)
 _ENTITY_BATCH_SIZES = {
-    "lead": _read_positive_int_env("LEAD_BATCH_SIZE", 20),
+    "lead": _read_positive_int_env("LEAD_BATCH_SIZE", 40),
+    "deal": _read_positive_int_env("DEAL_BATCH_SIZE", 40),
+    "contact": _read_positive_int_env("CONTACT_BATCH_SIZE", 40),
+    "company": _read_positive_int_env("COMPANY_BATCH_SIZE", 40),
 }
+_BATCH_SIZE_MIN = _read_positive_int_env("BATCH_SIZE_MIN", 5)
 PROGRESS_SAVE_INTERVAL = _read_positive_int_env("IMPORT_PROGRESS_SAVE_INTERVAL", 100)
 _RATE_LIMIT_KEYWORDS = frozenset(["query_limit_exceeded", "too many requests", "rate limit", "overloaded", "429"])
 _RATE_LIMIT_RETRY_WAITS = [5, 15, 30]
@@ -114,7 +118,7 @@ _OPERATION_TIME_LIMIT_KEYWORDS = frozenset([
     "method is blocked due to operation time limit",
     "unknown error",  # Bitrix24 returns this for user.add when operation time limit is exceeded
 ])
-_OPERATION_TIME_LIMIT_RETRY_WAITS = [60, 180, 360]
+_OPERATION_TIME_LIMIT_RETRY_WAITS = [30, 60, 120, 300]
 
 _CRM_BATCH_CREATE_METHODS = {
     "lead": "crm.lead.add",
@@ -281,11 +285,19 @@ def _resolve_fatal_import_error(error, *, entity_type: str) -> str:
     return fatal_error
 
 
-def _flush_crm_batch_with_fallback(account, entity_type: str, pending_batch: list) -> tuple:
+def _flush_crm_batch_with_fallback(account, entity_type: str, pending_batch: list, *, on_pause=None, on_resume=None) -> tuple:
     try:
-        return _bitrix_retry(lambda: _flush_crm_batch(account, entity_type, pending_batch))
+        return _bitrix_retry(
+            lambda: _flush_crm_batch(account, entity_type, pending_batch),
+            on_pause=on_pause,
+            on_resume=on_resume,
+        )
     except Exception as error:
-        if len(pending_batch) <= 1 or not (_is_timeout_error(error) or _is_operation_time_limit_error(error)):
+        # Only split on pure network timeout: smaller sub-batches may succeed when
+        # a large one times out at the HTTP layer.
+        # Operation time limit is a server-side block — splitting does not help and
+        # spawns O(N) retry trees that waste minutes without recovery.
+        if len(pending_batch) <= 1 or not _is_timeout_error(error):
             raise
 
     middle_index = max(1, len(pending_batch) // 2)
@@ -293,11 +305,15 @@ def _flush_crm_batch_with_fallback(account, entity_type: str, pending_batch: lis
         account,
         entity_type,
         pending_batch[:middle_index],
+        on_pause=on_pause,
+        on_resume=on_resume,
     )
     right_results, right_created, right_failed, right_ids = _flush_crm_batch_with_fallback(
         account,
         entity_type,
         pending_batch[middle_index:],
+        on_pause=on_pause,
+        on_resume=on_resume,
     )
 
     return (
@@ -2339,6 +2355,8 @@ def execute_linked_import(
     default_field_values: dict | None = None,
     per_row_decisions: dict | None = None,
     progress_callback=None,
+    on_rate_limit_pause=None,
+    on_rate_limit_resume=None,
 ) -> dict:
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
     user_resolver = BitrixUserResolver(account)
@@ -2360,6 +2378,18 @@ def execute_linked_import(
     child_link_field = relation_field if relation_mode == "field" else ""
     parent_link_field = relation_field if relation_mode == "parent_field" else ""
     parent_ext_key_cache: dict[str, int] = {}
+
+    current_row_delay = BITRIX_ROW_DELAY
+    _row_state = {"had_retry": False}
+
+    def _on_row_pause(wait_seconds):
+        _row_state["had_retry"] = True
+        if callable(on_rate_limit_pause):
+            on_rate_limit_pause(wait_seconds)
+
+    def _on_row_resume():
+        if callable(on_rate_limit_resume):
+            on_rate_limit_resume()
 
     for row_index, row_number in enumerate(row_numbers):
         if row_number < data_start_row:
@@ -2392,7 +2422,8 @@ def execute_linked_import(
             break
 
         checked_rows += 1
-        _sleep_if_configured(BITRIX_ROW_DELAY)
+        _row_state["had_retry"] = False
+        _sleep_if_configured(current_row_delay)
         _report_progress(
             progress_callback,
             checked_rows=checked_rows,
@@ -2450,16 +2481,22 @@ def execute_linked_import(
             if ext_key and ext_key in parent_ext_key_cache:
                 parent_action = {"mode": "cached", "record_id": parent_ext_key_cache[ext_key], "meta": {}}
             elif parent_payload:
-                parent_action = _bitrix_retry(lambda: resolve_linked_record_action_with_decision(
-                    account, parent_entity_type, parent_payload, dedup_settings.get(parent_entity_type, {}),
-                    parent_row_decision,
-                ))
+                parent_action = _bitrix_retry(
+                    lambda: resolve_linked_record_action_with_decision(
+                        account, parent_entity_type, parent_payload, dedup_settings.get(parent_entity_type, {}),
+                        parent_row_decision,
+                    ),
+                    on_pause=_on_row_pause, on_resume=_on_row_resume,
+                )
             else:
                 parent_action = {"mode": "skip_payload", "record_id": None, "meta": {}}
-            child_action = _bitrix_retry(lambda: resolve_linked_record_action_with_decision(
-                account, child_entity_type, child_payload, dedup_settings.get(child_entity_type, {}),
-                child_row_decision,
-            )) if child_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
+            child_action = _bitrix_retry(
+                lambda: resolve_linked_record_action_with_decision(
+                    account, child_entity_type, child_payload, dedup_settings.get(child_entity_type, {}),
+                    child_row_decision,
+                ),
+                on_pause=_on_row_pause, on_resume=_on_row_resume,
+            ) if child_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
         except Exception as error:
             failed_rows += 1
             results.append(
@@ -2508,9 +2545,15 @@ def execute_linked_import(
         try:
             if parent_payload and parent_action["mode"] != "cached":
                 if parent_action["mode"] == "update":
-                    _bitrix_retry(lambda: update_entity_record(account, parent_entity_type, parent_action["record_id"], parent_payload))
+                    _bitrix_retry(
+                        lambda: update_entity_record(account, parent_entity_type, parent_action["record_id"], parent_payload),
+                        on_pause=_on_row_pause, on_resume=_on_row_resume,
+                    )
                 elif parent_action["mode"] == "create":
-                    parent_record_id = _bitrix_retry(lambda: create_entity_record(account, parent_entity_type, parent_payload))
+                    parent_record_id = _bitrix_retry(
+                        lambda: create_entity_record(account, parent_entity_type, parent_payload),
+                        on_pause=_on_row_pause, on_resume=_on_row_resume,
+                    )
             if ext_key and parent_record_id is not None:
                 parent_ext_key_cache[ext_key] = parent_record_id
         except Exception as error:
@@ -2535,23 +2578,41 @@ def execute_linked_import(
         try:
             if child_payload:
                 if child_action["mode"] == "update":
-                    _bitrix_retry(lambda: update_entity_record(account, child_entity_type, child_action["record_id"], child_payload))
+                    _bitrix_retry(
+                        lambda: update_entity_record(account, child_entity_type, child_action["record_id"], child_payload),
+                        on_pause=_on_row_pause, on_resume=_on_row_resume,
+                    )
                 elif child_link_field and child_action["mode"] == "reuse" and parent_record_id is not None and child_action["record_id"] is not None:
-                    _bitrix_retry(lambda: update_entity_record(account, child_entity_type, child_action["record_id"], {child_link_field: parent_record_id}))
+                    _bitrix_retry(
+                        lambda: update_entity_record(account, child_entity_type, child_action["record_id"], {child_link_field: parent_record_id}),
+                        on_pause=_on_row_pause, on_resume=_on_row_resume,
+                    )
                 elif child_action["mode"] == "create":
-                    child_record_id = _bitrix_retry(lambda: create_entity_record(account, child_entity_type, child_payload))
+                    child_record_id = _bitrix_retry(
+                        lambda: create_entity_record(account, child_entity_type, child_payload),
+                        on_pause=_on_row_pause, on_resume=_on_row_resume,
+                    )
 
             if relation_mode == "parent_field" and parent_record_id is not None and child_record_id is not None and parent_link_field:
-                _bitrix_retry(lambda: update_entity_record(
-                    account,
-                    parent_entity_type,
-                    parent_record_id,
-                    {parent_link_field: normalize_record_id(child_record_id) or child_record_id},
-                ))
+                _bitrix_retry(
+                    lambda: update_entity_record(
+                        account,
+                        parent_entity_type,
+                        parent_record_id,
+                        {parent_link_field: normalize_record_id(child_record_id) or child_record_id},
+                    ),
+                    on_pause=_on_row_pause, on_resume=_on_row_resume,
+                )
             if relation_mode == "deal_contact_binding" and parent_record_id is not None and child_record_id is not None:
-                _bitrix_retry(lambda: bind_deal_contact(account, deal_id=parent_record_id, contact_id=child_record_id))
+                _bitrix_retry(
+                    lambda: bind_deal_contact(account, deal_id=parent_record_id, contact_id=child_record_id),
+                    on_pause=_on_row_pause, on_resume=_on_row_resume,
+                )
             if relation_mode == "contact_company_binding" and parent_record_id is not None and child_record_id is not None:
-                _bitrix_retry(lambda: bind_contact_company(account, contact_id=parent_record_id, company_id=child_record_id))
+                _bitrix_retry(
+                    lambda: bind_contact_company(account, contact_id=parent_record_id, company_id=child_record_id),
+                    on_pause=_on_row_pause, on_resume=_on_row_resume,
+                )
         except Exception as error:
             failed_rows += 1
             results.append(
@@ -2563,6 +2624,13 @@ def execute_linked_import(
                 }
             )
             continue
+
+        if _row_state["had_retry"]:
+            current_row_delay = min(current_row_delay * 2, 5.0)
+            logging.info(
+                "Linked import: rate limit recovered; increasing row delay to %.1fs for entity_type=%s",
+                current_row_delay, entity_type,
+            )
 
         has_child_link_update = (
             child_action.get("mode") == "reuse"
@@ -2763,7 +2831,15 @@ def execute_dry_run(
             )
             continue
 
-        time.sleep(BITRIX_ROW_DELAY)
+        # Sleep only when dedup lookups will actually hit Bitrix24.
+        # For "create" strategy there are no API calls in dry run, so sleeping
+        # would add BITRIX_ROW_DELAY × N_rows of dead time for nothing.
+        _dedup_needs_api = (
+            normalized_dedup_settings["strategy"] != "create"
+            and bool(normalized_dedup_settings.get("fields"))
+        )
+        if _dedup_needs_api:
+            _sleep_if_configured(BITRIX_ROW_DELAY)
         row_payload = build_row_payload(
             row,
             columns,
@@ -2920,6 +2996,8 @@ def execute_import(
             default_field_values=default_field_values,
             per_row_decisions=per_row_decisions,
             progress_callback=progress_callback,
+            on_rate_limit_pause=on_rate_limit_pause,
+            on_rate_limit_resume=on_rate_limit_resume,
         )
 
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
@@ -2962,7 +3040,20 @@ def execute_import(
     fatal_error: str = ""
     use_batch = _is_batch_eligible(entity_type, normalized_dedup_settings)
     pending_batch: list = []
+    current_batch_size = _get_batch_size(entity_type)
+    current_row_delay = BITRIX_ROW_DELAY
     report_entity_config = (import_context or {}).get("entity_config") if isinstance(import_context, dict) else None
+
+    _nb_row_state = {"had_retry": False}
+
+    def _on_nb_row_pause(wait_seconds):
+        _nb_row_state["had_retry"] = True
+        if callable(on_rate_limit_pause):
+            on_rate_limit_pause(wait_seconds)
+
+    def _on_nb_row_resume():
+        if callable(on_rate_limit_resume):
+            on_rate_limit_resume()
 
     def _update_existing_record(record_id, row_payload: dict):
         if entity_type == SMART_PROCESS_ENTITY_TYPE:
@@ -2970,17 +3061,39 @@ def execute_import(
         return update_entity_record(account, entity_type, record_id, row_payload)
 
     def _flush_pending_batch():
-        nonlocal created_rows, failed_rows
+        nonlocal created_rows, failed_rows, current_batch_size
         if not pending_batch:
             return
         _sleep_if_configured(BITRIX_BATCH_DELAY)
+
+        had_retry = False
+
+        def _on_batch_pause(wait_seconds):
+            nonlocal had_retry
+            had_retry = True
+            if callable(on_rate_limit_pause):
+                on_rate_limit_pause(wait_seconds)
+
+        def _on_batch_resume():
+            if callable(on_rate_limit_resume):
+                on_rate_limit_resume()
+
         try:
             batch_results, batch_created, batch_failed, batch_ids = _flush_crm_batch_with_fallback(
                 account,
                 entity_type,
                 list(pending_batch),
+                on_pause=_on_batch_pause,
+                on_resume=_on_batch_resume,
             )
         except Exception as error:
+            if _is_rate_limit_error(error) or _is_operation_time_limit_error(error):
+                current_batch_size = max(_BATCH_SIZE_MIN, current_batch_size // 2)
+                logging.warning(
+                    "Batch failed with limit error; reducing batch size to %d for entity_type=%s",
+                    current_batch_size,
+                    entity_type,
+                )
             for prow_number, pending_row_payload in pending_batch:
                 failed_rows += 1
                 results.append(
@@ -2997,6 +3110,16 @@ def execute_import(
                 )
             pending_batch.clear()
             return
+
+        if had_retry:
+            current_batch_size = max(_BATCH_SIZE_MIN, current_batch_size // 2)
+            _sleep_if_configured(BITRIX_BATCH_DELAY)
+            logging.info(
+                "Batch recovered after retry; reducing batch size to %d for entity_type=%s",
+                current_batch_size,
+                entity_type,
+            )
+
         results.extend(batch_results)
         created_rows += batch_created
         failed_rows += batch_failed
@@ -3036,7 +3159,14 @@ def execute_import(
 
         checked_rows += 1
         if not use_batch:
-            _sleep_if_configured(BITRIX_ROW_DELAY)
+            if _nb_row_state["had_retry"]:
+                current_row_delay = min(current_row_delay * 2, 5.0)
+                logging.info(
+                    "Non-batch: rate limit recovered; increasing row delay to %.1fs for entity_type=%s",
+                    current_row_delay, entity_type,
+                )
+            _nb_row_state["had_retry"] = False
+            _sleep_if_configured(current_row_delay)
 
         _report_progress(
             progress_callback,
@@ -3090,7 +3220,7 @@ def execute_import(
 
         if use_batch:
             pending_batch.append((row_number, row_payload))
-            if len(pending_batch) >= _get_batch_size(entity_type):
+            if len(pending_batch) >= current_batch_size:
                 _flush_pending_batch()
                 if callable(progress_callback):
                     progress_callback(
@@ -3110,7 +3240,8 @@ def execute_import(
                     normalized_dedup_settings,
                     cache=import_dedup_cache,
                     context=import_context,
-                )
+                ),
+                on_pause=_on_nb_row_pause, on_resume=_on_nb_row_resume,
             )
         except Exception as error:
             if isinstance(error, BitrixOAuthInvalidGrant):
@@ -3189,7 +3320,10 @@ def execute_import(
                 continue
             elif row_decision == "update":
                 try:
-                    _bitrix_retry(lambda: _update_existing_record(existing_record_id, row_payload))
+                    _bitrix_retry(
+                        lambda: _update_existing_record(existing_record_id, row_payload),
+                        on_pause=_on_nb_row_pause, on_resume=_on_nb_row_resume,
+                    )
                 except Exception as error:
                     if isinstance(error, BitrixOAuthInvalidGrant):
                         oauth_abort_error = safe_format_import_error(error)
@@ -3235,7 +3369,10 @@ def execute_import(
 
         if existing_record_id is not None and normalized_dedup_settings["strategy"] == "update":
             try:
-                _bitrix_retry(lambda: _update_existing_record(existing_record_id, row_payload))
+                _bitrix_retry(
+                    lambda: _update_existing_record(existing_record_id, row_payload),
+                    on_pause=_on_nb_row_pause, on_resume=_on_nb_row_resume,
+                )
             except Exception as error:
                 if isinstance(error, BitrixOAuthInvalidGrant):
                     oauth_abort_error = safe_format_import_error(error)
@@ -3282,8 +3419,8 @@ def execute_import(
         try:
             record_id = _bitrix_retry(
                 lambda: create_entity_record(account, entity_type, row_payload, context=import_context),
-                on_pause=on_rate_limit_pause,
-                on_resume=on_rate_limit_resume,
+                on_pause=_on_nb_row_pause,
+                on_resume=_on_nb_row_resume,
                 allow_unknown_error_as_operation_time_limit=entity_type != "user",
             )
         except Exception as error:

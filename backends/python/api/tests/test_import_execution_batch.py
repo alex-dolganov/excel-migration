@@ -38,7 +38,7 @@ class ImportExecutionBatchTest(SimpleTestCase):
 
         self.assertEqual(result, 907)
         self.assertEqual(attempts["count"], 3)
-        self.assertEqual([call.args[0] for call in sleep.call_args_list], [60, 180])
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [30, 60])
 
     @patch("importer.services.import_execution.time.sleep")
     def test_bitrix_retry_does_not_sleep_for_daily_invitation_limit_error(self, sleep):
@@ -109,6 +109,35 @@ class ImportExecutionBatchTest(SimpleTestCase):
         self.assertEqual(results[0]["error"], "Bitrix24 не подтвердил создание записи: ID не получен.")
         self.assertEqual(results[0]["report_entity"], "Сделка")
         self.assertEqual(results[0]["report_title"], "Редизайн сайта")
+
+    @patch("importer.services.import_execution.time.sleep")
+    @patch("importer.services.import_execution._flush_crm_batch")
+    def test_flush_crm_batch_with_fallback_raises_immediately_on_operation_time_limit(self, flush_crm_batch, sleep):
+        """OTL is a server-side block — splitting does not help, must raise without recursion."""
+        call_count = {"n": 0}
+
+        def fake_flush(_account, _entity_type, pending_batch):
+            call_count["n"] += 1
+            raise RuntimeError("Method is blocked due to operation time limit.")
+
+        flush_crm_batch.side_effect = fake_flush
+
+        with self.assertRaises(RuntimeError):
+            _flush_crm_batch_with_fallback(
+                SimpleNamespace(),
+                "deal",
+                [
+                    (2, {"TITLE": "Сделка 2"}),
+                    (3, {"TITLE": "Сделка 3"}),
+                    (4, {"TITLE": "Сделка 4"}),
+                ],
+            )
+
+        # _bitrix_retry with _OPERATION_TIME_LIMIT_RETRY_WAITS=[30,60,120,300] makes
+        # 5 calls total (initial + 4 retries). _flush_crm_batch_with_fallback must NOT
+        # recurse into split sub-batches after that — call count stays at 5.
+        self.assertEqual(call_count["n"], 5)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [30, 60, 120, 300])
 
     @patch("importer.services.import_execution._flush_crm_batch")
     def test_flush_crm_batch_with_fallback_splits_timeout_batch_until_rows_succeed(self, flush_crm_batch):
