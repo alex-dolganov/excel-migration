@@ -53,9 +53,9 @@ TOKEN_ALIASES = {
 }
 TOKEN_SEQUENCE_ALIASES = {
     ("внешний", "ключ"): ("externalkey",),
-    ("внешний", "ключ", "сделки"): ("externalkey",),
-    ("внешний", "ключ", "контакта"): ("externalkey",),
-    ("внешний", "ключ", "компании"): ("externalkey",),
+    ("внешний", "ключ", "сделка"): ("externalkey",),
+    ("внешний", "ключ", "контакт"): ("externalkey",),
+    ("внешний", "ключ", "компания"): ("externalkey",),
     ("внешний", "ключ", "xml", "id"): ("externalkey",),
     ("xml", "id"): ("externalkey",),
     ("external", "key"): ("externalkey",),

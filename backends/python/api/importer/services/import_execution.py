@@ -1105,17 +1105,23 @@ def find_record_by_filter(list_method, lookup_filter: dict):
     return extract_record_id_from_list_response(response)
 
 
+_DEDUP_FIELD_API_ALIASES = {"EXTERNAL_KEY": "XML_ID"}
+
+
 def build_dedup_lookup_filter(row_payload: dict, dedup_settings: dict) -> tuple[dict, list[str], list[str]]:
     lookup_filter = {}
     matched_fields = []
     missing_fields = []
 
     for field_name in dedup_settings["fields"]:
-        field_value = extract_dedup_lookup_value(row_payload.get(field_name))
+        api_field_name = _DEDUP_FIELD_API_ALIASES.get(field_name, field_name)
+        field_value = extract_dedup_lookup_value(
+            row_payload.get(field_name) or row_payload.get(api_field_name)
+        )
         if not field_value:
             missing_fields.append(field_name)
             continue
-        lookup_filter[field_name] = field_value
+        lookup_filter[api_field_name] = field_value
         matched_fields.append(field_name)
 
     return lookup_filter, matched_fields, missing_fields
@@ -1357,6 +1363,7 @@ def _warm_dedup_cache(
     user_resolver,
     default_field_values: dict | None = None,
     context: dict | None = None,
+    warm_progress_callback=None,
 ) -> None:
     """Pre-warm dedup lookup cache using batch API calls before the main row loop.
 
@@ -1429,6 +1436,7 @@ def _warm_dedup_cache(
     # For "any": accumulate all field results per row before deciding
     any_field_results: dict = {}  # cache_key → {field_name: record_id_or_None}
 
+    total_batches = max(1, (len(pending) + BATCH_SIZE - 1) // BATCH_SIZE)
     for batch_start in range(0, len(pending), BATCH_SIZE):
         if batch_start > 0:
             _sleep_if_configured(BITRIX_BATCH_DELAY)
@@ -1450,6 +1458,9 @@ def _warm_dedup_cache(
             raw_results = _normalize_batch_collection(response.result.result)
         except Exception:
             return
+        if callable(warm_progress_callback):
+            done_n = batch_start // BATCH_SIZE + 1
+            warm_progress_callback(done=done_n, total=total_batches)
         for bkey, _ in chunk:
             cache_key, field_name, matched_fields, dedup_missing = key_meta[bkey]
             raw = raw_results.get(bkey)
@@ -1752,6 +1763,70 @@ def build_linked_record_result(linked_entity: str, row_payload: dict, record_id,
     }
 
 
+_CRM_MULTIVALUE_ENTITY_TYPES = {"lead", "contact", "company"}
+
+_CRM_GET_METHOD = {
+    "lead": "crm.lead.get",
+    "contact": "crm.contact.get",
+    "company": "crm.company.get",
+}
+
+
+def _fetch_existing_multivalue_fields(account, entity_type: str, record_id, field_ids: list) -> dict:
+    api_method = _CRM_GET_METHOD.get(entity_type)
+    if not api_method:
+        return {}
+    try:
+        result = BitrixAPIRequest(
+            bitrix_token=account,
+            api_method=api_method,
+            params={"ID": record_id},
+        ).result
+        if not isinstance(result, dict):
+            return {}
+        return {fid: result[fid] for fid in field_ids if isinstance(result.get(fid), list)}
+    except Exception:
+        return {}
+
+
+def _merge_multivalue_update_payload(existing_by_field: dict, update_payload: dict) -> dict:
+    """
+    For each multi-value field in update_payload, reuse existing entry IDs so Bitrix24
+    updates entries in place rather than appending new ones.
+    Existing entries of types NOT present in update_payload are left untouched.
+    """
+    if not existing_by_field:
+        return update_payload
+    merged = dict(update_payload)
+    for field_id, new_values in update_payload.items():
+        if field_id not in BITRIX_MULTIFIELD_IDS:
+            continue
+        if not isinstance(new_values, list):
+            continue
+        existing_entries = existing_by_field.get(field_id)
+        if not isinstance(existing_entries, list) or not existing_entries:
+            continue
+        existing_by_type: dict[str, list] = {}
+        for entry in existing_entries:
+            vtype = str(entry.get("VALUE_TYPE") or "WORK").upper()
+            existing_by_type.setdefault(vtype, []).append(entry)
+        merged_values = []
+        used_ids: set = set()
+        for new_item in new_values:
+            vtype = str(new_item.get("VALUE_TYPE") or "WORK").upper()
+            candidate = next(
+                (e for e in existing_by_type.get(vtype, []) if e.get("ID") and e["ID"] not in used_ids),
+                None,
+            )
+            if candidate:
+                used_ids.add(candidate["ID"])
+                merged_values.append({"ID": candidate["ID"], "VALUE": new_item.get("VALUE", ""), "VALUE_TYPE": vtype})
+            else:
+                merged_values.append(new_item)
+        merged[field_id] = merged_values
+    return merged
+
+
 def update_entity_record(account, entity_type: str, record_id, fields: dict):
     if entity_type in TASK_ENTITY_TYPES or entity_type in CRM_FILES_ENTITY_TYPES or entity_type in CRM_ACTIVITY_ENTITY_TYPES:
         raise ValueError("Update is not supported for this entity type")
@@ -1766,6 +1841,12 @@ def update_entity_record(account, entity_type: str, record_id, fields: dict):
     if entity_type == "department":
         _update_department(account, record_id, fields)
         return True
+
+    if entity_type in _CRM_MULTIVALUE_ENTITY_TYPES:
+        multivalue_field_ids = [f for f in BITRIX_MULTIFIELD_IDS if f in fields]
+        if multivalue_field_ids:
+            existing = _fetch_existing_multivalue_fields(account, entity_type, record_id, multivalue_field_ids)
+            fields = _merge_multivalue_update_payload(existing, fields)
 
     scope = get_entity_scope(account.client, entity_type)
     update_method = getattr(scope, "update", None)
@@ -2150,13 +2231,28 @@ def execute_linked_dry_run(
     should_cancel=None,
     default_field_values: dict | None = None,
     progress_callback=None,
+    warm_progress_callback=None,
 ) -> dict:
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
     user_resolver = BitrixUserResolver(account)
     dedup_lookup_cache: dict[tuple, dict | None] = {}
     parent_entity_type = get_linked_parent_entity_type(entity_type)
     child_entity_type = get_linked_child_entity_type(entity_type)
-    for _linked_et in (parent_entity_type, child_entity_type):
+
+    _linked_entity_types = [parent_entity_type, child_entity_type]
+    _batch_size = BATCH_SIZE
+    _total_batches = sum(
+        max(1, (len(row_numbers) + _batch_size - 1) // _batch_size)
+        for _ in _linked_entity_types
+    )
+    _done_batches = [0]
+
+    def _linked_warm_callback(*, done, total):
+        if callable(warm_progress_callback):
+            _done_batches[0] += 1
+            warm_progress_callback(done=_done_batches[0], total=_total_batches)
+
+    for _linked_et in _linked_entity_types:
         _warm_dedup_cache(
             account=account,
             entity_type=_linked_et,
@@ -2170,6 +2266,7 @@ def execute_linked_dry_run(
             cache=dedup_lookup_cache,
             user_resolver=user_resolver,
             default_field_values=default_field_values,
+            warm_progress_callback=_linked_warm_callback,
         )
     checked_rows = 0
     ready_rows = 0
@@ -2180,6 +2277,7 @@ def execute_linked_dry_run(
     cancelled_rows = 0
     results = []
     was_cancelled = False
+    parent_ext_key_cache: dict[str, str] = {}
 
     def _find_existing_linked_record(account, linked_entity_type: str, row_payload: dict, linked_dedup_settings: dict):
         return find_existing_record_cached(
@@ -2250,14 +2348,31 @@ def execute_linked_dry_run(
             default_field_values=default_field_values,
         )
 
-        parent_action = resolve_linked_record_action_with_decision(
-            account,
-            parent_entity_type,
-            linked_payload.get(parent_entity_type, {}),
-            dedup_settings.get(parent_entity_type, {}),
-            "",
-            find_existing_record_fn=_find_existing_linked_record,
-        ) if linked_payload.get(parent_entity_type) else {"mode": "skip_payload", "record_id": None, "meta": {}}
+        raw_parent_payload = linked_payload.get(parent_entity_type, {})
+        if raw_parent_payload:
+            parent_payload_for_resolve = dict(raw_parent_payload)
+            ext_key = str(parent_payload_for_resolve.pop("EXTERNAL_KEY", "") or "").strip()
+            if ext_key:
+                parent_payload_for_resolve["XML_ID"] = ext_key
+        else:
+            parent_payload_for_resolve = {}
+            ext_key = ""
+
+        if ext_key and ext_key in parent_ext_key_cache:
+            parent_action: dict = parent_ext_key_cache[ext_key]
+        elif parent_payload_for_resolve:
+            parent_action = resolve_linked_record_action_with_decision(
+                account,
+                parent_entity_type,
+                parent_payload_for_resolve,
+                dedup_settings.get(parent_entity_type, {}),
+                "",
+                find_existing_record_fn=_find_existing_linked_record,
+            )
+            if ext_key:
+                parent_ext_key_cache[ext_key] = parent_action
+        else:
+            parent_action = {"mode": "skip_payload", "record_id": None, "meta": {}}
 
         child_action = resolve_linked_record_action_with_decision(
             account,
@@ -2378,6 +2493,22 @@ def execute_linked_import(
     child_link_field = relation_field if relation_mode == "field" else ""
     parent_link_field = relation_field if relation_mode == "parent_field" else ""
     parent_ext_key_cache: dict[str, int] = {}
+    _parent_dedup_cache: dict = {}
+    _child_dedup_lookup_cache: dict = {}
+    _warm_dedup_cache(
+        account=account,
+        entity_type=child_entity_type,
+        rows=rows,
+        row_numbers=row_numbers,
+        columns=columns,
+        data_start_row=data_start_row,
+        mapping=mapping,
+        fields=fields,
+        normalized_dedup_settings=normalize_dedup_settings(dedup_settings.get(child_entity_type, {})),
+        cache=_child_dedup_lookup_cache,
+        user_resolver=user_resolver,
+        default_field_values=default_field_values,
+    )
 
     current_row_delay = BITRIX_ROW_DELAY
     _row_state = {"had_retry": False}
@@ -2477,9 +2608,15 @@ def execute_linked_import(
         parent_row_decision = resolve_linked_row_decision(decisions, row_number, parent_entity_type)
         child_row_decision = resolve_linked_row_decision(decisions, row_number, child_entity_type)
 
+        _parent_dedup_key = build_dedup_lookup_cache_key(
+            parent_entity_type, parent_payload, dedup_settings.get(parent_entity_type, {}),
+        ) if not ext_key and parent_payload else None
+
         try:
             if ext_key and ext_key in parent_ext_key_cache:
                 parent_action = {"mode": "cached", "record_id": parent_ext_key_cache[ext_key], "meta": {}}
+            elif _parent_dedup_key is not None and _parent_dedup_key in _parent_dedup_cache:
+                parent_action = {"mode": "cached", "record_id": _parent_dedup_cache[_parent_dedup_key], "meta": {}}
             elif parent_payload:
                 parent_action = _bitrix_retry(
                     lambda: resolve_linked_record_action_with_decision(
@@ -2494,6 +2631,9 @@ def execute_linked_import(
                 lambda: resolve_linked_record_action_with_decision(
                     account, child_entity_type, child_payload, dedup_settings.get(child_entity_type, {}),
                     child_row_decision,
+                    find_existing_record_fn=lambda acc, et, rp, ds: find_existing_record_cached(
+                        acc, et, rp, ds, cache=_child_dedup_lookup_cache,
+                    ),
                 ),
                 on_pause=_on_row_pause, on_resume=_on_row_resume,
             ) if child_payload else {"mode": "skip_payload", "record_id": None, "meta": {}}
@@ -2556,6 +2696,8 @@ def execute_linked_import(
                     )
             if ext_key and parent_record_id is not None:
                 parent_ext_key_cache[ext_key] = parent_record_id
+            if _parent_dedup_key is not None and parent_record_id is not None:
+                _parent_dedup_cache[_parent_dedup_key] = parent_record_id
         except Exception as error:
             failed_rows += 1
             results.append(
@@ -2733,6 +2875,7 @@ def execute_dry_run(
     should_cancel=None,
     default_field_values: dict | None = None,
     progress_callback=None,
+    warm_progress_callback=None,
     entity_config: dict | None = None,
 ) -> dict:
     if is_linked_import_entity_type(entity_type):
@@ -2750,6 +2893,7 @@ def execute_dry_run(
             should_cancel=should_cancel,
             default_field_values=default_field_values,
             progress_callback=progress_callback,
+            warm_progress_callback=warm_progress_callback,
         )
 
     invalid_row_numbers = get_invalid_row_numbers(validation_summary)
@@ -2771,6 +2915,7 @@ def execute_dry_run(
         user_resolver=user_resolver,
         default_field_values=default_field_values,
         context=dry_run_context,
+        warm_progress_callback=warm_progress_callback,
     )
     checked_rows = 0
     ready_rows = 0
@@ -2976,6 +3121,7 @@ def execute_import(
     default_field_values: dict | None = None,
     per_row_decisions: dict | None = None,
     progress_callback=None,
+    warm_progress_callback=None,
     entity_config: dict | None = None,
     on_rate_limit_pause=None,
     on_rate_limit_resume=None,
@@ -3025,6 +3171,7 @@ def execute_import(
         user_resolver=user_resolver,
         default_field_values=default_field_values,
         context=import_context,
+        warm_progress_callback=warm_progress_callback,
     )
     checked_rows = 0
     created_rows = 0

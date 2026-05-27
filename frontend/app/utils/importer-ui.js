@@ -1555,14 +1555,16 @@ export function buildDedupFieldOptions(mappingRows, fields) {
       .filter((fieldId) => fieldId && fieldPattern.test(fieldId)),
   )
 
-  return Array.from(selectedFields).map((fieldId) => {
-    const field = fieldIndex.get(fieldId)
-    return {
-      id: fieldId,
-      label: formatImporterFieldLabel(fieldId, field?.title),
-      hint: fieldId === 'ID' ? 'Прямой поиск по ID записи Bitrix24' : undefined,
-    }
-  })
+  return Array.from(selectedFields)
+    .filter((fieldId) => !fieldId.startsWith('UF_'))
+    .map((fieldId) => {
+      const field = fieldIndex.get(fieldId)
+      return {
+        id: fieldId,
+        label: formatImporterFieldLabel(fieldId, field?.title),
+        hint: fieldId === 'ID' ? 'Прямой поиск по ID записи Bitrix24' : undefined,
+      }
+    })
 }
 
 export function buildValidationIssueRows(validationData) {

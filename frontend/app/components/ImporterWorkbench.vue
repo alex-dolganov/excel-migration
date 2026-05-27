@@ -750,6 +750,7 @@ const linkedDedupFieldOptions = computed(() => linkedDedupEntityGroups.value.red
       label: String(item.label || '').trim(),
       hint: item.hint,
     }))
+    .filter((item) => !String(item.id || '').toUpperCase().startsWith('UF_'))
   return result
 }, {} as Record<string, Array<{ id: string, label: string, hint?: string }>>))
 const requiredFieldMissingIds = computed(() => new Set(
@@ -968,6 +969,28 @@ const executionProgressPercent = computed(() => (
     ? Math.min(100, Math.round((executionProgressProcessedRows.value / executionProgressTotalRows.value) * 100))
     : 0
 ))
+const warmProgress = computed(() => {
+  const wp = session.value?.summary?.warm_progress
+  if (wp && typeof wp === 'object' && Number(wp.done) > 0 && Number(wp.total) > 0) {
+    return { done: Number(wp.done), total: Number(wp.total) }
+  }
+  return null
+})
+const isWarmingUp = computed(() => (
+  warmProgress.value !== null
+  && executionProgressProcessedRows.value === 0
+  && busyAction.value !== ''
+))
+const warmProgressPercent = computed(() => {
+  if (!warmProgress.value) return 0
+  return Math.min(100, Math.round((warmProgress.value.done / warmProgress.value.total) * 100))
+})
+const isProgressIndeterminate = computed(() => (
+  executionProgressPercent.value === 0
+  && !isWarmingUp.value
+  && busyAction.value !== ''
+  && (showsDedupProgress.value || showsSessionProgress.value || importExecutionStage.value === 'duplicate-decisions')
+))
 const executionProgressTitle = computed(() => {
   if (showsSessionProgress.value) {
     return sessionProgressTitle.value
@@ -979,13 +1002,18 @@ const executionProgressTitle = computed(() => {
 
   return dedupProgressTitle.value
 })
-const executionProgressCounterLabel = computed(() => (
-  busyAction.value === 'sample-preview'
-    ? `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк файла`
-    : importExecutionStage.value === 'duplicate-decisions'
-      ? `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк файла`
-      : `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк`
-))
+const executionProgressCounterLabel = computed(() => {
+  if (isWarmingUp.value && warmProgress.value) {
+    return `Запрос ${warmProgress.value.done} из ${warmProgress.value.total}`
+  }
+  if (busyAction.value === 'sample-preview') {
+    return `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк файла`
+  }
+  if (importExecutionStage.value === 'duplicate-decisions') {
+    return `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк файла`
+  }
+  return `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк`
+})
 const showsDedupProgress = computed(() => (
   ['dedup', 'validation', 'sample-preview'].includes(String(busyAction.value || '').trim())
 ))
@@ -4512,7 +4540,7 @@ function buildCancelledImportRunSummary(snapshot: Record<string, any> | null | u
 }
 
 async function waitForDryRunExecutionResult(sessionId: string) {
-  const maxAttempts = 600
+  const maxAttempts = 3600
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const response = await apiStore.getImportSession(sessionId)
@@ -4563,7 +4591,7 @@ async function waitForDryRunExecutionResult(sessionId: string) {
 }
 
 async function waitForImportExecutionResult(sessionId: string) {
-  const maxAttempts = 600
+  const maxAttempts = 3600
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const response = await apiStore.getImportSession(sessionId)
@@ -7407,6 +7435,16 @@ onUnmounted(() => {
                 </div>
                 <div class="mb-3 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
                   <div
+                    v-if="isProgressIndeterminate"
+                    class="progress-indeterminate h-2 w-2/5 rounded-full bg-[#2e6bd9]"
+                  />
+                  <div
+                    v-else-if="isWarmingUp"
+                    class="h-2 rounded-full bg-[#2e6bd9] transition-all duration-500"
+                    :style="{ width: warmProgressPercent + '%' }"
+                  />
+                  <div
+                    v-else
                     class="h-2 rounded-full bg-[#2e6bd9] transition-all duration-500"
                     :style="{ width: executionProgressPercent + '%' }"
                   />
@@ -8612,5 +8650,13 @@ onUnmounted(() => {
 .step1-fade-leave-to {
   opacity: 0;
   transform: translateY(-8px);
+}
+
+@keyframes progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+.progress-indeterminate {
+  animation: progress-slide 1.4s ease-in-out infinite;
 }
 </style>

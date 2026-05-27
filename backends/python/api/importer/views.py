@@ -2665,6 +2665,7 @@ def execute_import_session_dry_run_now(
         **summary,
         "dry_run": None,
         summary_key: None,
+        "warm_progress": None,
     }
     session.status = ImportSession.Status.RUNNING
     session.total_rows = total_rows
@@ -2691,6 +2692,15 @@ def execute_import_session_dry_run_now(
         session.failed_rows = skipped_rows
         session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
 
+    def _save_warm_progress(*, done, total):
+        try:
+            s = session.summary if isinstance(session.summary, dict) else {}
+            s = {**s, "warm_progress": {"done": done, "total": total}}
+            session.summary = s
+            session.save(update_fields=["summary", "updated_at"])
+        except Exception:
+            pass
+
     dry_run_result = execute_dry_run(
         account=account,
         entity_type=session.entity_type,
@@ -2705,6 +2715,7 @@ def execute_import_session_dry_run_now(
         should_cancel=lambda: is_session_cancel_requested(session.id),
         default_field_values=task_default_field_values,
         progress_callback=_save_progress,
+        warm_progress_callback=_save_warm_progress,
         entity_config=get_session_entity_config(session),
     )
     dry_run_result = {
@@ -2871,12 +2882,23 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
     if missing_pending_decision_rows is None or missing_pending_decision_rows:
         raise ValueError("Run a dry run and choose an action for each duplicate before import execution")
 
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    session.summary = {**summary, "warm_progress": None}
     session.status = ImportSession.Status.RUNNING
     session.last_error = ""
     session.processed_rows = 0
     session.successful_rows = 0
     session.failed_rows = 0
-    session.save(update_fields=["status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+    session.save(update_fields=["summary", "status", "last_error", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+
+    def _save_warm_progress_import(*, done, total):
+        try:
+            s = session.summary if isinstance(session.summary, dict) else {}
+            s = {**s, "warm_progress": {"done": done, "total": total}}
+            session.summary = s
+            session.save(update_fields=["summary", "updated_at"])
+        except Exception:
+            pass
 
     try:
         fields, rows, row_numbers, preflight = load_session_preflight_context(
@@ -2983,6 +3005,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
             default_field_values=task_default_field_values,
             per_row_decisions=normalized_per_row_decisions,
             progress_callback=_save_create_phase_progress,
+            warm_progress_callback=_save_warm_progress_import,
             entity_config=get_session_entity_config(session),
             on_rate_limit_pause=_on_rate_limit_pause,
             on_rate_limit_resume=_on_rate_limit_resume,
@@ -3048,6 +3071,7 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
                 entity_config=get_session_entity_config(session),
                 on_rate_limit_pause=_on_rate_limit_pause,
                 on_rate_limit_resume=_on_rate_limit_resume,
+                warm_progress_callback=_save_warm_progress_import,
             )
             _save_duplicate_phase_progress(
                 checked_rows=duplicate_phase_result["checked_rows"],
@@ -3237,9 +3261,15 @@ def import_session_cancel(request: AuthorizedRequest, session_id):
     if session.status != ImportSession.Status.RUNNING:
         return JsonResponse({"error": "Only running import can be cancelled"}, status=400)
 
+    from .services.background_jobs import _update_session_job_state
+
     session.status = ImportSession.Status.CANCELLED
     session.last_error = ""
-    session.save(update_fields=["status", "last_error", "updated_at"])
+    summary = session.summary if isinstance(session.summary, dict) else {}
+    job = summary.get("job") if isinstance(summary.get("job"), dict) else {}
+    job_mode = str(job.get("mode") or "run").strip() or "run"
+    _update_session_job_state(session, mode=job_mode, state="cancelled")
+    session.save(update_fields=["status", "last_error", "summary", "updated_at"])
     return JsonResponse({"item": serialize_session(session)})
 
 
