@@ -4580,7 +4580,22 @@ async function waitForImportExecutionResult(sessionId: string) {
       throw new Error(String(snapshot?.last_error || 'Импорт завершился с ошибкой в фоновом worker.'))
     }
     if (currentStatus === 'cancelled') {
-      return resolvedImportRun || buildCancelledImportRunSummary(snapshot)
+      if (resolvedImportRun) {
+        return resolvedImportRun
+      }
+      // Worker may still be saving final results — retry a few times before falling back
+      let lastCancelledSnapshot = snapshot
+      for (let retryAttempt = 0; retryAttempt < 5; retryAttempt += 1) {
+        await sleepAction(1500)
+        const retryResponse = await apiStore.getImportSession(sessionId)
+        lastCancelledSnapshot = retryResponse.item
+        syncSessionSnapshot(lastCancelledSnapshot)
+        const retryImportRun = buildImportRunFromSnapshot(lastCancelledSnapshot)
+        if (retryImportRun) {
+          return retryImportRun
+        }
+      }
+      return buildCancelledImportRunSummary(lastCancelledSnapshot)
     }
 
     if (!shouldWaitForImportExecutionSnapshot(snapshot)) {

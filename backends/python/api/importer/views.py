@@ -958,15 +958,10 @@ def get_preimport_scan_summary(summary: object) -> dict | None:
 
 
 def is_session_cancel_requested(session_id) -> bool:
-    try:
-        session = ImportSession.objects.only("status", "summary").get(id=session_id)
-    except ImportSession.DoesNotExist:
-        return False
-    if session.status == ImportSession.Status.CANCELLED:
-        return True
-    summary = session.summary if isinstance(session.summary, dict) else {}
-    job = summary.get("job") if isinstance(summary.get("job"), dict) else {}
-    return bool(job.get("cancel_requested"))
+    return ImportSession.objects.filter(
+        id=session_id,
+        status=ImportSession.Status.CANCELLED,
+    ).exists()
 
 
 def build_import_report_csv(import_run: dict) -> str:
@@ -3242,14 +3237,9 @@ def import_session_cancel(request: AuthorizedRequest, session_id):
     if session.status != ImportSession.Status.RUNNING:
         return JsonResponse({"error": "Only running import can be cancelled"}, status=400)
 
-    session_summary = session.summary if isinstance(session.summary, dict) else {}
-    existing_job = session_summary.get("job") if isinstance(session_summary.get("job"), dict) else {}
-    session.summary = {
-        **session_summary,
-        "job": {**existing_job, "cancel_requested": True},
-    }
+    session.status = ImportSession.Status.CANCELLED
     session.last_error = ""
-    session.save(update_fields=["summary", "last_error", "updated_at"])
+    session.save(update_fields=["status", "last_error", "updated_at"])
     return JsonResponse({"item": serialize_session(session)})
 
 
