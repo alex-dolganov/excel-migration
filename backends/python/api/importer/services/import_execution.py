@@ -99,8 +99,8 @@ def _read_positive_int_env(name: str, default: int) -> int:
         return max(1, int(default))
 
 
-BITRIX_ROW_DELAY = _read_non_negative_float_env("BITRIX_ROW_DELAY", 0.3)
-BITRIX_BATCH_DELAY = _read_non_negative_float_env("BITRIX_BATCH_DELAY", 2.0)
+BITRIX_ROW_DELAY = _read_non_negative_float_env("BITRIX_ROW_DELAY", 0.1)
+BITRIX_BATCH_DELAY = _read_non_negative_float_env("BITRIX_BATCH_DELAY", 1.0)
 BATCH_SIZE = _read_positive_int_env("BATCH_SIZE", 50)
 _ENTITY_BATCH_SIZES = {
     "lead": _read_positive_int_env("LEAD_BATCH_SIZE", 40),
