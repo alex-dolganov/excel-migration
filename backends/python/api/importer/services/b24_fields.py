@@ -946,6 +946,8 @@ def normalize_fields_result(fields_result: dict[str, Any], entity_type: str = ""
         is_required = normalize_bitrix_bool(field_meta.get("isRequired", field_meta.get("required")))
         if entity_type == "contact" and field_id in CONTACT_OPTIONAL_NAME_FIELDS:
             is_required = False
+        if entity_type == SMART_PROCESS_ENTITY_TYPE and field_id != "title":
+            is_required = False
 
         upper_name = str(field_meta.get("upperName") or "")
         is_custom = (

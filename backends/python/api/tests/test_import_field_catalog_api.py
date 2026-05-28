@@ -2452,7 +2452,7 @@ class ImportFieldCatalogApiTest(TestCase):
                     "id": "stageId",
                     "title": "Стадия",
                     "type": "crm_status",
-                    "required": True,
+                    "required": False,
                     "multiple": False,
                     "is_custom": False,
                     "items": [
