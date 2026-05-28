@@ -2611,6 +2611,11 @@ def execute_linked_import(
         if ext_key:
             parent_payload["XML_ID"] = ext_key
         child_payload = linked_payload.get(child_entity_type, {})
+        _child_dedup_key = build_dedup_lookup_cache_key(
+            child_entity_type,
+            child_payload,
+            filter_dedup_settings_for_payload(dedup_settings.get(child_entity_type, {}), child_payload),
+        ) if child_payload else None
         decisions = per_row_decisions if isinstance(per_row_decisions, dict) else {}
         parent_row_decision = resolve_linked_row_decision(decisions, row_number, parent_entity_type)
         child_row_decision = resolve_linked_row_decision(decisions, row_number, child_entity_type)
@@ -2741,6 +2746,12 @@ def execute_linked_import(
                         lambda: create_entity_record(account, child_entity_type, child_payload),
                         on_pause=_on_row_pause, on_resume=_on_row_resume,
                     )
+                    if _child_dedup_key is not None and child_record_id is not None:
+                        _child_dedup_lookup_cache[_child_dedup_key] = {
+                            "record_id": child_record_id,
+                            "duplicate_match_fields": [],
+                            "dedup_missing_fields": [],
+                        }
 
             if relation_mode == "parent_field" and parent_record_id is not None and child_record_id is not None and parent_link_field:
                 _bitrix_retry(
