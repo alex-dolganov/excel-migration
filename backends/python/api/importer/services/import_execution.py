@@ -1155,6 +1155,14 @@ def _find_hr_existing_record(account, entity_type: str, row_payload: dict, dedup
     }
 
 
+def _normalize_smart_process_dedup_settings(row_payload: dict, dedup_settings: dict) -> dict:
+    # dedup fields arrive as UPPERCASE ("TITLE"), but smart process payload keys are camelCase ("title").
+    # Map each dedup field name to the actual key present in row_payload (case-insensitive).
+    payload_upper_map = {k.upper(): k for k in row_payload}
+    normalized_fields = [payload_upper_map.get(f.upper(), f) for f in dedup_settings.get("fields", [])]
+    return {**dedup_settings, "fields": normalized_fields}
+
+
 def _find_smart_process_record_by_filter(account, entity_type_id: int, lookup_filter: dict):
     response = BitrixAPIRequest(
         bitrix_token=account,
@@ -1171,7 +1179,8 @@ def _find_smart_process_record_by_filter(account, entity_type_id: int, lookup_fi
 def _find_smart_process_existing_record(account, row_payload: dict, dedup_settings: dict, *, context: dict | None = None):
     smart_process_config = normalize_smart_process_entity_config((context or {}).get("entity_config"))
     entity_type_id = smart_process_config["entityTypeId"]
-    lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, dedup_settings)
+    sp_dedup_settings = _normalize_smart_process_dedup_settings(row_payload, dedup_settings)
+    lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, sp_dedup_settings)
     dedup_missing_fields = missing_fields if matched_fields and missing_fields else []
 
     if not lookup_filter:
@@ -1311,7 +1320,8 @@ def build_dedup_lookup_cache_key(entity_type: str, row_payload: dict, dedup_sett
 
     if normalized_entity_type == SMART_PROCESS_ENTITY_TYPE:
         smart_process_config = normalize_smart_process_entity_config((context or {}).get("entity_config"))
-        lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, dedup_settings)
+        sp_dedup_settings = _normalize_smart_process_dedup_settings(row_payload, dedup_settings)
+        lookup_filter, matched_fields, missing_fields = build_dedup_lookup_filter(row_payload, sp_dedup_settings)
         return (
             normalized_entity_type,
             smart_process_config["entityTypeId"],
