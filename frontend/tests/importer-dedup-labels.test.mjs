@@ -93,6 +93,26 @@ test('formats duplicate match and missing dedup details with Russian field label
   })
 })
 
+test('excludes custom fields (is_custom) from dedup options for smart processes', () => {
+  const options = buildDedupFieldOptions(
+    [
+      { targetFieldId: 'title' },
+      { targetFieldId: 'stageId' },
+      { targetFieldId: 'ufCrm128_someField' },
+    ],
+    [
+      { id: 'title', title: 'Название', is_custom: false },
+      { id: 'stageId', title: 'Стадия', is_custom: false },
+      { id: 'ufCrm128_someField', title: 'Доп. поле', is_custom: true },
+    ],
+  )
+
+  const ids = options.map((o) => o.id)
+  assert.ok(ids.includes('TITLE'), 'title should be included')
+  assert.ok(ids.includes('STAGEID'), 'stageId should be included')
+  assert.ok(!ids.includes('UFCRM128_SOMEFIELD'), 'custom field should be excluded')
+})
+
 test('importer workbench describes dedup keys as current import fields instead of legacy fixed ids', () => {
   const importerWorkbenchSource = readFileSync(
     new URL('../app/components/ImporterWorkbench.vue', import.meta.url),

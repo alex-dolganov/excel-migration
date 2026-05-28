@@ -157,8 +157,11 @@ def build_report_title(
             fields.get("PHONE"),
         )
 
-    if entity_type in {"company", "deal", "task", "task_checklist_item", SMART_PROCESS_ENTITY_TYPE}:
+    if entity_type in {"company", "deal", "task", "task_checklist_item"}:
         return _first_non_empty(fields.get("TITLE"))
+
+    if entity_type == SMART_PROCESS_ENTITY_TYPE:
+        return _first_non_empty(fields.get("title"), fields.get("TITLE"))
 
     if entity_type in {"contact", "user"}:
         return _first_non_empty(

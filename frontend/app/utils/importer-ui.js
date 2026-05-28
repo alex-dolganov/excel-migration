@@ -1556,7 +1556,7 @@ export function buildDedupFieldOptions(mappingRows, fields) {
   )
 
   return Array.from(selectedFields)
-    .filter((fieldId) => !fieldId.startsWith('UF_'))
+    .filter((fieldId) => !fieldId.startsWith('UF_') && !fieldIndex.get(fieldId)?.is_custom)
     .map((fieldId) => {
       const field = fieldIndex.get(fieldId)
       return {
@@ -2874,13 +2874,19 @@ function buildDedupMissingDetails(item) {
   return `Неполный поиск дублей: ${fields.map((field) => formatImporterFieldLabel(field)).join(', ')}`
 }
 
-function buildFlatDryRunRows(dryRunData) {
+function buildFlatDryRunRows(dryRunData, catalogFields = []) {
+  const fieldIndex = new Map(
+    (Array.isArray(catalogFields) ? catalogFields : [])
+      .filter((f) => f && typeof f === 'object' && String(f.id || '').trim())
+      .map((f) => [String(f.id || '').trim().toUpperCase(), f]),
+  )
   return (Array.isArray(dryRunData?.results) ? dryRunData.results : []).map((item) => {
     const fields = item?.fields && typeof item.fields === 'object' ? item.fields : {}
     const details = Object.entries(fields)
       .map(([key, value]) => {
         const normalizedValue = flattenFieldValue(value)
-        return normalizedValue ? `${formatImporterFieldLabel(key)}: ${normalizedValue}` : ''
+        const fieldTitle = fieldIndex.get(String(key || '').trim().toUpperCase())?.title || ''
+        return normalizedValue ? `${formatImporterFieldLabel(key, fieldTitle)}: ${normalizedValue}` : ''
       })
       .filter(Boolean)
       .join(' · ')
@@ -2898,7 +2904,7 @@ function buildFlatDryRunRows(dryRunData) {
   })
 }
 
-export function buildDryRunRows(dryRunData, entityType = '') {
+export function buildDryRunRows(dryRunData, entityType = '', fields = []) {
   if (isLinkedImportEntityType(entityType)) {
     const groupedRows = buildGroupedLinkedDryRunRows(dryRunData, entityType)
     if (groupedRows.length > 0) {
@@ -2906,7 +2912,7 @@ export function buildDryRunRows(dryRunData, entityType = '') {
     }
   }
 
-  return buildFlatDryRunRows(dryRunData)
+  return buildFlatDryRunRows(dryRunData, fields)
 }
 
 export function buildSessionHistoryRows(sessions) {

@@ -1613,7 +1613,7 @@ const valueMappingRows = computed<ValueMappingRow[]>(() => buildValueMappingRows
 const valueMappingStatus = computed(() => buildValueMappingStatus(valueMappingRows.value))
 const valueMappingExpanded = ref(false)
 const validationIssueRows = computed<ValidationIssueRow[]>(() => buildValidationIssueRows(validationData.value))
-const dryRunRows = computed<DryRunRow[]>(() => buildDryRunRows(resolvedDryRunData.value, entityType.value))
+const dryRunRows = computed<DryRunRow[]>(() => buildDryRunRows(resolvedDryRunData.value, entityType.value, fieldOptions.value))
 const importRunRows = computed<ImportRunRow[]>(() => buildImportRunRows(importRunData.value, entityType.value))
 const linkedImportRunSummary = computed(() => buildLinkedImportRunSummary(importRunData.value))
 const linkedSummaryPageCount = computed(() => (

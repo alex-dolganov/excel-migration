@@ -187,7 +187,7 @@ def _build_choice_value_issues(
 
 def _build_dedup_issues(entity_type: str, mapping: dict, fields: list[dict], dedup_settings, default_field_values: dict | None) -> list[dict]:
     normalized_defaults = {
-        str(field_id)
+        str(field_id).upper()
         for field_id in (default_field_values or {}).keys()
         if str(field_id or "").strip()
     }
@@ -197,9 +197,9 @@ def _build_dedup_issues(entity_type: str, mapping: dict, fields: list[dict], ded
     if is_linked_import_entity_type(entity_type):
         grouped_mapping = build_linked_mapping_groups(mapping, fields, entity_type=entity_type)
         for linked_entity, entity_dedup_settings in normalized_dedup.items():
-            mapped_fields = set(grouped_mapping.get(str(linked_entity), {}).keys())
+            mapped_fields = {k.upper() for k in grouped_mapping.get(str(linked_entity), {}).keys()}
             for field_id in entity_dedup_settings.get("fields", []):
-                normalized_field_id = str(field_id or "").strip()
+                normalized_field_id = str(field_id or "").strip().upper()
                 if not normalized_field_id or normalized_field_id in mapped_fields or normalized_field_id in normalized_defaults:
                     continue
                 issues.append(_build_issue(
@@ -211,12 +211,12 @@ def _build_dedup_issues(entity_type: str, mapping: dict, fields: list[dict], ded
         return issues
 
     mapped_fields = {
-        str(target_field)
+        str(target_field).upper()
         for target_field, mapping_item in (mapping or {}).items()
         if isinstance(mapping_item, dict)
     }
     for field_id in normalized_dedup.get("fields", []):
-        normalized_field_id = str(field_id or "").strip()
+        normalized_field_id = str(field_id or "").strip().upper()
         if not normalized_field_id or normalized_field_id in mapped_fields or normalized_field_id in normalized_defaults:
             continue
         issues.append(_build_issue(
