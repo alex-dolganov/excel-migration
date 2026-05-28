@@ -1033,10 +1033,7 @@ def get_entity_scope(client, entity_type: str):
         return task_scope
 
     if entity_type == "task_checklist_item":
-        scope = _resolve_task_child_scope(client, "checklistitem")
-        if scope is None:
-            raise ValueError("Unsupported entity type")
-        return scope
+        return _resolve_task_child_scope(client, "checklistitem")
 
     crm_scope = getattr(client, "crm", None)
     entity_scopes = {
