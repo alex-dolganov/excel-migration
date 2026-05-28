@@ -1,3 +1,4 @@
+from .b24_fields import SMART_PROCESS_ENTITY_TYPE
 from .mapping import resolve_field_item_value
 from .import_execution import (
     build_linked_record_title,
@@ -14,6 +15,11 @@ _RUNTIME_OPTIONAL_REQUIRED_FIELDS = {
     "task": {"RESPONSIBLE_ID", "CREATED_BY"},
     "task_comment": {"AUTHOR_ID"},
 }
+
+# crm.item.fields возвращает isRequired=true для полей вроде opened, stageId, categoryId,
+# но crm.item.add принимает их без явной передачи — у Bitrix24 есть дефолты.
+# Единственное поле, которое Bitrix24 реально требует при создании элемента — title.
+_SMART_PROCESS_REQUIRED_FIELDS = frozenset({"title"})
 
 
 def _build_issue(code: str, severity: str, **payload) -> dict:
@@ -37,13 +43,22 @@ def _build_required_field_issues(entity_type: str, fields: list[dict], mapping: 
     }
 
     issues = []
-    runtime_optional_required_fields = _RUNTIME_OPTIONAL_REQUIRED_FIELDS.get(str(entity_type or "").strip(), set())
+    normalized_entity_type = str(entity_type or "").strip()
+    is_smart_process = normalized_entity_type == SMART_PROCESS_ENTITY_TYPE
+    runtime_optional_required_fields = _RUNTIME_OPTIONAL_REQUIRED_FIELDS.get(normalized_entity_type, set())
+
     for field in fields:
         field_id = str(field.get("id") or "").strip()
-        if not field_id or not field.get("required"):
+        if not field_id:
             continue
-        if field_id in runtime_optional_required_fields:
-            continue
+        if is_smart_process:
+            if field_id not in _SMART_PROCESS_REQUIRED_FIELDS:
+                continue
+        else:
+            if not field.get("required"):
+                continue
+            if field_id in runtime_optional_required_fields:
+                continue
         if field_id in mapped_field_ids or field_id in default_field_ids:
             continue
         issues.append(_build_issue(

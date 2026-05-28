@@ -64,6 +64,84 @@ class ImportPreflightServiceTest(SimpleTestCase):
         self.assertEqual(preflight["blocking_issue_count"], 0)
         self.assertEqual(preflight["issues"], [])
 
+    def test_smart_process_preflight_only_requires_title(self):
+        # opened, stageId, categoryId — Bitrix24 API возвращает как required,
+        # но crm.item.add принимает их без явной передачи
+        preflight = build_mapping_preflight(
+            entity_type="smart_process",
+            rows=[
+                ["Название"],
+                ["Новый клиент"],
+            ],
+            row_numbers=[1, 2],
+            columns=["A"],
+            data_start_row=2,
+            mapping={
+                "title": {
+                    "source_header": "Название",
+                    "column": "A",
+                },
+            },
+            fields=[
+                {"id": "title", "title": "Название", "type": "string", "required": True},
+                {"id": "opened", "title": "Доступно для всех", "type": "boolean", "required": True},
+                {"id": "stageId", "title": "Стадия", "type": "crm_status", "required": True},
+                {"id": "categoryId", "title": "Воронка", "type": "integer", "required": True},
+            ],
+            dedup_settings={},
+            default_field_values={},
+        )
+
+        self.assertEqual(preflight["blocking_issue_count"], 0)
+        self.assertEqual(preflight["issues"], [])
+
+    def test_smart_process_preflight_blocks_when_title_unmapped(self):
+        preflight = build_mapping_preflight(
+            entity_type="smart_process",
+            rows=[
+                ["Ответственный"],
+                ["59"],
+            ],
+            row_numbers=[1, 2],
+            columns=["A"],
+            data_start_row=2,
+            mapping={
+                "assignedById": {
+                    "source_header": "Ответственный",
+                    "column": "A",
+                },
+            },
+            fields=[
+                {"id": "title", "title": "Название", "type": "string", "required": True},
+                {"id": "assignedById", "title": "Ответственный", "type": "integer", "required": True},
+                {"id": "opened", "title": "Доступно для всех", "type": "boolean", "required": True},
+            ],
+            dedup_settings={},
+            default_field_values={},
+        )
+
+        self.assertEqual(preflight["blocking_issue_count"], 1)
+        self.assertEqual(preflight["issues"][0]["field_id"], "title")
+
+    def test_smart_process_preflight_passes_when_title_in_default_values(self):
+        preflight = build_mapping_preflight(
+            entity_type="smart_process",
+            rows=[["Стадия"], ["Новая"]],
+            row_numbers=[1, 2],
+            columns=["A"],
+            data_start_row=2,
+            mapping={},
+            fields=[
+                {"id": "title", "title": "Название", "type": "string", "required": True},
+                {"id": "opened", "title": "Доступно для всех", "type": "boolean", "required": True},
+            ],
+            dedup_settings={},
+            default_field_values={"title": "Авто-элемент"},
+        )
+
+        self.assertEqual(preflight["blocking_issue_count"], 0)
+        self.assertEqual(preflight["issues"], [])
+
     def test_task_comment_preflight_allows_runtime_author_without_explicit_mapping(self):
         preflight = build_mapping_preflight(
             entity_type="task_comment",
