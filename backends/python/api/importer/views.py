@@ -1376,8 +1376,41 @@ def build_columns_from_rows(rows: list[list]) -> list[str]:
     return [column_index_to_letter(index) for index in range(1, max_columns + 1)]
 
 
-def detect_csv_delimiter(raw_bytes: bytes) -> str:
-    sample = raw_bytes.decode("utf-8-sig", errors="replace")
+def detect_csv_encoding(sample_bytes: bytes) -> str:
+    """Detect CSV encoding from raw bytes. Returns a Python codec name.
+
+    Strategy:
+    1. UTF-8 BOM → utf-8-sig immediately.
+    2. Strict UTF-8 decode — if it succeeds, the file IS UTF-8.
+    3. chardet for everything else (CP1251, Latin-1, …).
+       Confidence threshold is intentionally low here because we already
+       know the file is not UTF-8, so even 0.1 is a useful signal.
+    4. Fall back to utf-8-sig (errors='replace' will handle any leftovers).
+    """
+    if sample_bytes.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+
+    try:
+        sample_bytes.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+
+    try:
+        import chardet
+        result = chardet.detect(sample_bytes)
+        encoding = str(result.get("encoding") or "").strip()
+        confidence = float(result.get("confidence") or 0)
+        if encoding and confidence >= 0.1:
+            return encoding
+    except Exception:
+        pass
+
+    return "utf-8-sig"
+
+
+def detect_csv_delimiter(raw_bytes: bytes, encoding: str = "utf-8-sig") -> str:
+    sample = raw_bytes.decode(encoding, errors="replace")
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=_CSV_CANDIDATE_DELIMITERS)
         return dialect.delimiter
@@ -1390,8 +1423,9 @@ def extract_rows_from_csv(session: ImportSession, preview_limit: int | None = 20
         with session.stored_file.open("rb") as stored_file:
             sample_bytes = stored_file.read(_CSV_SNIFF_BYTES)
             stored_file.seek(0)
-            delimiter = detect_csv_delimiter(sample_bytes)
-            text_file = TextIOWrapper(stored_file, encoding="utf-8-sig", newline="")
+            encoding = detect_csv_encoding(sample_bytes)
+            delimiter = detect_csv_delimiter(sample_bytes, encoding=encoding)
+            text_file = TextIOWrapper(stored_file, encoding=encoding, newline="")
             reader = csv.reader(text_file, delimiter=delimiter)
             rows = []
             row_numbers = []
