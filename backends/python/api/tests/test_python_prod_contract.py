@@ -55,6 +55,9 @@ class PythonProdContractTest(SimpleTestCase):
                     "otel_enabled",
                     "otel_endpoint",
                     "otel_service_name",
+                    "debug_portals",
+                    "error_tickets_enabled",
+                    "error_tickets_endpoint",
                 },
             )
 

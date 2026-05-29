@@ -36,6 +36,13 @@ class Config:
     otel_endpoint: str
     otel_service_name: str
 
+    # Per-portal debug (comma-separated member_ids, optional)
+    debug_portals: list
+
+    # Error tickets via internal proxy (optional)
+    error_tickets_enabled: bool
+    error_tickets_endpoint: str
+
 
 def load_config() -> Config:
     build_target = env.str("BUILD_TARGET", "dev")  # dev or production
@@ -43,6 +50,11 @@ def load_config() -> Config:
     db_type = env.str("DB_TYPE", "postgresql").lower()
     default_db_port = 3306 if db_type == "mysql" else 5432
     otel_endpoint = env.str("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+    debug_portals_raw = env.str("DEBUG_PORTALS", "")
+    debug_portals = [p.strip() for p in debug_portals_raw.split(",") if p.strip()]
+
+    error_tickets_endpoint = env.str("ERROR_TICKETS_ENDPOINT", "")
 
     return Config(
         debug=debug,
@@ -61,6 +73,9 @@ def load_config() -> Config:
         otel_enabled=env.bool("OTEL_EXPORTER_OTLP_ENABLED", (not debug) and bool(otel_endpoint)),
         otel_endpoint=otel_endpoint,
         otel_service_name=env.str("OTEL_SERVICE_NAME", "excel-migration-api"),
+        debug_portals=debug_portals,
+        error_tickets_enabled=env.bool("ERROR_TICKETS_ENABLED", False),
+        error_tickets_endpoint=error_tickets_endpoint,
     )
 
 

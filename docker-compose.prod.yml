@@ -1,0 +1,69 @@
+# Production compose — Python backend only.
+# Uses external MySQL and RabbitMQ (no local DB/queue containers).
+# Nginx is expected to sit in front and proxy to api-python:8000.
+#
+# Usage:
+#   docker-compose -f docker-compose.prod.yml --env-file .env up -d
+#
+# Required .env variables: see docs/release/import-env.example.md
+
+services:
+  # HTTP API (Gunicorn → Django)
+  api-python:
+    image: ${HARBOR_IMAGE:-registry.i.bitrix24.ru/excel-migration/api-python}:${IMAGE_TAG:-latest}
+    container_name: api-python
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BUILD_TARGET: production
+      DB_HOST: ${DB_HOST}
+      PORT: 8000
+    expose:
+      - "8000"
+    ports:
+      - "8000:8000"
+    networks:
+      - internal-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Background worker (Celery)
+  api-python-worker:
+    image: ${HARBOR_IMAGE:-registry.i.bitrix24.ru/excel-migration/api-python}:${IMAGE_TAG:-latest}
+    container_name: api-python-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BUILD_TARGET: production
+      DB_HOST: ${DB_HOST}
+    command:
+      - sh
+      - ./scripts/start-worker.sh
+    networks:
+      - internal-net
+
+  # Frontend (Nuxt)
+  frontend:
+    image: ${HARBOR_FRONTEND_IMAGE:-registry.i.bitrix24.ru/excel-migration/frontend}:${IMAGE_TAG:-latest}
+    container_name: frontend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NUXT_PUBLIC_APP_URL: ${VIRTUAL_HOST}
+      NUXT_PUBLIC_API_URL: ${VIRTUAL_HOST}
+      NUXT_PUBLIC_IMPORT_MAX_FILE_SIZE_BYTES: ${IMPORT_MAX_FILE_SIZE_BYTES:-52428800}
+      NUXT_PUBLIC_TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-false}
+    expose:
+      - "3000"
+    ports:
+      - "${FRONTEND_HOST_PORT:-3000}:3000"
+    networks:
+      - internal-net
+
+networks:
+  internal-net:
+    driver: bridge
