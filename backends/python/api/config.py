@@ -43,6 +43,10 @@ class Config:
     error_tickets_enabled: bool
     error_tickets_endpoint: str
 
+    # Import row limit — how many data rows are processed per import run.
+    # When a file exceeds this limit, only the first N rows are imported.
+    import_row_limit: int
+
 
 def load_config() -> Config:
     build_target = env.str("BUILD_TARGET", "dev")  # dev or production
@@ -76,6 +80,7 @@ def load_config() -> Config:
         debug_portals=debug_portals,
         error_tickets_enabled=env.bool("ERROR_TICKETS_ENABLED", False),
         error_tickets_endpoint=error_tickets_endpoint,
+        import_row_limit=env.int("IMPORT_ROW_LIMIT", 100_000),
     )
 
 

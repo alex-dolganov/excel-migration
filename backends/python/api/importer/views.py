@@ -71,6 +71,31 @@ CELL_REF_RE = re.compile(r"([A-Z]+)")
 
 MAX_IMPORT_ROWS = 100_000
 SAMPLE_PREVIEW_ROW_LIMIT = 30
+
+
+def _get_import_row_limit() -> int:
+    """Return effective row limit: min(IMPORT_ROW_LIMIT from config, MAX_IMPORT_ROWS hard cap).
+    Using min() ensures @patch("importer.views.MAX_IMPORT_ROWS", N) in tests still works.
+    """
+    try:
+        from config import config
+        configured = max(1, int(config.import_row_limit or MAX_IMPORT_ROWS))
+        return min(configured, MAX_IMPORT_ROWS)
+    except Exception:
+        return MAX_IMPORT_ROWS
+
+
+def truncate_rows_to_data_limit(
+    rows: list,
+    row_numbers: list,
+    data_start_row: int,
+    limit: int,
+) -> tuple:
+    """Return (rows, row_numbers) keeping header rows + first `limit` data rows."""
+    header = [(r, rn) for r, rn in zip(rows, row_numbers) if rn < data_start_row]
+    data = [(r, rn) for r, rn in zip(rows, row_numbers) if rn >= data_start_row]
+    combined = header + data[:limit]
+    return [r for r, _ in combined], [rn for _, rn in combined]
 DRY_RUN_MODE_SAMPLE_PREVIEW = "sample_preview"
 DRY_RUN_MODE_PREIMPORT_SCAN = "preimport_scan"
 IMPORT_MODE_SIMPLE = "simple"
@@ -98,20 +123,25 @@ def get_max_import_file_size_megabytes() -> int:
 
 
 def build_import_row_limit_payload(total_rows: int) -> dict:
+    limit = _get_import_row_limit()
     normalized_total_rows = max(0, int(total_rows or 0))
-    row_limit_exceeded = normalized_total_rows > MAX_IMPORT_ROWS
-    row_limit_error = ""
+    row_limit_exceeded = normalized_total_rows > limit
+    rows_to_import = min(normalized_total_rows, limit)
+    row_limit_warning = ""
     if row_limit_exceeded:
-        row_limit_error = (
-            f"Файл содержит слишком много строк данных ({normalized_total_rows:,}). "
-            f"Максимум: {MAX_IMPORT_ROWS:,} строк за один импорт."
+        row_limit_warning = (
+            f"Файл содержит {normalized_total_rows:,} строк. "
+            f"Будут импортированы первые {limit:,}. "
+            f"Остальные {normalized_total_rows - limit:,} строк загрузите отдельным файлом."
         )
-
     return {
         "total_rows": normalized_total_rows,
-        "max_import_rows": MAX_IMPORT_ROWS,
+        "rows_to_import": rows_to_import,
+        "max_import_rows": limit,
         "row_limit_exceeded": row_limit_exceeded,
-        "row_limit_error": row_limit_error,
+        "row_limit_truncated": row_limit_exceeded,
+        "row_limit_warning": row_limit_warning,
+        "row_limit_error": "",  # kept for backward compatibility, now always empty
     }
 
 
@@ -2561,9 +2591,6 @@ def import_session_validate(request: AuthorizedRequest, session_id):
             total_rows = calculate_import_total_rows(session, str(selected_sheet_name), data_start_row)
         except ValueError as error:
             return JsonResponse({"error": str(error)}, status=400)
-    if build_import_row_limit_payload(total_rows)["row_limit_exceeded"]:
-        return build_import_row_limit_error_response(total_rows)
-
     try:
         fields, rows, row_numbers, preflight = load_session_preflight_context(
             account,
@@ -2577,6 +2604,11 @@ def import_session_validate(request: AuthorizedRequest, session_id):
         )
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
+
+    import_limit = _get_import_row_limit()
+    data_row_count = sum(1 for rn in row_numbers if rn >= data_start_row)
+    if data_row_count > import_limit:
+        rows, row_numbers = truncate_rows_to_data_limit(rows, row_numbers, data_start_row, import_limit)
 
     if preflight["blocking_issue_count"] > 0:
         return JsonResponse(
@@ -2695,6 +2727,10 @@ def execute_import_session_dry_run_now(
     total_rows = sum(1 for row_number in row_numbers if row_number >= session.data_start_row)
     if normalized_mode != DRY_RUN_MODE_SAMPLE_PREVIEW:
         full_total_rows = total_rows
+        import_limit = _get_import_row_limit()
+        if total_rows > import_limit:
+            rows, row_numbers = truncate_rows_to_data_limit(rows, row_numbers, session.data_start_row, import_limit)
+            total_rows = import_limit
     session.summary = {
         **summary,
         "dry_run": None,
@@ -2948,12 +2984,11 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
         if preflight["blocking_issue_count"] > 0:
             raise ValueError("Resolve preflight issues before import execution")
 
+        import_limit = _get_import_row_limit()
+        data_rows_count = sum(1 for rn in row_numbers if rn >= session.data_start_row)
+        if data_rows_count > import_limit:
+            rows, row_numbers = truncate_rows_to_data_limit(rows, row_numbers, session.data_start_row, import_limit)
         session.total_rows = sum(1 for rn in row_numbers if rn >= session.data_start_row)
-        if session.total_rows > MAX_IMPORT_ROWS:
-            raise ValueError(
-                f"Файл содержит слишком много строк данных ({session.total_rows:,}). "
-                f"Максимум: {MAX_IMPORT_ROWS:,} строк за один импорт."
-            )
         create_phase_row_numbers, duplicate_phase_row_numbers = collect_preimport_scan_stage_row_numbers(preimport_scan_summary)
         if not create_phase_row_numbers and not duplicate_phase_row_numbers:
             create_phase_row_numbers = [rn for rn in row_numbers if rn >= session.data_start_row]

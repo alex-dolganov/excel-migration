@@ -58,6 +58,7 @@ class PythonProdContractTest(SimpleTestCase):
                     "debug_portals",
                     "error_tickets_enabled",
                     "error_tickets_endpoint",
+                    "import_row_limit",
                 },
             )
 

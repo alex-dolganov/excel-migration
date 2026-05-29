@@ -683,7 +683,10 @@ const previewRows = computed(() => Array.isArray(preview.value?.preview_rows) ? 
 const previewColumnsSource = computed(() => Array.isArray(preview.value?.columns) ? preview.value.columns : [])
 const previewTotalRows = computed(() => Number(preview.value?.total_rows || session.value?.total_rows || 0))
 const previewMaxImportRows = computed(() => Number(preview.value?.max_import_rows || 0))
+const previewRowsToImport = computed(() => Number(preview.value?.rows_to_import || previewTotalRows.value))
 const previewRowLimitExceeded = computed(() => Boolean(preview.value?.row_limit_exceeded))
+const previewRowLimitTruncated = computed(() => Boolean(preview.value?.row_limit_truncated))
+const previewRowLimitWarning = computed(() => String(preview.value?.row_limit_warning || '').trim())
 const previewRowLimitError = computed(() => String(preview.value?.row_limit_error || '').trim())
 const sessionSavedMapping = computed(() => (
   mappingData.value?.saved_mapping && typeof mappingData.value.saved_mapping === 'object'
@@ -879,7 +882,6 @@ const canRunValidation = computed(() => (
   && Boolean(session.value?.id)
   && mappingSavedCount.value > 0
   && !unmappedValueSummary.value.hasUnmappedValues
-  && !previewRowLimitExceeded.value
   && !hasBlockingPreflightIssues.value
   && !busyAction.value
 ))
@@ -6424,9 +6426,11 @@ onUnmounted(() => {
               class="mt-5 rounded-[18px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-4 text-[#8f5b18]"
             >
               <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">Лимит строк на импорт</div>
-              <div class="mt-2 text-sm font-semibold">{{ previewRowLimitError }}</div>
+              <div class="mt-2 text-sm font-semibold">
+                {{ previewRowLimitWarning || previewRowLimitError }}
+              </div>
               <div class="mt-2 text-sm text-[#9c6a2a]">
-                Измените файл или разбейте импорт на несколько частей. Максимум для одного запуска: {{ preview?.max_import_rows || '—' }} строк.
+                Будет импортировано: <strong>{{ previewRowsToImport.toLocaleString('ru') }}</strong> из {{ previewTotalRows.toLocaleString('ru') }} строк.
               </div>
             </div>
 

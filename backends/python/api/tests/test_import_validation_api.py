@@ -664,7 +664,7 @@ class ImportValidationApiTest(TestCase):
 
     @patch("importer.views.MAX_IMPORT_ROWS", 1)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_validation_blocks_early_when_preview_detected_row_limit_exceeded(self, get_from_jwt_token):
+    def test_validation_truncates_rows_when_limit_exceeded(self, get_from_jwt_token):
         get_from_jwt_token.return_value = self.create_account()
 
         session = self.create_uploaded_session()
@@ -677,17 +677,10 @@ class ImportValidationApiTest(TestCase):
             HTTP_AUTHORIZATION="Bearer test-token",
         )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(
-            response.json()["error"],
-            "Файл содержит слишком много строк данных (2). Максимум: 1 строк за один импорт.",
-        )
-        self.assertEqual(response.json()["row_limit"], {
-            "total_rows": 2,
-            "max_import_rows": 1,
-            "row_limit_exceeded": True,
-            "row_limit_error": "Файл содержит слишком много строк данных (2). Максимум: 1 строк за один импорт.",
-        })
+        # Validation succeeds — rows are truncated to the limit instead of blocking
+        self.assertEqual(response.status_code, 200)
+        # Only 1 row is checked (limit=1, file has 2 data rows)
+        self.assertEqual(response.json()["item"]["checked_rows"], 1)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_validation_rejects_unmapped_list_values_before_run(self, get_from_jwt_token):

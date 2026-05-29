@@ -657,17 +657,18 @@ class ImportPreviewApiTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["item"]["total_rows"], 3)
         self.assertEqual(response.json()["item"]["max_import_rows"], 2)
+        self.assertEqual(response.json()["item"]["rows_to_import"], 2)
         self.assertEqual(response.json()["item"]["row_limit_exceeded"], True)
-        self.assertEqual(
-            response.json()["item"]["row_limit_error"],
-            "Файл содержит слишком много строк данных (3). Максимум: 2 строк за один импорт.",
-        )
+        self.assertEqual(response.json()["item"]["row_limit_truncated"], True)
+        self.assertEqual(response.json()["item"]["row_limit_error"], "")
+        self.assertIn("первые 2", response.json()["item"]["row_limit_warning"])
 
         session.refresh_from_db()
         self.assertEqual(session.total_rows, 3)
         self.assertEqual(session.preview_data["total_rows"], 3)
         self.assertEqual(session.preview_data["max_import_rows"], 2)
         self.assertEqual(session.preview_data["row_limit_exceeded"], True)
+        self.assertEqual(session.preview_data["rows_to_import"], 2)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_preview_requires_uploaded_file(self, get_from_jwt_token):
