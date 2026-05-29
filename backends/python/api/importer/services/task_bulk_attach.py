@@ -115,7 +115,7 @@ def _load_bulk_attach_source(*, bulk_config: dict) -> tuple[bytes, str]:
     return download_result.get("content") or b"", file_name_override or download_result.get("file_name") or "attachment.bin"
 
 
-def execute_task_bulk_attach(*, session, account) -> dict:
+def execute_task_bulk_attach(*, session, account, resume_from: int = 0) -> dict:
     bulk_config = (session.summary or {}).get("bulk_attach", {})
     if str(bulk_config.get("mode") or "").strip() != "task":
         raise ValueError("Session is not configured for task bulk attach")
@@ -127,24 +127,39 @@ def execute_task_bulk_attach(*, session, account) -> dict:
     task_ids = fetch_task_ids(account, filter_params)
     total = len(task_ids)
 
-    session.total_rows = total
-    session.processed_rows = 0
-    session.successful_rows = 0
-    session.failed_rows = 0
-    session.save(update_fields=["total_rows", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+    resume_from = max(0, min(resume_from, total))
+    is_resume = resume_from > 0
 
-    if total == 0:
+    if is_resume:
+        session.total_rows = total
+        session.processed_rows = resume_from
+        session.save(update_fields=["total_rows", "processed_rows", "updated_at"])
+    else:
+        session.total_rows = total
+        session.processed_rows = 0
+        session.successful_rows = 0
+        session.failed_rows = 0
+        session.save(update_fields=["total_rows", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+
+    if total == 0 or resume_from >= total:
         session.status = ImportSession.Status.COMPLETED
         session.save(update_fields=["status", "updated_at"])
-        return {"total": 0, "successful": 0, "failed": 0, "results": []}
+        return {
+            "total": total,
+            "successful": int(session.successful_rows or 0),
+            "failed": int(session.failed_rows or 0),
+            "results": [],
+        }
 
     content, resolved_file_name = _load_bulk_attach_source(bulk_config=bulk_config)
 
     results = []
-    successful = 0
-    failed = 0
+    successful = int(session.successful_rows or 0) if is_resume else 0
+    failed = int(session.failed_rows or 0) if is_resume else 0
 
-    for index, task_id in enumerate(task_ids):
+    for i, task_id in enumerate(task_ids[resume_from:]):
+        actual_index = resume_from + i
+
         if session.status == ImportSession.Status.CANCELLED:
             break
 
@@ -161,14 +176,14 @@ def execute_task_bulk_attach(*, session, account) -> dict:
             failed += 1
             results.append({"entity_id": task_id, "status": "failed", "error": str(error)})
 
-        if (index + 1) % BULK_ATTACH_PROGRESS_INTERVAL == 0:
-            session.processed_rows = index + 1
+        if (actual_index + 1) % BULK_ATTACH_PROGRESS_INTERVAL == 0:
+            session.processed_rows = actual_index + 1
             session.successful_rows = successful
             session.failed_rows = failed
             session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
             session.refresh_from_db(fields=["status"])
 
-    session.processed_rows = len(results)
+    session.processed_rows = resume_from + len(results)
     session.successful_rows = successful
     session.failed_rows = failed
     session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])

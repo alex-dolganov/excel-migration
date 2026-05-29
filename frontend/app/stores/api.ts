@@ -481,6 +481,14 @@ export const useApiStore = defineStore(
       })
     }
 
+    const resumeBulkAttachSession = async (sessionId: string): Promise<{ item: Record<string, any>, result?: Record<string, any> }> => {
+      return await $api(`/api/bulk-attach-sessions/${sessionId}/resume`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenJWT.value}` },
+        body: JSON.stringify({}),
+      })
+    }
+
     const getImportDepartments = async (): Promise<{ items: { id: string, name: string, parent_id: string | null }[] }> => {
       return await $api('/api/import-departments', {
         headers: {
@@ -611,6 +619,7 @@ export const useApiStore = defineStore(
       uploadBulkAttachFile,
       createBulkAttachSession,
       runBulkAttachSession,
+      resumeBulkAttachSession,
     }
   }
 )

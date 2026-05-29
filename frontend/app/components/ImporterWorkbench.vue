@@ -2764,7 +2764,13 @@ function applyBulkAttachSnapshot(snapshot: Record<string, any> | null | undefine
     if (!bulkAttachResultTotal.value) {
       bulkAttachResultTotal.value = bulkAttachProgressTotal.value
     }
-    bulkAttachProgressProcessed.value = bulkAttachResultTotal.value || bulkAttachProgressProcessed.value
+    if (normalizedStatus === 'completed') {
+      bulkAttachProgressProcessed.value = bulkAttachResultTotal.value || bulkAttachProgressProcessed.value
+    } else {
+      // Для cancelled/failed: фактически обработано = successful + failed (точнее чем processed_rows из БД)
+      const actualProcessed = bulkAttachResultSuccessful.value + bulkAttachResultFailed.value
+      bulkAttachProgressProcessed.value = actualProcessed || Number(snap.processed_rows || bulkAttachProgressProcessed.value)
+    }
   }
 }
 
@@ -2872,6 +2878,38 @@ async function cancelBulkAttachExecution() {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
     if (busyAction.value === 'bulk-attach-cancel') {
+      busyAction.value = ''
+    }
+  }
+}
+
+async function resumeBulkAttachExecution() {
+  const sessionId = String(bulkAttachSessionId.value || '').trim()
+  if (!sessionId) return
+
+  resetMessages()
+  busyAction.value = 'bulk-attach-resume'
+
+  // Зафиксировать позицию ДО запроса — клиент сразу видит правильное число, не 0
+  const resumeFrom = bulkAttachResultSuccessful.value + bulkAttachResultFailed.value
+  bulkAttachProgressProcessed.value = resumeFrom
+  bulkAttachSessionStatus.value = 'running'
+
+  try {
+    const response = await apiStore.resumeBulkAttachSession(sessionId)
+    applyBulkAttachSnapshot(response.item, response.result)
+
+    if (String(response.item?.status || '').trim().toLowerCase() === 'running') {
+      startBulkAttachPolling(sessionId)
+      setSuccess('Продолжаем загрузку с места остановки.')
+      return
+    }
+    setSuccess('Загрузка файла завершена.')
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
+    bulkAttachSessionStatus.value = 'failed'
+  } finally {
+    if (busyAction.value === 'bulk-attach-resume') {
       busyAction.value = ''
     }
   }
@@ -5713,9 +5751,17 @@ onUnmounted(() => {
                                 @click="cancelBulkAttachExecution"
                               />
                               <B24Button
+                                v-if="(bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled') && bulkAttachProgressProcessed < bulkAttachProgressTotal"
+                                :label="`Продолжить с ${bulkAttachProgressProcessed + 1}-й записи`"
+                                color="air-primary"
+                                size="lg"
+                                :loading="busyAction === 'bulk-attach-resume'"
+                                @click="resumeBulkAttachExecution"
+                              />
+                              <B24Button
                                 v-if="bulkAttachSessionStatus === 'completed' || bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled'"
                                 label="Завершить"
-                                color="air-primary"
+                                :color="(bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled') && bulkAttachProgressProcessed < bulkAttachProgressTotal ? 'air-secondary' : 'air-primary'"
                                 size="lg"
                                 @click="finishInlineBulkAttachFlow"
                               />
@@ -6015,9 +6061,17 @@ onUnmounted(() => {
                               @click="cancelBulkAttachExecution"
                             />
                             <B24Button
+                              v-if="(bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled') && bulkAttachProgressProcessed < bulkAttachProgressTotal"
+                              :label="`Продолжить с ${bulkAttachProgressProcessed + 1}-й записи`"
+                              color="air-primary"
+                              size="lg"
+                              :loading="busyAction === 'bulk-attach-resume'"
+                              @click="resumeBulkAttachExecution"
+                            />
+                            <B24Button
                               v-if="bulkAttachSessionStatus === 'completed' || bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled'"
                               label="Завершить"
-                              color="air-primary"
+                              :color="(bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled') && bulkAttachProgressProcessed < bulkAttachProgressTotal ? 'air-secondary' : 'air-primary'"
                               size="lg"
                               @click="finishInlineBulkAttachFlow"
                             />

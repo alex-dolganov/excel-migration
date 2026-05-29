@@ -4019,3 +4019,64 @@ def bulk_attach_session_run(request: AuthorizedRequest, session_id):
         session.save(update_fields=["status", "updated_at"])
 
     return JsonResponse({"item": serialize_session(session), "result": result})
+
+
+@xframe_options_exempt
+@csrf_exempt
+@require_http_methods(["POST"])
+@log_errors("bulk_attach_session_resume")
+@auth_required
+def bulk_attach_session_resume(request: AuthorizedRequest, session_id):
+    account = request.bitrix24_account
+    portal_member_id = getattr(account, "member_id", "")
+    portal_domain = getattr(account, "domain_url", "")
+
+    session = load_portal_session(portal_member_id, portal_domain, session_id)
+    if session is None:
+        return JsonResponse({"error": "Session not found"}, status=404)
+
+    if not has_permission(account, "sessions.run"):
+        return permission_denied_response()
+
+    if session.status not in (ImportSession.Status.FAILED, ImportSession.Status.CANCELLED):
+        return JsonResponse(
+            {"error": f"Session can only be resumed from failed or cancelled status, current: {session.status}"},
+            status=400,
+        )
+
+    if (session.summary or {}).get("bulk_attach") is None:
+        return JsonResponse({"error": "Session is not a bulk attach session"}, status=400)
+
+    resume_from = int(session.processed_rows or 0)
+
+    session.status = ImportSession.Status.RUNNING
+    session.last_error = ""
+    session.save(update_fields=["status", "last_error", "updated_at"])
+
+    if is_import_queue_enabled():
+        from .services.background_jobs import enqueue_bulk_attach_session_resume
+        enqueue_bulk_attach_session_resume(session, account, resume_from=resume_from)
+        return JsonResponse({"item": serialize_session(session)})
+
+    bulk_config = (session.summary or {}).get("bulk_attach") or {}
+    is_task_bulk_attach = str(bulk_config.get("mode") or "").strip() == "task"
+    try:
+        if is_task_bulk_attach:
+            from .services.task_bulk_attach import execute_task_bulk_attach
+            result = execute_task_bulk_attach(session=session, account=account, resume_from=resume_from)
+        else:
+            from .services.bulk_attach import execute_bulk_attach
+            result = execute_bulk_attach(session=session, account=account, resume_from=resume_from)
+    except Exception as error:
+        session.refresh_from_db()
+        session.status = ImportSession.Status.FAILED
+        session.last_error = safe_format_import_error(error)
+        session.save(update_fields=["status", "last_error", "updated_at"])
+        return JsonResponse({"error": safe_format_import_error(error)}, status=500)
+
+    session.refresh_from_db()
+    if session.status != ImportSession.Status.CANCELLED:
+        session.status = ImportSession.Status.COMPLETED
+        session.save(update_fields=["status", "updated_at"])
+
+    return JsonResponse({"item": serialize_session(session), "result": result})

@@ -86,7 +86,7 @@ def fetch_crm_entity_ids(account, entity_type: str, filter_params: dict) -> list
     return all_ids
 
 
-def execute_bulk_attach(*, session, account) -> dict:
+def execute_bulk_attach(*, session, account, resume_from: int = 0) -> dict:
     from django.conf import settings
     from importer.models import ImportSession
 
@@ -107,16 +107,30 @@ def execute_bulk_attach(*, session, account) -> dict:
     entity_ids = fetch_crm_entity_ids(account, entity_type, filter_params)
     total = len(entity_ids)
 
-    session.total_rows = total
-    session.processed_rows = 0
-    session.successful_rows = 0
-    session.failed_rows = 0
-    session.save(update_fields=["total_rows", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+    resume_from = max(0, min(resume_from, total))
+    is_resume = resume_from > 0
 
-    if total == 0:
+    if is_resume:
+        # Resume: update total, restore processed cursor, keep existing success/fail counts
+        session.total_rows = total
+        session.processed_rows = resume_from
+        session.save(update_fields=["total_rows", "processed_rows", "updated_at"])
+    else:
+        session.total_rows = total
+        session.processed_rows = 0
+        session.successful_rows = 0
+        session.failed_rows = 0
+        session.save(update_fields=["total_rows", "processed_rows", "successful_rows", "failed_rows", "updated_at"])
+
+    if total == 0 or resume_from >= total:
         session.status = ImportSession.Status.COMPLETED
         session.save(update_fields=["status", "updated_at"])
-        return {"total": 0, "successful": 0, "failed": 0, "results": []}
+        return {
+            "total": total,
+            "successful": int(session.successful_rows or 0),
+            "failed": int(session.failed_rows or 0),
+            "results": [],
+        }
 
     if file_id:
         upload_dir = os.path.join(settings.MEDIA_ROOT, "bulk-attach-uploads", file_id)
@@ -139,10 +153,13 @@ def execute_bulk_attach(*, session, account) -> dict:
         resolved_file_name = file_name_override or download_result.get("file_name") or "attachment.bin"
 
     results = []
-    successful = 0
-    failed = 0
+    # Carry over counts when resuming so totals reflect the full operation
+    successful = int(session.successful_rows or 0) if is_resume else 0
+    failed = int(session.failed_rows or 0) if is_resume else 0
 
-    for i, entity_id in enumerate(entity_ids):
+    for i, entity_id in enumerate(entity_ids[resume_from:]):
+        actual_index = resume_from + i
+
         if session.status == ImportSession.Status.CANCELLED:
             break
 
@@ -161,14 +178,14 @@ def execute_bulk_attach(*, session, account) -> dict:
             failed += 1
             results.append({"entity_id": entity_id, "status": "failed", "error": str(error)})
 
-        if (i + 1) % BULK_ATTACH_PROGRESS_INTERVAL == 0:
-            session.processed_rows = i + 1
+        if (actual_index + 1) % BULK_ATTACH_PROGRESS_INTERVAL == 0:
+            session.processed_rows = actual_index + 1
             session.successful_rows = successful
             session.failed_rows = failed
             session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
             session.refresh_from_db(fields=["status"])
 
-    session.processed_rows = len(results)
+    session.processed_rows = resume_from + len(results)
     session.successful_rows = successful
     session.failed_rows = failed
     session.save(update_fields=["processed_rows", "successful_rows", "failed_rows", "updated_at"])
