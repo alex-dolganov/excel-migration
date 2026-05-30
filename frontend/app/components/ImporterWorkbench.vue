@@ -195,6 +195,7 @@ const emit = defineEmits<{ 'back-to-landing': [] }>()
 const apiStore = useApiStore()
 const userStore = useUserStore()
 const runtimeConfig = useRuntimeConfig()
+const { t, locale } = useI18n()
 const DEFAULT_MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
 
 function normalizeImportFileSizeBytes(value: unknown) {
@@ -208,19 +209,20 @@ function normalizeImportFileSizeBytes(value: unknown) {
 
 function formatImportFileSizeLabel(sizeInBytes: number) {
   const sizeInMegabytes = sizeInBytes / (1024 * 1024)
+  const unit = t('importer.file.size_mb')
   if (Number.isInteger(sizeInMegabytes)) {
-    return `${sizeInMegabytes} МБ`
+    return `${sizeInMegabytes} ${unit}`
   }
 
-  return `${sizeInMegabytes.toFixed(1)} МБ`
+  return `${sizeInMegabytes.toFixed(1)} ${unit}`
 }
 
 const MAX_IMPORT_FILE_SIZE_BYTES = normalizeImportFileSizeBytes(runtimeConfig.public.importMaxFileSizeBytes)
-const MAX_IMPORT_FILE_SIZE_LABEL = formatImportFileSizeLabel(MAX_IMPORT_FILE_SIZE_BYTES)
-const IMPORT_FILE_PICKER_HELPER_TEXT = `Поддерживаются форматы Excel и CSV, размер файла до ${MAX_IMPORT_FILE_SIZE_LABEL}`
-const IMPORT_FILE_DROPDOWN_LIMIT_TEXT = `XLSX, XLS, CSV · до ${MAX_IMPORT_FILE_SIZE_LABEL}`
-const BULK_ATTACH_FILE_PICKER_HELPER_TEXT = `Загрузите один файл любого формата, размер файла до ${MAX_IMPORT_FILE_SIZE_LABEL}`
-const BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT = `Любой файл · до ${MAX_IMPORT_FILE_SIZE_LABEL}`
+const MAX_IMPORT_FILE_SIZE_LABEL = computed(() => formatImportFileSizeLabel(MAX_IMPORT_FILE_SIZE_BYTES))
+const IMPORT_FILE_PICKER_HELPER_TEXT = computed(() => t('importer.file.formats', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
+const IMPORT_FILE_DROPDOWN_LIMIT_TEXT = computed(() => t('importer.file.formats_short', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
+const BULK_ATTACH_FILE_PICKER_HELPER_TEXT = computed(() => t('importer.file.bulk_formats', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
+const BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT = computed(() => t('importer.file.bulk_formats_short', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
 const PER_ROW_DEDUP_DECISION_VALUES = new Set(['create', 'update', 'skip'])
 const DRY_RUN_RESULTS_PAGE_SIZE = 20
 const COLLAPSIBLE_TEXT_LIMIT = 220
@@ -377,7 +379,7 @@ function getPendingDecisionMatchFieldsLabel(row: Record<string, any> | null | un
     : (Array.isArray(row?.duplicate_match_fields) ? row.duplicate_match_fields : [])
 
   if (!rawFieldIds.length) {
-    return normalizedEntityId ? 'Совпадение найдено' : '—'
+    return normalizedEntityId ? t('importer.dryrun.match_found') : '—'
   }
 
   const linkedEntityGroup = normalizedEntityId
@@ -398,7 +400,7 @@ function getPendingDecisionMatchFieldsLabel(row: Record<string, any> | null | un
     })
     .filter(Boolean)
 
-  return labels.length ? labels.join(', ') : (normalizedEntityId ? 'Совпадение найдено' : '—')
+  return labels.length ? labels.join(', ') : (normalizedEntityId ? t('importer.dryrun.match_found') : '—')
 }
 
 function setPerRowDedupDecision(rowNumber: string, entityId: string, decision: string) {
@@ -832,10 +834,10 @@ const canDownloadExampleTemplate = computed(() => (
 ))
 const isSpreadsheetUploadRequired = computed(() => !isBulkAttachFlow.value)
 const currentFilePickerHelperText = computed(() => (
-  isBulkAttachFlow.value ? BULK_ATTACH_FILE_PICKER_HELPER_TEXT : IMPORT_FILE_PICKER_HELPER_TEXT
+  isBulkAttachFlow.value ? BULK_ATTACH_FILE_PICKER_HELPER_TEXT.value : IMPORT_FILE_PICKER_HELPER_TEXT.value
 ))
 const currentFileDropdownLimitText = computed(() => (
-  isBulkAttachFlow.value ? BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT : IMPORT_FILE_DROPDOWN_LIMIT_TEXT
+  isBulkAttachFlow.value ? BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT.value : IMPORT_FILE_DROPDOWN_LIMIT_TEXT.value
 ))
 const canApplyStructure = computed(() => (
   importerPermissionState.value.canEditSessions
@@ -947,8 +949,8 @@ const sessionProgressPercent = computed(() => (
 ))
 const sessionProgressTitle = computed(() => (
   busyAction.value === 'retry'
-    ? 'Повтор импорта'
-    : 'Выполнение импорта'
+    ? t('importer.progress.retry')
+    : t('importer.progress.execution')
 ))
 const executionProgressProcessedRows = computed(() => (
   importExecutionStage.value === 'duplicate-decisions' && dryRunData.value
@@ -999,82 +1001,82 @@ const executionProgressTitle = computed(() => {
   }
 
   if (importExecutionStage.value === 'duplicate-decisions') {
-    return 'Тестовый импорт завершён'
+    return t('importer.progress.test_complete')
   }
 
   return dedupProgressTitle.value
 })
 const executionProgressCounterLabel = computed(() => {
   if (isWarmingUp.value && warmProgress.value) {
-    return `Запрос ${warmProgress.value.done} из ${warmProgress.value.total}`
+    return t('importer.progress.warming', { done: warmProgress.value.done, total: warmProgress.value.total })
   }
   if (busyAction.value === 'sample-preview') {
-    return `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк файла`
+    return t('importer.progress.sample_rows', { processed: executionProgressProcessedRows.value, total: executionProgressTotalRows.value || '...' })
   }
   if (importExecutionStage.value === 'duplicate-decisions') {
-    return `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк файла`
+    return t('importer.progress.sample_rows', { processed: executionProgressProcessedRows.value, total: executionProgressTotalRows.value || '...' })
   }
-  return `${executionProgressProcessedRows.value} из ${executionProgressTotalRows.value || '...'} строк`
+  return t('importer.progress.rows', { processed: executionProgressProcessedRows.value, total: executionProgressTotalRows.value || '...' })
 })
 const showsDedupProgress = computed(() => (
   ['dedup', 'validation', 'sample-preview'].includes(String(busyAction.value || '').trim())
 ))
 const dedupProgressTitle = computed(() => {
   if (busyAction.value === 'sample-preview') {
-    return 'Тестовый импорт'
+    return t('importer.progress.sample_title')
   }
   if (busyAction.value === 'dedup') {
-    return 'Сохраняем правила дублей'
+    return t('importer.progress.dedup_title')
   }
 
-  return 'Проверяем данные перед следующим шагом'
+  return t('importer.progress.validation_title')
 })
 const dedupProgressDescription = computed(() => {
   if (busyAction.value === 'sample-preview') {
-    return 'Тестовый импорт проверяет весь файл и заранее показывает, что будет создано, обновлено или потребует решения по дублям.'
+    return t('importer.progress.sample_description')
   }
   if (busyAction.value === 'dedup') {
-    return 'Сохраняем текущие правила, чтобы следующий запуск использовал актуальные настройки.'
+    return t('importer.progress.dedup_description')
   }
 
-  return 'На больших файлах проверка может занять время. После завершения обновим экран автоматически.'
+  return t('importer.progress.validation_description')
 })
 const currentStepMeta = computed(() => {
   const items: Record<number, { eyebrow: string, title: string, description: string }> = {
     1: {
-      eyebrow: 'Шаг 1 · Настройки',
-      title: 'Файл и назначение',
-      description: 'Выберите сценарий импорта, файл и базовые настройки запуска.',
+      eyebrow: t('importer.nav.step1_eyebrow'),
+      title: t('importer.nav.step1_title'),
+      description: t('importer.nav.step1_desc'),
     },
     2: {
-      eyebrow: 'Шаг 2 · Структура',
-      title: 'Параметры чтения файла',
-      description: 'Проверьте строки заголовков, начало данных и структуру листа.',
+      eyebrow: t('importer.nav.step2_eyebrow'),
+      title: t('importer.nav.step2_title'),
+      description: t('importer.nav.step2_desc'),
     },
     3: {
-      eyebrow: 'Шаг 3 · Предпросмотр',
-      title: 'Пример файла',
-      description: 'Просмотрите первые строки файла перед сопоставлением полей.',
+      eyebrow: t('importer.nav.step3_eyebrow'),
+      title: t('importer.nav.step3_title'),
+      description: t('importer.nav.step3_desc'),
     },
     4: {
-      eyebrow: 'Шаг 4 · Соответствие',
-      title: 'Соответствие полей',
-      description: 'Сопоставьте колонки файла с полями Bitrix24.',
+      eyebrow: t('importer.nav.step4_eyebrow'),
+      title: t('importer.nav.step4_title'),
+      description: t('importer.nav.step4_desc'),
     },
     5: {
-      eyebrow: 'Шаг 5 · Дубли',
-      title: 'Обработка дублей',
-      description: 'Настройте правила поиска и обработки дублей.',
+      eyebrow: t('importer.nav.step5_eyebrow'),
+      title: t('importer.nav.step5_title'),
+      description: t('importer.nav.step5_desc'),
     },
     6: {
-      eyebrow: 'Шаг 6 · Тестовый импорт',
-      title: 'Тестовый импорт и запуск',
-      description: 'Проверьте результаты тестового прогона перед основным запуском.',
+      eyebrow: t('importer.nav.step6_eyebrow'),
+      title: t('importer.nav.step6_title'),
+      description: t('importer.nav.step6_desc'),
     },
     7: {
-      eyebrow: 'Шаг 7 · Результат',
-      title: 'Результат импорта',
-      description: 'Проверьте итоговую статистику и завершите сценарий.',
+      eyebrow: t('importer.nav.step7_eyebrow'),
+      title: t('importer.nav.step7_title'),
+      description: t('importer.nav.step7_desc'),
     },
   }
 
@@ -1092,25 +1094,25 @@ const bulkFlowStep = computed<BulkFlowStep>(() => {
 const bulkFlowStepMeta = computed(() => {
   const items: Record<BulkFlowStep, { eyebrow: string, title: string, description: string }> = {
     setup: {
-      eyebrow: 'Шаг 1 · Назначение',
-      title: 'Назначение',
+      eyebrow: t('importer.scenario.bs_eyebrow'),
+      title: t('importer.scenario.bs_title'),
       description: isTaskBulkAttachFlow.value
-        ? 'Настройте фильтр задач и подготовьте один файл-вложение.'
-        : 'Выберите CRM-сущность, поле для файлов и настройте фильтр отбора.',
+        ? t('importer.scenario.bs_desc_task')
+        : t('importer.scenario.bs_desc_crm'),
     },
     review: {
-      eyebrow: 'Шаг 2 · Файл и выборка',
-      title: 'Файл и выборка',
+      eyebrow: t('importer.scenario.br_eyebrow'),
+      title: t('importer.scenario.br_title'),
       description: isTaskBulkAttachFlow.value
-        ? 'Проверьте найденные задачи и подготовьте массовое добавление вложения.'
-        : 'Загрузите файл, проверьте найденные записи и подготовьте массовую загрузку.',
+        ? t('importer.scenario.br_desc_task')
+        : t('importer.scenario.br_desc_crm'),
     },
     execution: {
-      eyebrow: 'Шаг 3 · Загрузка',
-      title: isTaskBulkAttachFlow.value ? 'Загрузка вложений' : 'Загрузка файлов',
+      eyebrow: t('importer.scenario.be_eyebrow'),
+      title: isTaskBulkAttachFlow.value ? t('importer.scenario.be_title_task') : t('importer.scenario.be_title_crm'),
       description: isTaskBulkAttachFlow.value
-        ? 'Следите за прогрессом прикрепления файла к найденным задачам.'
-        : 'Следите за прогрессом загрузки, при необходимости остановите импорт и завершите сценарий.',
+        ? t('importer.scenario.be_desc_task')
+        : t('importer.scenario.be_desc_crm'),
     },
   }
 
@@ -1122,64 +1124,64 @@ const selectedFamilyHeaderMeta = computed(() => {
   }
 
   return {
-    eyebrow: 'Шаг 1 · Настройки',
-    title: 'Источник и назначение',
-    description: 'Выберите способ импорта и загрузите файл.',
+    eyebrow: t('importer.scenario.def_eyebrow'),
+    title: t('importer.scenario.def_title'),
+    description: t('importer.scenario.def_desc'),
   }
 })
 const selectedFamilyHeaderStatusMeta = computed(() => {
   if (!isBulkAttachFlow.value) {
     return {
       dotClass: 'bg-[#E8B53A]',
-      label: 'Ожидает запуска',
+      label: t('importer.status.awaiting'),
     }
   }
 
   if (busyAction.value === 'bulk-attach-cancel') {
     return {
       dotClass: 'bg-[#D8632A]',
-      label: 'Останавливаем загрузку',
+      label: t('importer.status.stopping'),
     }
   }
 
   if (isBulkAttachExecutionLocked.value) {
     return {
       dotClass: 'bg-[#3B47D6]',
-      label: 'Загрузка выполняется',
+      label: t('importer.status.running'),
     }
   }
 
   if (bulkAttachSessionStatus.value === 'completed') {
     return {
       dotClass: 'bg-[#1E8A52]',
-      label: 'Загрузка завершена',
+      label: t('importer.status.completed'),
     }
   }
 
   if (bulkAttachSessionStatus.value === 'cancelled') {
     return {
       dotClass: 'bg-[#D8632A]',
-      label: 'Загрузка остановлена',
+      label: t('importer.status.cancelled'),
     }
   }
 
   if (bulkAttachSessionStatus.value === 'failed') {
     return {
       dotClass: 'bg-[#C24B53]',
-      label: 'Есть ошибка загрузки',
+      label: t('importer.status.failed'),
     }
   }
 
   if (bulkFlowStep.value === 'review') {
     return {
       dotClass: 'bg-[#E8B53A]',
-      label: 'Готово к запуску',
+      label: t('importer.status.ready'),
     }
   }
 
   return {
     dotClass: 'bg-[#E8B53A]',
-    label: 'Ожидает запуска',
+    label: t('importer.status.awaiting'),
   }
 })
 const canGoBack = computed(() => currentStep.value > 1)
@@ -1266,44 +1268,44 @@ const importSteps = computed(() => {
   return [
     {
       id: 1,
-      title: 'Настройки',
-      description: 'Назначение и файл',
+      title: t('importer.nav.side1_title'),
+      description: t('importer.nav.side1_desc'),
       state: stepState(1),
     },
     {
       id: 2,
-      title: 'Структура',
-      description: 'Строки и чтение',
+      title: t('importer.nav.side2_title'),
+      description: t('importer.nav.side2_desc'),
       state: stepState(2),
     },
     {
       id: 3,
-      title: 'Предпросмотр',
-      description: 'Первые строки',
+      title: t('importer.nav.side3_title'),
+      description: t('importer.nav.side3_desc'),
       state: stepState(3),
     },
     {
       id: 4,
-      title: 'Соответствие',
-      description: 'Поля Bitrix24',
+      title: t('importer.nav.side4_title'),
+      description: t('importer.nav.side4_desc'),
       state: stepState(4),
     },
     {
       id: 5,
-      title: 'Дубли',
-      description: 'Правила поиска',
+      title: t('importer.nav.side5_title'),
+      description: t('importer.nav.side5_desc'),
       state: stepState(5),
     },
     {
       id: 6,
-      title: 'Тестовый импорт',
-      description: 'Проверка и запуск',
+      title: t('importer.nav.side6_title'),
+      description: t('importer.nav.side6_desc'),
       state: stepState(6),
     },
     {
       id: 7,
-      title: 'Импорт',
-      description: 'Итог запуска',
+      title: t('importer.nav.side7_title'),
+      description: t('importer.nav.side7_desc'),
       state: stepState(7),
     },
   ].map((step) => ({
@@ -1332,22 +1334,22 @@ const bulkImportSteps = computed(() => {
   return [
     {
       id: 1,
-      title: 'Назначение',
-      description: 'Сущность, поле и фильтр',
+      title: t('importer.nav.bulk1_title'),
+      description: t('importer.nav.bulk1_desc'),
       state: stepState(1),
       enabled: currentBulkStepId >= 1,
     },
     {
       id: 2,
-      title: 'Файл и выборка',
-      description: 'Файл и найденные записи',
+      title: t('importer.nav.bulk2_title'),
+      description: t('importer.nav.bulk2_desc'),
       state: stepState(2),
       enabled: currentBulkStepId >= 2,
     },
     {
       id: 3,
-      title: 'Загрузка',
-      description: 'Выполнение и результат',
+      title: t('importer.nav.bulk3_title'),
+      description: t('importer.nav.bulk3_desc'),
       state: stepState(3),
       enabled: currentBulkStepId >= 3,
     },
@@ -1360,29 +1362,29 @@ const visibleSteps = computed(() => (
 ))
 const selectedBulkFileFieldLabel = computed(() => (
   isTaskBulkAttachFlow.value
-    ? 'Вложение задачи'
+    ? t('importer.summary.task_attachment')
     : (
       bulkFileFields.value.find((field) => field.value === selectedBulkFileField.value)?.label
       || String(selectedBulkFileField.value || '').trim()
-      || 'Не выбрано'
+      || t('importer.summary.not_selected')
     )
 ))
 const sidebarFacts = computed(() => {
   if (isBulkAttachFlow.value && currentStep.value === 1) {
     const selectedRowsTotal = bulkFilterPreview.value?.total || bulkAttachProgressTotal.value || 0
     return [
-      { label: isTaskBulkAttachFlow.value ? 'Сценарий' : 'CRM-сущность', value: currentScenarioSummary.value.selectedLabel },
-      ...(isTaskBulkAttachFlow.value ? [] : [{ label: 'Поле файла', value: selectedBulkFileFieldLabel.value }]),
-      { label: 'Файл', value: fileName.value || 'Не выбран' },
-      { label: 'Записей', value: selectedRowsTotal ? String(selectedRowsTotal) : '—' },
+      { label: isTaskBulkAttachFlow.value ? t('importer.summary.scenario') : t('importer.summary.crm_entity'), value: currentScenarioSummary.value.selectedLabel },
+      ...(isTaskBulkAttachFlow.value ? [] : [{ label: t('importer.summary.file_field'), value: selectedBulkFileFieldLabel.value }]),
+      { label: t('importer.summary.file'), value: fileName.value || t('importer.summary.not_selected_file') },
+      { label: t('importer.summary.records'), value: selectedRowsTotal ? String(selectedRowsTotal) : '—' },
     ]
   }
 
   return [
-    { label: 'Назначение', value: currentScenarioSummary.value.selectedLabel },
-    { label: 'Файл', value: fileName.value || 'Не выбран' },
-    { label: 'Колонки', value: previewColumnsSource.value.length ? String(previewColumnsSource.value.length) : '—' },
-    { label: 'Строки', value: previewRows.value.length ? String(previewRows.value.length) : '—' },
+    { label: t('importer.summary.purpose'), value: currentScenarioSummary.value.selectedLabel },
+    { label: t('importer.summary.file'), value: fileName.value || t('importer.summary.not_selected_file') },
+    { label: t('importer.summary.columns'), value: previewColumnsSource.value.length ? String(previewColumnsSource.value.length) : '—' },
+    { label: t('importer.summary.rows'), value: previewRows.value.length ? String(previewRows.value.length) : '—' },
   ]
 })
 const mappingFieldItems = computed(() => buildMappingFieldItems(fieldOptions.value))
@@ -1433,7 +1435,7 @@ const currentStepHeaderStatusMeta = computed(() => {
 const headerNotice = computed(() => {
   if (String(errorMessage.value || '').trim()) {
     return {
-      label: 'Ошибка',
+      label: t('importer.common.error_badge'),
       message: errorMessage.value,
       tone: 'error',
     }
@@ -1441,7 +1443,7 @@ const headerNotice = computed(() => {
 
   if (String(successMessage.value || '').trim()) {
     return {
-      label: 'Готово',
+      label: t('importer.common.done_badge'),
       message: successMessage.value,
       tone: 'ok',
     }
@@ -1483,15 +1485,15 @@ const bulkAttachProgressPercent = computed(() => {
 })
 const bulkAttachActionLabel = computed(() => {
   const normalizedStatus = String(bulkAttachSessionStatus.value || '').trim().toLowerCase()
-  if (busyAction.value === 'bulk-attach-run') return 'Начинаем загрузку'
-  if (normalizedStatus === 'running') return 'Загрузка выполняется'
-  if (normalizedStatus === 'completed') return 'Загрузка завершена'
-  if (normalizedStatus === 'failed') return 'Повторить загрузку'
-  if (normalizedStatus === 'cancelled') return 'Запустить заново'
-  return 'Начать загрузку'
+  if (busyAction.value === 'bulk-attach-run') return t('importer.bulk.action_starting')
+  if (normalizedStatus === 'running') return t('importer.status.running')
+  if (normalizedStatus === 'completed') return t('importer.status.completed')
+  if (normalizedStatus === 'failed') return t('importer.bulk.action_retry')
+  if (normalizedStatus === 'cancelled') return t('importer.bulk.action_restart')
+  return t('importer.bulk.start')
 })
 const bulkPreviewActionLabel = computed(() => (
-  isTaskBulkAttachFlow.value ? 'Показать задачи →' : 'Далее →'
+  isTaskBulkAttachFlow.value ? t('importer.bulk.action_show_tasks') : t('importer.common.next_arrow')
 ))
 const isBulkAttachActionDisabled = computed(() => {
   if (
@@ -1522,7 +1524,7 @@ const canCancelBulkAttach = computed(() => (
 ))
 const dedupStrategyItems = computed(() => {
   const baseItems = [
-    { value: 'create', label: 'Всегда создавать' },
+    { value: 'create', label: t('importer.dedup.strategy_create') },
   ]
 
   if (!isLinkedImportEntityType(entityType.value) && isSimpleImportMode.value && !simpleDedupPreset.value.available) {
@@ -1531,9 +1533,9 @@ const dedupStrategyItems = computed(() => {
 
   return [
     ...baseItems,
-    { value: 'update', label: 'Обновлять найденный дубль' },
-    { value: 'skip', label: 'Пропускать дубль' },
-    ...(showsAdvancedImportTools.value ? [{ value: 'ask', label: 'Спросить по каждому дублю' }] : []),
+    { value: 'update', label: t('importer.dedup.strategy_update') },
+    { value: 'skip', label: t('importer.dedup.strategy_skip') },
+    ...(showsAdvancedImportTools.value ? [{ value: 'ask', label: t('importer.dedup.strategy_ask') }] : []),
   ]
 })
 const dedupFieldOptions = computed(() => buildDedupFieldOptions(
@@ -1573,7 +1575,7 @@ const previewTableColumns = computed(() => {
       const headerValue = headerRow?.[index]
       return {
         accessorKey: `column_${index}`,
-        header: headerValue ? String(headerValue) : String(column || `Колонка ${index + 1}`),
+        header: headerValue ? String(headerValue) : String(column || t('importer.table.column_n', { n: index + 1 })),
       }
     }),
   ]
@@ -1581,7 +1583,7 @@ const previewTableColumns = computed(() => {
 const mappingTableColumns = computed(() => [
   {
     accessorKey: 'column',
-    header: 'Колонка',
+    header: t('importer.mapping.col_column'),
     meta: {
       class: {
         th: 'w-[120px]',
@@ -1591,11 +1593,11 @@ const mappingTableColumns = computed(() => [
   },
   {
     accessorKey: 'sourceHeader',
-    header: 'Колонка файла',
+    header: t('importer.mapping.col_file_column'),
   },
   {
     accessorKey: 'targetFieldId',
-    header: 'Поле Bitrix24',
+    header: t('importer.mapping.col_field'),
     meta: {
       class: {
         th: 'min-w-[280px]',
@@ -1684,48 +1686,48 @@ const importPhaseSummary = computed<Record<string, any>>(() => (
 const stepSixStatusLabel = computed(() => {
   if (importExecutionStage.value === 'duplicate-decisions' && pendingDecisionRows.value.length) {
     return dryRunPendingDecisionRows.value > 0
-      ? `Ожидают решения: ${dryRunPendingDecisionRows.value}`
-      : `Решения выбраны: ${pendingDecisionRows.value.length}`
+      ? t('importer.dryrun.status_pending', { count: dryRunPendingDecisionRows.value })
+      : t('importer.dryrun.status_decided', { count: pendingDecisionRows.value.length })
   }
   if (resolvedDryRunData.value) {
     const fullTotalRows = Number(resolvedDryRunData.value?.full_total_rows || dryRunCheckedRows.value || 0)
     return fullTotalRows > dryRunCheckedRows.value
-      ? `Проверено: ${dryRunCheckedRows.value} из ${fullTotalRows}`
-      : `Проверено строк: ${dryRunCheckedRows.value}`
+      ? t('importer.dryrun.status_checked_of', { checked: dryRunCheckedRows.value, total: fullTotalRows })
+      : t('importer.dryrun.status_checked', { checked: dryRunCheckedRows.value })
   }
 
   return validationIssueCount.value > 0
-    ? `Ошибок: ${validationIssueCount.value}`
-    : 'Ошибок не найдено'
+    ? t('importer.dryrun.status_errors', { count: validationIssueCount.value })
+    : t('importer.dryrun.status_no_errors')
 })
 const stepSixMetricCards = computed(() => {
   if (importExecutionStage.value === 'duplicate-decisions' && dryRunData.value) {
     return [
-      { label: 'Проверено строк', value: Number(dryRunData.value?.checked_rows || 0) },
-      { label: 'Найдено дублей', value: pendingDecisionRows.value.length },
+      { label: t('importer.dryrun.metric_checked_rows'), value: Number(dryRunData.value?.checked_rows || 0) },
+      { label: t('importer.dryrun.metric_dups_found'), value: pendingDecisionRows.value.length },
       dryRunPendingDecisionRows.value > 0
-        ? { label: 'Осталось решить', value: dryRunPendingDecisionRows.value }
-        : { label: 'Готово к импорту', value: dryRunReadyRows.value },
+        ? { label: t('importer.dryrun.metric_to_decide'), value: dryRunPendingDecisionRows.value }
+        : { label: t('importer.dryrun.metric_ready'), value: dryRunReadyRows.value },
     ]
   }
   if (resolvedDryRunData.value) {
     const cards = [
-      { label: 'Проверено строк', value: dryRunCheckedRows.value },
-      { label: 'Всего строк в файле', value: Number(resolvedDryRunData.value?.full_total_rows || dryRunCheckedRows.value) },
-      { label: 'Готово к импорту', value: dryRunReadyRows.value },
+      { label: t('importer.dryrun.metric_checked_rows'), value: dryRunCheckedRows.value },
+      { label: t('importer.dryrun.metric_total_rows'), value: Number(resolvedDryRunData.value?.full_total_rows || dryRunCheckedRows.value) },
+      { label: t('importer.dryrun.metric_ready'), value: dryRunReadyRows.value },
     ]
     if (dryRunPendingDecisionRows.value > 0) {
-      cards.push({ label: 'Ожидают решения', value: dryRunPendingDecisionRows.value })
+      cards.push({ label: t('importer.dryrun.metric_pending'), value: dryRunPendingDecisionRows.value })
     } else if (dryRunSkippedRows.value > 0) {
-      cards.push({ label: 'Будет пропущено', value: dryRunSkippedRows.value })
+      cards.push({ label: t('importer.dryrun.metric_will_skip'), value: dryRunSkippedRows.value })
     }
     return cards
   }
 
   return [
-    { label: 'Проверено', value: validationCheckedRows.value },
-    { label: 'Без ошибок', value: validationValidRows.value },
-    { label: 'С ошибками', value: validationInvalidRows.value },
+    { label: t('importer.dryrun.metric_checked'), value: validationCheckedRows.value },
+    { label: t('importer.dryrun.metric_no_errors'), value: validationValidRows.value },
+    { label: t('importer.dryrun.metric_with_errors'), value: validationInvalidRows.value },
   ]
 })
 const importExecutionPhaseCards = computed(() => {
@@ -1735,19 +1737,19 @@ const importExecutionPhaseCards = computed(() => {
       label: String(
         item?.label
         || (String(item?.id || '') === 'new_records'
-          ? 'Импорт новых записей'
+          ? t('importer.result.phase_new_records')
           : String(item?.id || '') === 'duplicates'
-            ? 'Обработка дублей'
+            ? t('importer.result.phase_duplicates')
             : ''),
       ),
-      description: `${Number(item?.processed_rows || 0)} из ${Number(item?.total_rows || 0)} строк`,
+      description: t('importer.progress.rows', { processed: Number(item?.processed_rows || 0), total: Number(item?.total_rows || 0) }),
       status: String(item?.status || 'upcoming'),
     }))
 })
 const validationTableColumns = computed(() => [
   {
     accessorKey: 'rowNumber',
-    header: 'Строка',
+    header: t('importer.table.row'),
     meta: {
       class: {
         th: 'w-[92px]',
@@ -1757,7 +1759,7 @@ const validationTableColumns = computed(() => [
   },
   {
     accessorKey: 'column',
-    header: 'Колонка',
+    header: t('importer.mapping.col_column'),
     meta: {
       class: {
         th: 'w-[92px]',
@@ -1766,11 +1768,11 @@ const validationTableColumns = computed(() => [
   },
   {
     accessorKey: 'sourceHeader',
-    header: 'Колонка файла',
+    header: t('importer.mapping.col_file_column'),
   },
   {
     accessorKey: 'message',
-    header: 'Проблема',
+    header: t('importer.table.issue'),
     meta: {
       class: {
         th: 'min-w-[320px]',
@@ -1779,13 +1781,13 @@ const validationTableColumns = computed(() => [
   },
   {
     accessorKey: 'value',
-    header: 'Значение',
+    header: t('importer.table.value'),
   },
 ])
 const dryRunTableColumns = computed(() => [
   {
     accessorKey: 'details',
-    header: 'Что уйдет в Bitrix24',
+    header: t('importer.table.dry_run_details'),
     meta: {
       class: {
         th: 'min-w-[360px]',
@@ -1794,7 +1796,7 @@ const dryRunTableColumns = computed(() => [
   },
   {
     accessorKey: 'rowNumber',
-    header: 'Строка',
+    header: t('importer.table.row'),
     meta: {
       class: {
         th: 'w-[92px]',
@@ -1806,7 +1808,7 @@ const dryRunTableColumns = computed(() => [
 const importRunTableColumns = computed(() => [
   {
     accessorKey: 'details',
-    header: 'Что попало в Bitrix24',
+    header: t('importer.table.import_details'),
     meta: {
       class: {
         th: 'min-w-[360px]',
@@ -1815,7 +1817,7 @@ const importRunTableColumns = computed(() => [
   },
   {
     accessorKey: 'rowNumber',
-    header: 'Строка',
+    header: t('importer.table.row'),
     meta: {
       class: {
         th: 'w-[110px]',
@@ -1971,7 +1973,7 @@ function setSuccess(message: string) {
 
 function buildImportFileSizeErrorMessage(file: File) {
   const sizeInMegabytes = (Number(file?.size || 0) / (1024 * 1024)).toFixed(1)
-  return `Файл слишком большой: ${sizeInMegabytes} МБ. Максимум для импорта — ${MAX_IMPORT_FILE_SIZE_LABEL}.`
+  return t('importer.file.error_size', { size: sizeInMegabytes, max: MAX_IMPORT_FILE_SIZE_LABEL.value })
 }
 
 function clearSelectedFile() {
@@ -2088,7 +2090,7 @@ function finishImporterFlow() {
 
   clearSelectedFile()
 
-  setSuccess('Импорт завершен. Можно начать новый импорт.')
+  setSuccess(t('importer.success.import_finished'))
   loadHistory()
 }
 
@@ -2179,7 +2181,7 @@ function applyCandidateSuggestion(
 }
 
 function buildPreflightSeverityLabel(severity: string) {
-  return String(severity || '').trim().toLowerCase() === 'error' ? 'Ошибка' : 'Предупреждение'
+  return String(severity || '').trim().toLowerCase() === 'error' ? t('importer.preflight.severity_error') : t('importer.preflight.severity_warning')
 }
 
 function resolveImporterFieldLabel(fieldId: string, fieldTitle = '') {
@@ -2215,52 +2217,52 @@ function buildPreflightIssueDescription(issue: Record<string, any>) {
     : []
 
   if (code === 'required_field_unmapped') {
-    return `Не сопоставлено обязательное поле ${resolveImporterFieldLabel(fieldId)}.`
+    return t('importer.preflight.issue_required_field', { field: resolveImporterFieldLabel(fieldId) })
   }
   if (code === 'dedup_field_unmapped') {
-    const entityLabelMap: Record<string, string> = {
-      company: 'компании',
-      contact: 'контакта',
-      deal: 'сделки',
-      lead: 'лида',
+    const entityKeyMap: Record<string, string> = {
+      company: t('importer.preflight.issue_dedup_entity_company'),
+      contact: t('importer.preflight.issue_dedup_entity_contact'),
+      deal: t('importer.preflight.issue_dedup_entity_deal'),
+      lead: t('importer.preflight.issue_dedup_entity_lead'),
     }
-    const entityLabel = entity ? ` для ${entityLabelMap[entity] || entity}` : ''
-    return `Не выбрано поле поиска дублей${entityLabel}: ${resolveImporterFieldLabel(fieldId)}.`
+    const entityLabel = entity ? t('importer.preflight.issue_dedup_entity_for', { entity: entityKeyMap[entity] || entity }) : ''
+    return t('importer.preflight.issue_dedup_field', { entity: entityLabel, field: resolveImporterFieldLabel(fieldId) })
   }
   if (code === 'field_values_unmapped') {
-    const valuesLabel = values.length ? ` Значения: ${values.join(', ')}.` : ''
-    const countLabel = valueCount > 0 ? ` Не сопоставлено значений: ${valueCount}.` : ''
-    return `Не заполнено соответствие значений для поля ${resolveImporterFieldLabel(fieldId)}.${countLabel}${valuesLabel}`
+    const valuesLabel = values.length ? t('importer.preflight.issue_values_unmapped_list', { list: values.join(', ') }) : ''
+    const countLabel = valueCount > 0 ? t('importer.preflight.issue_values_unmapped_count', { n: valueCount }) : ''
+    return t('importer.preflight.issue_values_unmapped', { field: resolveImporterFieldLabel(fieldId), count: countLabel, values: valuesLabel })
   }
   if (code === 'field_options_unavailable') {
-    const valuesLabel = values.length ? ` Значения из файла: ${values.join(', ')}.` : ''
-    const countLabel = valueCount > 0 ? ` Найдено значений: ${valueCount}.` : ''
-    return `Для поля ${resolveImporterFieldLabel(fieldId)} не загрузились варианты Bitrix24.${countLabel}${valuesLabel}`
+    const valuesLabel = values.length ? t('importer.preflight.issue_options_list', { list: values.join(', ') }) : ''
+    const countLabel = valueCount > 0 ? t('importer.preflight.issue_options_count', { n: valueCount }) : ''
+    return t('importer.preflight.issue_options_unavailable', { field: resolveImporterFieldLabel(fieldId), count: countLabel, values: valuesLabel })
   }
   if (code === 'crm_activity_communications_missing') {
-    const activityTypeLabels: Record<string, string> = {
-      call: 'звонков',
-      email: 'писем',
+    const activityKeyMap: Record<string, string> = {
+      call: t('importer.preflight.issue_activity_call'),
+      email: t('importer.preflight.issue_activity_email'),
     }
     const activityLabel = activityTypes.length
-      ? activityTypes.map((item) => activityTypeLabels[item] || item).join(', ')
-      : 'звонков и писем'
-    const rowCountLabel = rowCount > 0 ? ` Строк: ${rowCount}.` : ''
-    return `Для ${activityLabel} не заполнено поле ${resolveImporterFieldLabel(fieldId)}.${rowCountLabel}`
+      ? activityTypes.map((item) => activityKeyMap[item] || item).join(', ')
+      : t('importer.preflight.issue_activity_both')
+    const rowCountLabel = rowCount > 0 ? t('importer.preflight.issue_activity_rows', { n: rowCount }) : ''
+    return t('importer.preflight.issue_activity_missing', { activity: activityLabel, field: resolveImporterFieldLabel(fieldId), rows: rowCountLabel })
   }
   if (code === 'linked_company_identity_missing') {
-    const companyRowLabel = rowCount > 0 ? ` Повторяющихся строк: ${rowCount}.` : ''
-    return `В связанных данных компании повторяются по названию без явного идентификатора. Добавьте COMPANY__XML_ID или настройте дедупликацию компании.${companyRowLabel}`
+    const rowLabel = rowCount > 0 ? t('importer.preflight.issue_identity_rows', { n: rowCount }) : ''
+    return t('importer.preflight.issue_company_identity', { rows: rowLabel })
   }
   if (code === 'linked_contact_identity_missing') {
-    const rowLabel = rowCount > 0 ? ` Повторяющихся строк: ${rowCount}.` : ''
-    return `В файле есть строки с одинаковыми данными контакта. Без явного идентификатора каждая такая строка создаст отдельный контакт в Битрикс24 — возникнут дубли. Добавьте колонку с уникальным внешним ключом контакта или настройте дедупликацию по email / телефону.${rowLabel}`
+    const rowLabel = rowCount > 0 ? t('importer.preflight.issue_identity_rows', { n: rowCount }) : ''
+    return t('importer.preflight.issue_contact_identity', { rows: rowLabel })
   }
   if (code === 'linked_deal_identity_missing') {
-    const rowLabel = rowCount > 0 ? ` Повторяющихся строк: ${rowCount}.` : ''
-    return `В файле есть строки с одинаковыми данными сделки. Без явного идентификатора каждая такая строка создаст отдельную сделку в Битрикс24 — возникнут дубли. Добавьте колонку с уникальным внешним ключом сделки или настройте дедупликацию по названию.${rowLabel}`
+    const rowLabel = rowCount > 0 ? t('importer.preflight.issue_identity_rows', { n: rowCount }) : ''
+    return t('importer.preflight.issue_deal_identity', { rows: rowLabel })
   }
-  return code || 'Проблема предварительной проверки.'
+  return code || t('importer.preflight.issue_unknown')
 }
 
 function makeCollapsibleKey(section: string, key: string | number) {
@@ -2875,7 +2877,7 @@ async function cancelBulkAttachExecution() {
   try {
     const response = await apiStore.cancelImportSession(sessionId)
     applyBulkAttachSnapshot(response.item)
-    setSuccess('Загрузка остановлена.')
+    setSuccess(t('importer.success.bulk_stopped'))
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -2903,10 +2905,10 @@ async function resumeBulkAttachExecution() {
 
     if (String(response.item?.status || '').trim().toLowerCase() === 'running') {
       startBulkAttachPolling(sessionId)
-      setSuccess('Продолжаем загрузку с места остановки.')
+      setSuccess(t('importer.success.bulk_resumed'))
       return
     }
-    setSuccess('Загрузка файла завершена.')
+    setSuccess(t('importer.success.bulk_complete'))
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
     bulkAttachSessionStatus.value = 'failed'
@@ -3141,23 +3143,23 @@ function startBulkAttachSetup() {
 
   if (!normalizedEntityType) {
     setError(isTaskBulkAttachFlow.value
-      ? 'Выберите сценарий «Вложения задач».'
-      : 'Выберите CRM-сущность для массового добавления файлов.')
+      ? t('importer.error.bulk_scenario_task')
+      : t('importer.error.bulk_scenario_crm'))
     return
   }
 
   if (!isTaskBulkAttachFlow.value && !normalizedFieldId) {
-    setError('Выберите поле типа «Файл», куда нужно прикреплять вложение.')
+    setError(t('importer.error.bulk_file_field_required'))
     return
   }
 
   if (!selectedFile.value) {
-    setError('Выберите файл для массового добавления.')
+    setError(t('importer.error.bulk_file_required'))
     return
   }
 
   if (!bulkFilterPreview.value) {
-    setError('Сначала проверьте выборку записей по фильтру.')
+    setError(t('importer.error.bulk_preview_required'))
     return
   }
 
@@ -3181,7 +3183,7 @@ function startBulkAttachSetup() {
 
       const sessionId = String(created.item?.id || '').trim()
       if (!sessionId) {
-        throw new Error('Не удалось создать сессию массовой загрузки.')
+        throw new Error(t('importer.error.bulk_session_failed'))
       }
 
       bulkAttachSessionId.value = sessionId
@@ -3192,11 +3194,11 @@ function startBulkAttachSetup() {
 
       if (String(runResponse.item?.status || '').trim().toLowerCase() === 'running') {
         startBulkAttachPolling(sessionId)
-        setSuccess('Загрузка запущена. Следим за выполнением прямо в этом блоке.')
+        setSuccess(t('importer.success.bulk_started'))
         return
       }
 
-      setSuccess('Загрузка файла завершена.')
+      setSuccess(t('importer.success.bulk_complete'))
     })
     .catch((error: unknown) => {
       resetBulkAttachExecutionState()
@@ -3323,7 +3325,7 @@ function handleFileChange(event: Event) {
   if (nextFile && isSpreadsheetUploadRequired.value && !detectSourceFormat(nextFile.name)) {
     selectedFile.value = null
     target.value = ''
-    setError('Неподдерживаемый формат файла. Загрузите файл в формате .xlsx, .xls или .csv.')
+    setError(t('importer.file.error_unsupported'))
     return
   }
   if (nextFile && nextFile.size > MAX_IMPORT_FILE_SIZE_BYTES) {
@@ -3352,7 +3354,7 @@ function handleDropFile(event: DragEvent) {
   importRunData.value = null
   importExecutionStage.value = 'idle'
   if (isSpreadsheetUploadRequired.value && !detectSourceFormat(file.name)) {
-    setError('Неподдерживаемый формат файла. Загрузите файл в формате .xlsx, .xls или .csv.')
+    setError(t('importer.file.error_unsupported'))
     return
   }
   if (file.size > MAX_IMPORT_FILE_SIZE_BYTES) {
@@ -3366,22 +3368,22 @@ async function startImporterSetup() {
   resetMessages()
 
   if (!selectedFile.value) {
-    setError('Сначала выберите файл для импорта.')
+    setError(t('importer.error.file_required'))
     return
   }
 
   if (!entityType.value) {
-    setError('Сначала выберите сущность для импорта.')
+    setError(t('importer.error.entity_required'))
     return
   }
 
   if (entityType.value === 'smart_process' && !selectedSmartProcessConfig.value?.entityTypeId) {
-    setError('Сначала выберите конкретный смарт-процесс.')
+    setError(t('importer.error.smart_process_required'))
     return
   }
 
   if (!sourceFormat.value) {
-    setError('Можно загрузить только файлы .xlsx, .xls или .csv.')
+    setError(t('importer.error.format_required'))
     return
   }
 
@@ -3396,14 +3398,14 @@ async function startImporterSetup() {
     if (sourceFormat.value === 'xls') {
       const ok = b[0] === 0xD0 && b[1] === 0xCF && b[2] === 0x11 && b[3] === 0xE0
       if (!ok) {
-        setError('Файл имеет расширение .xls, но его содержимое не соответствует формату Excel. Такое бывает с выгрузками из браузера, Google Аналитики или Search Console — откройте файл в Excel и пересохраните как .xlsx или .csv.')
+        setError(t('importer.file.error_xls'))
         return
       }
     }
     if (sourceFormat.value === 'xlsx') {
       const ok = b[0] === 0x50 && b[1] === 0x4B && b[2] === 0x03 && b[3] === 0x04
       if (!ok) {
-        setError('Файл имеет расширение .xlsx, но его содержимое повреждено или не соответствует формату. Попробуйте пересохранить файл в Excel заново.')
+        setError(t('importer.file.error_xlsx'))
         return
       }
     }
@@ -3431,7 +3433,7 @@ async function startImporterSetup() {
     dataStartRowInput.value = Number(previewResponse.item.data_start_row || 2)
 
     await refreshMapping()
-    setSuccess('Файл загружен. Можно проверить структуру и заполнить соответствие полей.')
+    setSuccess(t('importer.success.file_uploaded'))
     currentStep.value = 2
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
@@ -3458,7 +3460,7 @@ async function applyStructure() {
     dataStartRowInput.value = Number(previewResponse.item.data_start_row || 2)
 
     await refreshMapping()
-    setSuccess('Параметры чтения файла обновлены.')
+    setSuccess(t('importer.success.structure_updated'))
     currentStep.value = 3
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
@@ -3483,7 +3485,7 @@ function applyCandidateMapping() {
 
   const mappedCount = newRows.filter((row) => row.targetFieldId).length
   if (mappedCount === 0) {
-    setError('Не удалось автоматически подобрать соответствие. Проверьте, что заголовки колонок в файле совпадают с названиями полей Bitrix24.')
+    setError(t('importer.error.mapping_auto_failed'))
     return
   }
 
@@ -3493,7 +3495,7 @@ function applyCandidateMapping() {
   preimportScanData.value = null
   importRunData.value = null
   importExecutionStage.value = 'idle'
-  setSuccess(`Расставлено ${mappedCount} соответствий автоматически. Проверьте результат перед сохранением.`)
+  setSuccess(t('importer.success.mapping_auto_filled', { count: mappedCount }))
 }
 
 function updateMappingFieldSelection(row: MappingRow, value: string) {
@@ -3525,7 +3527,7 @@ async function saveImportAliasRule(row: MappingRow) {
   }
 
   if (hasImportAliasRule(row)) {
-    setSuccess('Такое правило сопоставления уже сохранено.')
+    setSuccess(t('importer.success.alias_exists'))
     return
   }
 
@@ -3548,7 +3550,7 @@ async function saveImportAliasRule(row: MappingRow) {
         )),
       ]
     }
-    setSuccess(`Правило сохранено: «${row.sourceHeader}» → «${row.targetFieldTitle || row.targetFieldId}».`)
+    setSuccess(t('importer.success.alias_saved', { source: row.sourceHeader, target: row.targetFieldTitle || row.targetFieldId }))
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -3662,8 +3664,8 @@ async function saveMapping() {
     syncMappingRows()
     setSuccess(
       Number(response.item?.unmapped_value_count || 0) > 0
-        ? `Соответствие полей сохранено. Осталось сопоставить значений: ${Number(response.item?.unmapped_value_count || 0)}.`
-        : 'Соответствие полей сохранено.',
+        ? t('importer.success.mapping_saved_unmapped', { count: Number(response.item?.unmapped_value_count || 0) })
+        : t('importer.success.mapping_saved'),
     )
     if (!isDedupApplicable.value) {
       currentStep.value = 5
@@ -3692,15 +3694,15 @@ async function saveDedupSettings() {
       )
       if (dedupIssues.length > 0) {
         const descriptions = dedupIssues.map((issue: any) => buildPreflightIssueDescription(issue)).join(' ')
-        setError(`${descriptions} Добавьте поле в шаг «Маппинг полей» или уберите его из настроек поиска дублей.`)
+        setError(`${descriptions} ${t('importer.error.dedup_field_unmapped')}`)
       } else {
-        setError('Маппинг содержит ошибки, мешающие запуску. Проверьте настройки на шаге «Маппинг полей».')
+        setError(t('importer.error.blocking_issues'))
       }
       return
     }
 
     currentStep.value = 6
-    setSuccess('Правила обработки дублей сохранены.')
+    setSuccess(t('importer.success.dedup_saved'))
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -3778,7 +3780,7 @@ async function saveTemplate() {
     await refreshTemplates()
     selectedTemplateId.value = String(response.item?.id || '')
     templateNameInput.value = String(response.item?.name || templateNameInput.value.trim())
-    setSuccess('Шаблон импорта сохранен.')
+    setSuccess(t('importer.success.template_saved'))
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -3809,7 +3811,7 @@ async function applyTemplate() {
 
     await refreshMapping()
     currentStep.value = 4
-    setSuccess('Шаблон применен к текущей сессии.')
+    setSuccess(t('importer.success.template_applied'))
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -3837,7 +3839,7 @@ async function executeValidation({
   }
 
   if (unmappedValueSummary.value.hasUnmappedValues) {
-    setError('Сначала сопоставьте все значения статусов и списков.')
+    setError(t('importer.error.unmapped_values'))
     return null
   }
   busyAction.value = busyState
@@ -3858,8 +3860,8 @@ async function executeValidation({
     }
     setSuccess(
       validationIssueCount.value > 0
-        ? 'Проверка завершена. Исправьте строки с ошибками перед следующим этапом.'
-        : 'Проверка завершена. Критичных ошибок не найдено.',
+        ? t('importer.success.validation_issues')
+        : t('importer.success.validation_complete'),
     )
     return response.item
   } catch (error) {
@@ -3918,18 +3920,18 @@ async function runSamplePreview({ skippedDedup = false }: { skippedDedup?: boole
     })
     if (dryRunResult?.status === 'cancelled' || dryRunResult?.cancelled) {
       importExecutionStage.value = 'idle'
-      setSuccess('Тестовый импорт остановлен. Можно скорректировать настройки и запустить его повторно.')
+      setSuccess(t('importer.success.test_cancelled'))
       return
     }
     importExecutionStage.value = Number(dryRunResult?.pending_decision_rows || 0) > 0 ? 'duplicate-decisions' : 'idle'
     setSuccess(
       Number(dryRunResult?.pending_decision_rows || 0) > 0
-        ? 'Тестовый импорт завершён. Выберите действие для найденных дублей, затем отдельно запустите реальный импорт.'
+        ? t('importer.success.test_run_decisions')
         : Number(dryRunResult?.skipped_rows || 0) > 0
-        ? 'Тестовый импорт завершён. Полный файл проверен, часть строк будет пропущена.'
+        ? t('importer.success.test_run_skip_rows')
         : skippedDedup
-        ? 'Шаг дублей пропущен. Тестовый импорт проверил весь файл по правилу «Всегда создавать».'
-        : 'Тестовый импорт завершён. Полный файл проверен, можно запускать реальный импорт.',
+        ? t('importer.success.test_run_skip')
+        : t('importer.success.test_run'),
     )
   } catch (error) {
     importExecutionStage.value = 'idle'
@@ -3952,12 +3954,12 @@ async function executeImportRunRequest() {
     if (requiresPerRowDedupDecision.value && hasUnresolvedPendingDedupDecisions.value) {
       importExecutionStage.value = 'duplicate-decisions'
       currentStep.value = 6
-      setError('Выберите действие для каждой строки с найденным дублем.')
+      setError(t('importer.error.pending_decisions'))
       return
     }
 
     if (!await confirmMassCreateImport()) {
-      setError('Импорт остановлен. Подтвердите массовое создание новых CRM-записей, если это ожидаемое действие.')
+      setError(t('importer.error.mass_create_confirm'))
       return
     }
 
@@ -4002,7 +4004,7 @@ async function runImport() {
     if (!preimportScanData.value) {
       currentStep.value = 6
       importExecutionStage.value = 'idle'
-      setError('Сначала запустите тестовый импорт по всему файлу.')
+      setError(t('importer.error.test_run_required'))
       return
     }
 
@@ -4070,12 +4072,8 @@ async function confirmMassCreateImport() {
     return true
   }
 
-  const entityLabel = String(currentScenarioSummary.value?.selectedLabel || 'CRM-записи').trim().toLowerCase()
-  const confirmMessage = [
-    `Будет создано ${readyCreateRows.toLocaleString('ru-RU')} новых записей в разделе «${entityLabel}».`,
-    'Существующие записи не будут обновлены, потому что сейчас выбрано правило дублей «Всегда создавать».',
-    'Продолжить импорт?',
-  ].join('\n\n')
+  const entityLabel = String(currentScenarioSummary.value?.selectedLabel || t('importer.confirm.default_entity')).trim().toLowerCase()
+  const confirmMessage = t('importer.confirm.mass_create', { count: readyCreateRows.toLocaleString(locale.value), entity: entityLabel })
 
   return window.confirm(confirmMessage)
 }
@@ -4122,8 +4120,8 @@ async function cancelActiveImport() {
     session.value = session.value ? { ...session.value, ...response.item } : response.item
     setSuccess(
       busyAction.value === 'sample-preview'
-        ? 'Остановка запрошена. Текущая строка завершится, после чего тестовый импорт остановится.'
-        : 'Остановка запрошена. Текущая строка завершится, после чего импорт остановится.',
+        ? t('importer.success.test_cancel_requested')
+        : t('importer.success.import_cancel_requested'),
     )
   } catch (error) {
     const cancelErrorStatus = Number((error as any)?.statusCode || (error as any)?.response?.status || 0)
@@ -4138,7 +4136,7 @@ async function cancelActiveImport() {
           session.value = session.value ? { ...session.value, ...latestSession } : latestSession
           syncRestoredExecutionState(latestSession)
           cancelRequested.value = false
-          setSuccess('Импорт уже завершён или остановлен. Остановка больше не требуется.')
+          setSuccess(t('importer.success.import_already_done'))
           return
         }
       } catch {
@@ -4169,7 +4167,7 @@ async function downloadImportReport() {
     link.click()
     document.body.removeChild(link)
     window.URL.revokeObjectURL(downloadUrl)
-    setSuccess('CSV-отчет подготовлен и скачан.')
+    setSuccess(t('importer.success.report_downloaded'))
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -4200,7 +4198,7 @@ async function downloadExampleTemplate() {
       document.body.removeChild(link)
       window.URL.revokeObjectURL(downloadUrl)
     }, 1000)
-    setSuccess(`Шаблон для «${currentScenarioSummary.value.selectedLabel}» скачан.`)
+    setSuccess(t('importer.success.template_downloaded', { entity: currentScenarioSummary.value.selectedLabel }))
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -4215,7 +4213,7 @@ async function loadHistory() {
     const response = await apiStore.listImportSessions()
     recentSessions.value = Array.isArray(response?.items) ? response.items : []
   } catch (error) {
-    historyLoadError.value = error instanceof Error ? error.message : 'Не удалось загрузить историю импортов.'
+    historyLoadError.value = error instanceof Error ? error.message : t('importer.history.error_title')
   }
 }
 
@@ -4233,7 +4231,7 @@ async function clearHistory() {
     await apiStore.clearImportHistory()
     recentSessions.value = []
   } catch (error) {
-    historyLoadError.value = error instanceof Error ? error.message : 'Не удалось очистить историю.'
+    historyLoadError.value = error instanceof Error ? error.message : t('importer.error.history_clear')
   } finally {
     clearingHistory.value = false
   }
@@ -4435,7 +4433,7 @@ async function resumeHistorySession(sessionId: string) {
     const response = await apiStore.getImportSession(sessionId)
     const snapshot = response.item && typeof response.item === 'object' ? response.item : null
     if (!snapshot) {
-      throw new Error('Не удалось загрузить сохранённую сессию импорта.')
+      throw new Error(t('importer.error.session_restore_failed'))
     }
 
     resetFlowState()
@@ -4516,7 +4514,7 @@ async function resumeHistorySession(sessionId: string) {
       }
     }
 
-    setSuccess(`Сессия «${String(snapshot.original_filename || 'Без имени')}» восстановлена.`)
+    setSuccess(t('importer.success.session_restored', { filename: String(snapshot.original_filename || t('importer.common.untitled')) }))
     await loadHistory()
     return true
   } catch (error) {
@@ -4596,16 +4594,15 @@ async function waitForDryRunExecutionResult(sessionId: string) {
     }
 
     const currentStatus = String(snapshot?.status || '')
-    const runLabel = 'Тестовый импорт'
     if (currentStatus === 'failed') {
-      throw new Error(String(snapshot?.last_error || `${runLabel} завершился с ошибкой в фоновом worker.`))
+      throw new Error(String(snapshot?.last_error || t('importer.error.dry_run_failed')))
     }
     if (currentStatus === 'cancelled') {
       return resolvedDryRun || buildCancelledDryRunSummary(snapshot)
     }
 
     if (!shouldWaitForDryRunExecutionSnapshot(snapshot)) {
-      throw new Error(`${runLabel} завершился без итогового отчета.`)
+      throw new Error(t('importer.error.dry_run_no_report'))
     }
 
     await sleepAction(1500)
@@ -4626,7 +4623,7 @@ async function waitForDryRunExecutionResult(sessionId: string) {
   }
 
   throw new Error(
-    'Тестовый импорт запущен, но не удалось получить его текущее состояние.',
+    t('importer.error.dry_run_state'),
   )
 }
 
@@ -4645,7 +4642,7 @@ async function waitForImportExecutionResult(sessionId: string) {
 
     const currentStatus = String(snapshot?.status || '')
     if (currentStatus === 'failed') {
-      throw new Error(String(snapshot?.last_error || 'Импорт завершился с ошибкой в фоновом worker.'))
+      throw new Error(String(snapshot?.last_error || t('importer.error.import_failed')))
     }
     if (currentStatus === 'cancelled') {
       if (resolvedImportRun) {
@@ -4667,7 +4664,7 @@ async function waitForImportExecutionResult(sessionId: string) {
     }
 
     if (!shouldWaitForImportExecutionSnapshot(snapshot)) {
-      throw new Error('Импорт завершился без итогового отчета.')
+      throw new Error(t('importer.error.import_no_report'))
     }
 
     await sleepAction(1500)
@@ -4684,7 +4681,7 @@ async function waitForImportExecutionResult(sessionId: string) {
     return buildCancelledImportRunSummary(snapshot)
   }
 
-  throw new Error('Импорт запущен, но не удалось получить его текущее состояние.')
+  throw new Error(t('importer.error.import_state'))
 }
 
 async function resolveDryRunExecutionResult(
@@ -4764,10 +4761,10 @@ onUnmounted(() => {
       >
         <div class="h-12 w-12 animate-spin rounded-full border-4 border-[#dfe5eb] border-t-[#2e6bd9]" />
         <div class="mt-5 text-base font-semibold text-[#2f4254]">
-          Загружаем импорт…
+          {{ t('importer.common.loading_import') }}
         </div>
         <div class="mt-1 text-sm text-[#8ea0b2]">
-          Восстанавливаем сохранённые настройки
+          {{ t('importer.common.restoring_settings') }}
         </div>
       </div>
     </Transition>
@@ -4784,14 +4781,14 @@ onUnmounted(() => {
               class="flex shrink-0 items-center gap-1.5 rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9] transition hover:bg-[#ddeeff]"
               @click="currentView = 'wizard'; clearHistoryConfirm = false"
             >
-              ← Назад
+              {{ t('importer.history.back') }}
             </button>
             <div>
               <div class="text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
                 Excel Migration
               </div>
               <h1 class="mt-1 text-[26px] font-semibold leading-[1.1] text-[#2f4254]">
-                История импортов
+                {{ t('importer.history.title') }}
               </h1>
             </div>
           </div>
@@ -4803,7 +4800,7 @@ onUnmounted(() => {
                 key="confirm"
                 class="text-[13px] text-[#8ea0b2]"
               >
-                Удалить все записи?
+                {{ t('importer.history.clear_confirm') }}
               </span>
             </Transition>
             <button
@@ -4813,7 +4810,7 @@ onUnmounted(() => {
               :disabled="clearingHistory"
               @click="clearHistory"
             >
-              Да, удалить
+              {{ t('importer.history.clear_confirm_yes') }}
             </button>
             <button
               type="button"
@@ -4821,7 +4818,7 @@ onUnmounted(() => {
               :disabled="clearingHistory"
               @click="clearHistoryConfirm ? (clearHistoryConfirm = false) : clearHistory()"
             >
-              {{ clearHistoryConfirm ? 'Отмена' : clearingHistory ? 'Очистка...' : 'Очистить историю' }}
+              {{ clearHistoryConfirm ? t('importer.history.clear_cancel') : clearingHistory ? t('importer.history.clearing') : t('importer.history.clear') }}
             </button>
           </div>
         </div>
@@ -4833,7 +4830,7 @@ onUnmounted(() => {
           class="mb-4 rounded-[20px] border border-[#ffd9dd] bg-[#fff7f8] px-5 py-4"
         >
           <div class="text-sm font-semibold text-[#b33a48]">
-            Не удалось загрузить историю
+            {{ t('importer.history.error_title') }}
           </div>
           <div class="mt-1 text-sm text-[#8f5560]">
             {{ historyLoadError }}
@@ -4846,10 +4843,10 @@ onUnmounted(() => {
         >
           <div class="text-center">
             <div class="text-sm font-medium text-[#314256]">
-              История пока недоступна
+              {{ t('importer.history.unavailable_title') }}
             </div>
             <div class="mt-1 text-sm text-[#8ea0b2]">
-              Попробуйте обновить страницу или открыть раздел позже.
+              {{ t('importer.history.unavailable_description') }}
             </div>
           </div>
         </div>
@@ -4860,10 +4857,10 @@ onUnmounted(() => {
         >
           <div class="text-center">
             <div class="text-sm font-medium text-[#314256]">
-              История импортов пуста
+              {{ t('importer.history.empty_title') }}
             </div>
             <div class="mt-1 text-sm text-[#8ea0b2]">
-              Здесь появятся все запуски после первого импорта.
+              {{ t('importer.history.empty_description') }}
             </div>
           </div>
         </div>
@@ -4927,22 +4924,22 @@ onUnmounted(() => {
               <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
                 <div v-if="row.counters.hasData" class="flex flex-wrap items-center gap-2">
                   <span v-if="row.counters.total" class="rounded-[8px] border border-[#e5ebf2] bg-[#f7f9fb] px-2 py-1 text-[11px] font-medium text-[#6e8193]">
-                    Всего {{ row.counters.total }}
+                    {{ t('importer.history.counter_total', { n: row.counters.total }) }}
                   </span>
                   <span v-if="row.counters.created" class="rounded-[8px] border border-[#c3e8d0] bg-[#f0faf4] px-2 py-1 text-[11px] font-semibold text-[#2b7a4b]">
-                    +{{ row.counters.created }} созд.
+                    {{ t('importer.history.counter_created', { n: row.counters.created }) }}
                   </span>
                   <span v-if="row.counters.updated" class="rounded-[8px] border border-[#bbd6f8] bg-[#eef6ff] px-2 py-1 text-[11px] font-semibold text-[#2e6bd9]">
-                    {{ row.counters.updated }} обн.
+                    {{ t('importer.history.counter_updated', { n: row.counters.updated }) }}
                   </span>
                   <span v-if="row.counters.skipped" class="rounded-[8px] border border-[#e5ebf2] bg-[#f2f5f9] px-2 py-1 text-[11px] font-medium text-[#8ea0b2]">
-                    {{ row.counters.skipped }} проп.
+                    {{ t('importer.history.counter_skipped', { n: row.counters.skipped }) }}
                   </span>
                   <span v-if="row.counters.failed" class="rounded-[8px] border border-[#f5c2c7] bg-[#fff1f1] px-2 py-1 text-[11px] font-semibold text-[#c24b53]">
-                    {{ row.counters.failed }} ош.
+                    {{ t('importer.history.counter_failed', { n: row.counters.failed }) }}
                   </span>
                 </div>
-                <div v-else class="text-[12px] text-[#b0bec8]">Нет данных</div>
+                <div v-else class="text-[12px] text-[#b0bec8]">{{ t('importer.history.no_data') }}</div>
 
                 <B24Button
                   :label="row.actionLabel"
@@ -4973,7 +4970,7 @@ onUnmounted(() => {
 
           <div class="space-y-4">
             <div class="px-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">
-              Этапы
+              {{ t('importer.sidebar.stages') }}
             </div>
 
             <div class="space-y-3">
@@ -5087,14 +5084,14 @@ onUnmounted(() => {
                   class="text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
                   @click="toggleTextBlock(makeCollapsibleKey('header-notice', headerNotice.label))"
                 >
-                  {{ isTextBlockExpanded(makeCollapsibleKey('header-notice', headerNotice.label)) ? 'Скрыть' : 'Показать полностью' }}
+                  {{ isTextBlockExpanded(makeCollapsibleKey('header-notice', headerNotice.label)) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                 </button>
               </div>
             </div>
 
             <div class="flex shrink-0 flex-col gap-3 xl:items-end">
               <B24Button
-                label="История"
+                :label="t('importer.header.history')"
                 color="air-primary"
                 size="lg"
                 :disabled="!importerPermissionState.canViewSessions"
@@ -5133,13 +5130,13 @@ onUnmounted(() => {
             class="rounded-[24px] border border-[#ffe0a6] bg-[#fff8eb] px-5 py-5 text-[#8a5b12] shadow-[0_8px_24px_rgba(175,124,18,0.08)]"
           >
             <div class="text-sm font-semibold uppercase tracking-[0.12em] text-[#b07a18]">
-              Права доступа
+              {{ t('importer.access.title') }}
             </div>
             <div class="mt-2 text-lg font-semibold text-[#6d4710]">
-              Нет назначенной роли для работы с импортом.
+              {{ t('importer.access.message') }}
             </div>
             <div class="mt-2 max-w-[760px] text-sm leading-relaxed text-[#8a5b12]">
-              Обратитесь к администратору портала, чтобы получить роль оператора или доступ на просмотр истории и отчетов.
+              {{ t('importer.access.description') }}
             </div>
           </div>
 
@@ -5148,7 +5145,7 @@ onUnmounted(() => {
             <!-- No import mode: simple prompt -->
             <div v-if="!importMode" key="no-mode" class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
               <div class="rounded-[18px] border border-[#dce7f7] bg-[#f4f9ff] px-4 py-3 text-sm text-[#5c7592]">
-                Вернитесь на главный экран и выберите режим импорта.
+                {{ t('importer.common.select_mode_prompt') }}
               </div>
             </div>
 
@@ -5159,19 +5156,19 @@ onUnmounted(() => {
                 <div>
                   <div class="mb-3 flex items-center gap-2">
                     <span class="rounded-full bg-[#EEF2FF] px-2.5 py-0.5 text-[11px] font-medium text-[#3B47D6]">
-                      Шаг 1 · Настройки
+                      {{ t('importer.home.step1_badge') }}
                     </span>
                     <span class="text-[11px] text-[#8B8FA0]">·</span>
                     <span class="inline-flex items-center gap-1.5 text-[11px] text-[#5A5E6E]">
                       <span class="h-1.5 w-1.5 rounded-full bg-[#E8B53A]" />
-                      Ожидает запуска
+                      {{ t('importer.home.status_pending') }}
                     </span>
                   </div>
                   <h1 class="text-[28px] font-semibold leading-[1.15] tracking-[-0.02em] text-[#0F1115]">
-                    Выберите тип импорта
+                    {{ t('importer.home.title') }}
                   </h1>
                   <p class="mt-2 max-w-[520px] text-[14px] text-[#5A5E6E]">
-                    От выбора зависят следующие шаги — формат файла, сопоставление полей и правила дублей.
+                    {{ t('importer.home.description') }}
                   </p>
                 </div>
                 <div class="flex shrink-0 items-center gap-2">
@@ -5180,7 +5177,7 @@ onUnmounted(() => {
                     class="h-10 rounded-xl border border-[#d7e7ff] bg-[#f4f9ff] px-4 text-[13px] font-medium text-[#2e6bd9] transition-colors hover:bg-[#ddeeff]"
                     @click="emit('back-to-landing')"
                   >
-                    Выбрать режим
+                    {{ t('importer.home.change_mode') }}
                   </button>
                   <button
                     type="button"
@@ -5188,7 +5185,7 @@ onUnmounted(() => {
                     :disabled="!importerPermissionState.canViewSessions"
                     @click="currentView = 'history'"
                   >
-                    История
+                    {{ t('importer.header.history') }}
                   </button>
                 </div>
               </div>
@@ -5197,12 +5194,12 @@ onUnmounted(() => {
               <div v-if="isBlockedByActiveSession" class="mb-4 flex items-start gap-3 rounded-[16px] border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-sm text-[#92400e]">
                 <span class="mt-0.5 shrink-0 text-base">⚠️</span>
                 <div>
-                  <span class="font-semibold">Идёт импорт:</span> «{{ activeRunningSession?.original_filename || 'без имени' }}». Дождитесь его завершения или
+                  <span class="font-semibold">{{ t('importer.home.active_session_prefix') }}</span> «{{ activeRunningSession?.original_filename || t('importer.home.active_session_unnamed') }}». {{ t('importer.home.active_session_wait') }}
                   <button
                     type="button"
                     class="underline hover:no-underline"
                     @click="resumeHistorySession(String(activeRunningSession?.id || activeRunningSession?.session_id || ''))"
-                  >перейдите к нему</button>, чтобы отменить. Новый импорт будет доступен после завершения или отмены.
+                  >{{ t('importer.home.active_session_link') }}</button>{{ t('importer.home.active_session_tail') }}
                 </div>
               </div>
 
@@ -5228,13 +5225,13 @@ onUnmounted(() => {
                       </svg>
                     </div>
                     <div class="p-4">
-                      <div class="text-[15px] font-semibold text-[#0F1115]">CRM-сущности</div>
-                      <p class="mt-1 text-[12.5px] leading-relaxed text-[#5A5E6E]">Лиды, контакты, компании, сделки и связанный импорт.</p>
+                      <div class="text-[15px] font-semibold text-[#0F1115]">{{ t('importer.home.crm_title') }}</div>
+                      <p class="mt-1 text-[12.5px] leading-relaxed text-[#5A5E6E]">{{ t('importer.home.crm_description') }}</p>
                       <div class="mt-3 flex flex-wrap gap-1.5">
-                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">Лиды</span>
-                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">Контакты</span>
-                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">Компании</span>
-                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">Сделки</span>
+                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">{{ t('importer.home.tag_leads') }}</span>
+                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">{{ t('importer.home.tag_contacts') }}</span>
+                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">{{ t('importer.home.tag_companies') }}</span>
+                        <span class="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#3B47D6]">{{ t('importer.home.tag_deals') }}</span>
                       </div>
                     </div>
                   </button>
@@ -5259,12 +5256,12 @@ onUnmounted(() => {
                       </svg>
                     </div>
                     <div class="p-4">
-                      <div class="text-[15px] font-semibold text-[#0F1115]">Задачи</div>
-                      <p class="mt-1 text-[12.5px] leading-relaxed text-[#5A5E6E]">Задачи, подзадачи, комментарии, чек-листы и вложения.</p>
+                      <div class="text-[15px] font-semibold text-[#0F1115]">{{ t('importer.home.task_title') }}</div>
+                      <p class="mt-1 text-[12.5px] leading-relaxed text-[#5A5E6E]">{{ t('importer.home.task_description') }}</p>
                       <div class="mt-3 flex flex-wrap gap-1.5">
-                        <span class="rounded-full bg-[#FFF1E8] px-2 py-0.5 text-[11px] font-medium text-[#D8632A]">Задачи</span>
-                        <span class="rounded-full bg-[#FFF1E8] px-2 py-0.5 text-[11px] font-medium text-[#D8632A]">Чек-листы</span>
-                        <span class="rounded-full bg-[#FFF1E8] px-2 py-0.5 text-[11px] font-medium text-[#D8632A]">Комментарии</span>
+                        <span class="rounded-full bg-[#FFF1E8] px-2 py-0.5 text-[11px] font-medium text-[#D8632A]">{{ t('importer.home.tag_tasks') }}</span>
+                        <span class="rounded-full bg-[#FFF1E8] px-2 py-0.5 text-[11px] font-medium text-[#D8632A]">{{ t('importer.home.tag_checklists') }}</span>
+                        <span class="rounded-full bg-[#FFF1E8] px-2 py-0.5 text-[11px] font-medium text-[#D8632A]">{{ t('importer.home.tag_comments') }}</span>
                       </div>
                     </div>
                   </button>
@@ -5288,11 +5285,11 @@ onUnmounted(() => {
                       </svg>
                     </div>
                     <div class="p-4">
-                      <div class="text-[15px] font-semibold text-[#0F1115]">Пользователи и отделы</div>
-                      <p class="mt-1 text-[12.5px] leading-relaxed text-[#5A5E6E]">Сотрудники портала и структура компании.</p>
+                      <div class="text-[15px] font-semibold text-[#0F1115]">{{ t('importer.home.hr_title') }}</div>
+                      <p class="mt-1 text-[12.5px] leading-relaxed text-[#5A5E6E]">{{ t('importer.home.hr_description') }}</p>
                       <div class="mt-3 flex flex-wrap gap-1.5">
-                        <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">Сотрудники</span>
-                        <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">Отделы</span>
+                        <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">{{ t('importer.home.tag_employees') }}</span>
+                        <span class="rounded-full bg-[#E8F6EE] px-2 py-0.5 text-[11px] font-medium text-[#1E8A52]">{{ t('importer.home.tag_departments') }}</span>
                       </div>
                     </div>
                   </button>
@@ -5301,14 +5298,14 @@ onUnmounted(() => {
               <!-- Футер -->
               <div class="mt-8 flex items-center justify-between">
                 <span class="text-[12.5px] text-[#8B8FA0]">
-                  Тип импорта можно сменить позже — состояние сохранится.
+                  {{ t('importer.home.footer') }}
                 </span>
                 <button
                   type="button"
                   class="h-11 rounded-xl border border-[#d7e7ff] bg-[#f4f9ff] px-5 text-[13px] font-medium text-[#2e6bd9] transition-colors hover:bg-[#ddeeff]"
                   @click="emit('back-to-landing')"
                 >
-                  ← Назад
+                  ← {{ t('importer.step.back') }}
                 </button>
               </div>
             </div>
@@ -5365,11 +5362,11 @@ onUnmounted(() => {
                       :disabled="Boolean(busyAction) || (isBulkAttachFlow && isBulkAttachExecutionLocked)"
                       @click="handleStepOneBack()"
                     >
-                      ← Назад
+                      ← {{ t('importer.step.back') }}
                     </button>
                     <B24Button
                       v-if="!isBulkAttachFlow"
-                      label="Загрузить файл"
+                      :label="t('importer.step.upload_file')"
                       color="air-primary"
                       size="lg"
                       :loading="busyAction === 'start'"
@@ -5420,9 +5417,9 @@ onUnmounted(() => {
                   <div class="grid grid-cols-3 gap-3 mb-5">
                     <button
                       v-for="f in [
-                        { key: 'direct', title: 'Прямой импорт',          blurb: 'В стандартные разделы CRM — сделки, контакты, компании.' },
-                        { key: 'linked', title: 'Связанный импорт',        blurb: 'Одна строка создаёт несколько связанных сущностей.' },
-                        { key: 'bulk',   title: 'Массовый импорт файлов',  blurb: 'Прикрепить файлы к полям существующих CRM-записей.' },
+                        { key: 'direct', title: t('importer.crm.flavor_direct'), blurb: t('importer.crm.flavor_direct_subtitle') },
+                        { key: 'linked', title: t('importer.crm.flavor_linked'), blurb: t('importer.crm.flavor_linked_subtitle') },
+                        { key: 'bulk',   title: t('importer.crm.flavor_bulk'),   blurb: t('importer.crm.flavor_bulk_subtitle') },
                       ]"
                       :key="f.key"
                       type="button"
@@ -5487,26 +5484,26 @@ onUnmounted(() => {
                     <div class="rounded-2xl border border-[#ECEEF3] bg-white p-6 flex flex-col">
                       <div class="flex items-center justify-between mb-1">
                         <h3 class="text-[15px] font-semibold tracking-tight text-[#0F1115]">
-                          {{ crmFlavor === 'direct' ? 'Прямой импорт' : crmFlavor === 'linked' ? 'Связанный импорт' : 'Массовый импорт файлов' }}
+                          {{ crmFlavor === 'direct' ? t('importer.crm.flavor_direct') : crmFlavor === 'linked' ? t('importer.crm.flavor_linked') : t('importer.crm.flavor_bulk') }}
                         </h3>
-                        <span class="text-[11px] text-[#5A5E6E]">Поля можно изменить на шаге «Соответствие»</span>
+                        <span class="text-[11px] text-[#5A5E6E]">{{ t('importer.crm.fields_editable_note') }}</span>
                       </div>
                       <p class="text-[12.5px] mb-5 text-[#5A5E6E]">
                         {{ crmFlavor === 'direct'
-                          ? 'В стандартные разделы CRM — сделки, контакты, компании.'
+                          ? t('importer.crm.flavor_direct_subtitle')
                           : crmFlavor === 'linked'
-                            ? 'Одна строка создаёт несколько связанных сущностей.'
-                            : 'Прикрепить файлы к полям существующих CRM-записей.' }}
+                            ? t('importer.crm.flavor_linked_subtitle')
+                            : t('importer.crm.flavor_bulk_subtitle') }}
                       </p>
 
                       <!-- Direct fields -->
                       <div v-if="crmFlavor === 'direct'" class="space-y-4 max-w-[380px]">
                         <div>
-                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">CRM-сущность</div>
+                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">{{ t('importer.crm.entity_label') }}</div>
                           <B24Select
                             :model-value="selectedCrmEntityType"
                             :items="crmScenarioItems"
-                            placeholder="Например, Сделки"
+                            :placeholder="t('importer.crm.entity_placeholder')"
                             size="lg"
                             class="w-full"
                             :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
@@ -5514,11 +5511,11 @@ onUnmounted(() => {
                           />
                         </div>
                         <div v-if="selectedCrmEntityType === 'smart_process'">
-                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">Смарт-процесс</div>
+                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">{{ t('importer.crm.smart_label') }}</div>
                           <B24Select
                             :model-value="selectedSmartProcessId"
                             :items="smartProcessOptions"
-                            placeholder="Например, Согласования"
+                            :placeholder="t('importer.crm.smart_placeholder')"
                             size="lg"
                             class="w-full"
                             :disabled="loadingSmartProcesses || !importerPermissionState.canCreateSessions || Boolean(busyAction)"
@@ -5526,10 +5523,10 @@ onUnmounted(() => {
                           />
                           <div class="mt-2 text-xs text-[#7f92a7]">
                             {{ loadingSmartProcesses
-                              ? 'Загружаем список смарт-процессов...'
+                              ? t('importer.crm.smart_loading')
                               : smartProcessOptions.length
-                                ? 'Выберите конкретный смарт-процесс.'
-                                : 'Смарт-процессы не найдены.' }}
+                                ? t('importer.crm.smart_help')
+                                : t('importer.crm.smart_not_found') }}
                           </div>
                         </div>
                       </div>
@@ -5537,11 +5534,11 @@ onUnmounted(() => {
                       <!-- Linked fields -->
                       <div v-else-if="crmFlavor === 'linked'" class="grid grid-cols-2 gap-4">
                         <div>
-                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">Основная сущность</div>
+                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">{{ t('importer.crm.linked_primary') }}</div>
                           <B24Select
                             :model-value="selectedLinkedPrimaryEntityType"
                             :items="linkedPrimaryEntityItems"
-                            placeholder="Выберите основную сущность"
+                            :placeholder="t('importer.crm.linked_primary_placeholder')"
                             size="lg"
                             class="w-full"
                             :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
@@ -5549,13 +5546,13 @@ onUnmounted(() => {
                           />
                         </div>
                         <div>
-                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">Связанная сущность</div>
+                          <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">{{ t('importer.crm.linked_secondary') }}</div>
                           <B24Select
                             :model-value="selectedLinkedSecondaryEntityType"
                             :items="linkedSecondaryEntityItems"
                             :placeholder="selectedLinkedPrimaryEntityType
-                              ? (linkedSecondaryEntityItems.length ? 'Выберите связанную сущность' : 'Для этой сущности нет связанных вариантов')
-                              : 'Сначала выберите основную сущность'"
+                              ? (linkedSecondaryEntityItems.length ? t('importer.crm.linked_secondary_placeholder') : t('importer.crm.linked_secondary_no_options'))
+                              : t('importer.crm.linked_secondary_no_primary')"
                             size="lg"
                             class="w-full"
                             :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
@@ -5569,11 +5566,11 @@ onUnmounted(() => {
                         <div v-if="!bulkFilterPreview" class="space-y-5">
                           <div class="grid grid-cols-2 gap-4">
                             <div>
-                              <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">CRM-сущность</div>
+                              <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">{{ t('importer.bulk.entity_label') }}</div>
                               <B24Select
                                 :model-value="selectedFileAttachEntityType"
                                 :items="fileAttachCrmEntityItems"
-                                placeholder="Например, Сделки"
+                                :placeholder="t('importer.bulk.entity_placeholder')"
                                 size="lg"
                                 class="w-full"
                                 :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
@@ -5581,20 +5578,20 @@ onUnmounted(() => {
                               />
                             </div>
                             <div>
-                              <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">Поле для файлов</div>
+                              <div class="text-[12px] mb-1.5 font-medium text-[#3A3D47]">{{ t('importer.bulk.file_field_label') }}</div>
                               <div
                                 v-if="loadingBulkFileFields"
                                 class="flex h-11 w-full items-center rounded-[14px] border border-[#D8E3EF] bg-white px-4 text-[14px] font-medium text-[#3A3D47]"
                               >
-                                Загрузка...
+                                {{ t('importer.bulk.file_field_loading') }}
                               </div>
                               <B24Select
                                 v-else
                                 :model-value="selectedBulkFileField"
                                 :items="bulkFileFields"
                                 :placeholder="selectedFileAttachEntityType
-                                  ? (bulkFileFields.length ? 'Выберите поле' : 'У выбранной сущности нет полей типа «Файл»')
-                                  : 'Сначала выберите CRM-сущность'"
+                                  ? (bulkFileFields.length ? t('importer.bulk.file_field_placeholder') : t('importer.bulk.file_field_no_options'))
+                                  : t('importer.bulk.file_field_no_entity')"
                                 size="lg"
                                 class="w-full"
                                 :disabled="Boolean(busyAction)"
@@ -5604,7 +5601,7 @@ onUnmounted(() => {
                           </div>
 
                           <div class="space-y-4">
-                            <div class="text-[12px] font-medium text-[#5A5E6E]">Фильтр отбора:</div>
+                            <div class="text-[12px] font-medium text-[#5A5E6E]">{{ t('importer.bulk.filter_label') }}</div>
 
                             <div
                               v-for="condition in bulkFilterConditions"
@@ -5620,7 +5617,7 @@ onUnmounted(() => {
                                   class="rounded-full border border-[#d9e5f1] bg-white px-3 py-1 text-xs font-medium text-[#6d8194] transition hover:border-[#f0b7b7] hover:text-[#c24b53]"
                                   @click="removeBulkFilterField(condition.fieldId)"
                                 >
-                                  Удалить
+                                  {{ t('importer.bulk.filter_delete') }}
                                 </button>
                               </div>
 
@@ -5628,18 +5625,18 @@ onUnmounted(() => {
                                 v-if="getBulkFilterValueOptions(condition.fieldId).length"
                                 :model-value="condition.value"
                                 class="mt-3 w-full"
-                                placeholder="Выберите значение Bitrix24"
+                                :placeholder="t('importer.bulk.filter_value_placeholder')"
                                 :items="getBulkFilterValueOptions(condition.fieldId)"
                                 value-key="value"
                                 :filter-fields="['label']"
-                                :search-input="{ placeholder: 'Поиск значения Bitrix24' }"
+                                :search-input="{ placeholder: t('importer.bulk.filter_value_search') }"
                                 @update:model-value="condition.value = String($event || '')"
                               />
                               <input
                                 v-else
                                 v-model="condition.value"
                                 type="text"
-                                :placeholder="`Введите значение для поля «${resolveBulkFilterField(condition.fieldId)?.title || condition.fieldId}»`"
+                                :placeholder="t('importer.bulk.filter_value_input', { field: resolveBulkFilterField(condition.fieldId)?.title || condition.fieldId })"
                                 class="mt-3 w-full rounded-[10px] border border-[#d8e3ef] px-3 py-2 text-sm text-[#314256] outline-none focus:border-[#2e6bd9]"
                               />
                             </div>
@@ -5648,11 +5645,11 @@ onUnmounted(() => {
                               <B24SelectMenu
                                 :model-value="pendingBulkFilterFieldId"
                                 class="w-full"
-                                placeholder="Выберите поле Bitrix24"
+                                :placeholder="t('importer.bulk.filter_placeholder')"
                                 :items="bulkFilterFieldOptions"
                                 value-key="value"
                                 :filter-fields="['label']"
-                                :search-input="{ placeholder: 'Поиск поля Bitrix24' }"
+                                :search-input="{ placeholder: t('importer.bulk.filter_search') }"
                                 @update:model-value="addBulkFilterField(String($event || ''))"
                               />
                             </div>
@@ -5663,7 +5660,7 @@ onUnmounted(() => {
                               :disabled="!selectedFileAttachEntityType"
                               @click="openAddBulkFilterField"
                             >
-                              Добавить поле
+                              {{ t('importer.bulk.filter_add') }}
                             </button>
                           </div>
                         </div>
@@ -5679,10 +5676,10 @@ onUnmounted(() => {
                               </div>
                               <div>
                                 <div class="text-[13px] font-semibold text-[#0F1115]">
-                                  Найдено записей: <span :style="{ color: domainAccent.ink }">{{ bulkFilterPreview.total }}</span>
+                                  {{ t('importer.bulk.preview_found') }} <span :style="{ color: domainAccent.ink }">{{ bulkFilterPreview.total }}</span>
                                 </div>
                                 <div class="text-[11.5px] text-[#5A5E6E] mt-0.5">
-                                  Файл будет прикреплён к каждой найденной записи
+                                  {{ t('importer.bulk.preview_subtitle') }}
                                 </div>
                               </div>
                             </div>
@@ -5691,13 +5688,13 @@ onUnmounted(() => {
                           <div v-if="showBulkAttachExecutionState" class="rounded-2xl border border-[#ECEEF3] bg-[#fbfcfe] p-5">
                             <div class="flex items-center justify-between gap-3">
                               <div>
-                                <div class="text-[13px] font-semibold text-[#0F1115]">Загрузка файла</div>
+                                <div class="text-[13px] font-semibold text-[#0F1115]">{{ t('importer.bulk.upload_title') }}</div>
                                 <div class="mt-0.5 text-[11.5px] text-[#5A5E6E]">
-                                  <template v-if="busyAction === 'bulk-attach-run'">Подготавливаем файл и создаём сессию загрузки.</template>
-                                  <template v-else-if="bulkAttachSessionStatus === 'running'">Файл уже загружается, статус обновляется автоматически.</template>
-                                  <template v-else-if="bulkAttachSessionStatus === 'completed'">Загрузка завершена.</template>
-                                  <template v-else-if="bulkAttachSessionStatus === 'failed'">Во время загрузки произошла ошибка.</template>
-                                  <template v-else-if="bulkAttachSessionStatus === 'cancelled'">Загрузка была остановлена.</template>
+                                  <template v-if="busyAction === 'bulk-attach-run'">{{ t('importer.bulk.upload_preparing') }}</template>
+                                  <template v-else-if="bulkAttachSessionStatus === 'running'">{{ t('importer.bulk.upload_running') }}</template>
+                                  <template v-else-if="bulkAttachSessionStatus === 'completed'">{{ t('importer.bulk.upload_complete') }}</template>
+                                  <template v-else-if="bulkAttachSessionStatus === 'failed'">{{ t('importer.bulk.upload_error') }}</template>
+                                  <template v-else-if="bulkAttachSessionStatus === 'cancelled'">{{ t('importer.bulk.upload_cancelled') }}</template>
                                 </div>
                               </div>
                               <span
@@ -5708,7 +5705,7 @@ onUnmounted(() => {
                                     ? { background: '#FDECEC', color: '#C24B53' }
                                     : { background: domainAccent.bg, color: domainAccent.ink }"
                               >
-                                {{ busyAction === 'bulk-attach-run' ? 'Подготовка' : bulkAttachActionLabel }}
+                                {{ busyAction === 'bulk-attach-run' ? t('importer.bulk.preparing') : bulkAttachActionLabel }}
                               </span>
                             </div>
 
@@ -5720,7 +5717,7 @@ onUnmounted(() => {
                             </div>
 
                             <div class="mt-3 flex items-center justify-between text-[12px] text-[#5A5E6E]">
-                              <span>Обработано: {{ bulkAttachProgressProcessed }} / {{ bulkAttachProgressTotal || bulkFilterPreview.total }}</span>
+                              <span>{{ t('importer.bulk.progress', { processed: bulkAttachProgressProcessed, total: bulkAttachProgressTotal || bulkFilterPreview.total }) }}</span>
                               <span>{{ bulkAttachProgressPercent }}%</span>
                             </div>
 
@@ -5729,15 +5726,15 @@ onUnmounted(() => {
                               class="mt-4 grid grid-cols-3 gap-3"
                             >
                               <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
-                                <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Всего</div>
+                                <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">{{ t('importer.bulk.results_total') }}</div>
                                 <div class="mt-1 text-lg font-semibold text-[#0F1115]">{{ bulkAttachResultTotal }}</div>
                               </div>
                               <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
-                                <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Успешно</div>
+                                <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">{{ t('importer.bulk.results_successful') }}</div>
                                 <div class="mt-1 text-lg font-semibold text-[#1E8A52]">{{ bulkAttachResultSuccessful }}</div>
                               </div>
                               <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
-                                <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Ошибки</div>
+                                <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">{{ t('importer.bulk.results_failed') }}</div>
                                 <div class="mt-1 text-lg font-semibold text-[#C24B53]">{{ bulkAttachResultFailed }}</div>
                               </div>
                             </div>
@@ -5745,7 +5742,7 @@ onUnmounted(() => {
                             <div class="mt-4 flex flex-wrap gap-3">
                               <B24Button
                                 v-if="canCancelBulkAttach || busyAction === 'bulk-attach-cancel'"
-                                label="Остановить"
+                                :label="t('importer.bulk.stop')"
                                 color="air-tertiary"
                                 size="lg"
                                 :loading="busyAction === 'bulk-attach-cancel'"
@@ -5754,7 +5751,7 @@ onUnmounted(() => {
                               />
                               <B24Button
                                 v-if="(bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled') && bulkAttachProgressProcessed < bulkAttachProgressTotal"
-                                :label="`Продолжить с ${bulkAttachProgressProcessed + 1}-й записи`"
+                                :label="t('importer.bulk.continue_from', { from: bulkAttachProgressProcessed + 1 })"
                                 color="air-primary"
                                 size="lg"
                                 :loading="busyAction === 'bulk-attach-resume'"
@@ -5762,7 +5759,7 @@ onUnmounted(() => {
                               />
                               <B24Button
                                 v-if="bulkAttachSessionStatus === 'completed' || bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled'"
-                                label="Завершить"
+                                :label="t('importer.bulk.finish')"
                                 :color="(bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled') && bulkAttachProgressProcessed < bulkAttachProgressTotal ? 'air-secondary' : 'air-primary'"
                                 size="lg"
                                 @click="finishInlineBulkAttachFlow"
@@ -5778,9 +5775,9 @@ onUnmounted(() => {
                           <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.2" />
                           <path d="M7 4.5v3M7 9.2v.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
                         </svg>
-                        <template v-if="crmFlavor === 'linked'">Свяжем строки по выбранному полю — без дублей.</template>
-                        <template v-else-if="crmFlavor === 'bulk'">К каждой строке файла приложим один файл-вложение.</template>
-                        <template v-else>Можно подключить шаблон сопоставления полей.</template>
+                        <template v-if="crmFlavor === 'linked'">{{ t('importer.crm.hint_linked') }}</template>
+                        <template v-else-if="crmFlavor === 'bulk'">{{ t('importer.bulk.hint') }}</template>
+                        <template v-else>{{ t('importer.crm.hint_direct') }}</template>
                       </div>
                     </div>
 
@@ -5788,7 +5785,7 @@ onUnmounted(() => {
                     <div class="flex flex-col gap-4">
                       <!-- Dropzone -->
                       <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                        Файл
+                        {{ t('importer.file.header') }}
                       </div>
                       <div
                         class="rounded-2xl p-5 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden transition-all"
@@ -5829,18 +5826,18 @@ onUnmounted(() => {
                         <div class="relative text-[14px] font-semibold tracking-tight text-[#0F1115]">
                           {{ crmFlavor === 'bulk' && isBulkFilePickerLocked
                             ? (isBulkAttachExecutionLocked
-                                ? 'Загрузка уже выполняется'
-                                : 'Сначала выберите CRM-сущность и поле для файлов')
+                                ? t('importer.dropzone.locked_running')
+                                : t('importer.dropzone.locked_bulk'))
                             : dropzoneDragOver
-                              ? 'Отпустите для загрузки'
-                              : (fileName || 'Перетащите файл сюда') }}
+                              ? t('importer.dropzone.drag_over')
+                              : (fileName || t('importer.dropzone.no_file')) }}
                         </div>
                         <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="currentFilePickerHelperText">
                           {{ crmFlavor === 'bulk' && isBulkFilePickerLocked
                             ? (isBulkAttachExecutionLocked
-                                ? 'Загрузка уже выполняется. Чтобы заменить файл, сначала остановите текущую сессию.'
-                                : 'Правый блок станет активным после выбора поля назначения.')
-                            : (fileName ? 'Нажмите, чтобы заменить файл' : currentFileDropdownLimitText) }}
+                                ? t('importer.dropzone.locked_running_help')
+                                : t('importer.dropzone.locked_help_bulk'))
+                            : (fileName ? t('importer.dropzone.has_file') : currentFileDropdownLimitText) }}
                         </p>
                         <input ref="fileInputRef" type="file" :accept="isSpreadsheetUploadRequired ? '.xlsx,.xls,.csv' : undefined" class="hidden" @change="handleFileChange" />
                         <button
@@ -5852,13 +5849,13 @@ onUnmounted(() => {
                           :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction) || isBulkFilePickerLocked"
                           @click.stop="openFilePicker"
                         >
-                          Выбрать файл
+                          {{ t('importer.dropzone.button') }}
                         </button>
                       </div>
 
                       <!-- Template download -->
                       <div v-if="crmFlavor !== 'bulk'" class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                        Шаблон
+                        {{ t('importer.template.download_header') }}
                       </div>
                       <div v-if="crmFlavor !== 'bulk'" class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
                         <div
@@ -5875,7 +5872,7 @@ onUnmounted(() => {
                           <div class="text-[11px] mt-0.5 text-[#5A5E6E]">{{ exampleTemplateDownloadMeta.description }}</div>
                         </div>
                         <B24Button
-                          label="Скачать"
+                          :label="t('importer.template.download_button')"
                           color="air-secondary-accent-2"
                           size="sm"
                           :loading="busyAction === 'example-template'"
@@ -5891,13 +5888,13 @@ onUnmounted(() => {
                 <div v-else-if="selectedFamily === 'task'" class="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
                   <div class="space-y-4">
                     <section class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                      <div class="text-sm font-semibold text-[#314256]">Импорт в задачи</div>
-                      <div class="mt-1 text-sm text-[#6f8194]">Выберите, что импортировать в задачи.</div>
-                      <B24FormField label="Выберите тип импорта" class="mt-4">
+                      <div class="text-sm font-semibold text-[#314256]">{{ t('importer.task.section_title') }}</div>
+                      <div class="mt-1 text-sm text-[#6f8194]">{{ t('importer.task.section_subtitle') }}</div>
+                      <B24FormField :label="t('importer.task.entity_label')" class="mt-4">
                         <B24Select
                           :model-value="selectedTaskEntityType"
                           :items="taskScenarioItems"
-                          placeholder="Например, Чек-листы задач"
+                          :placeholder="t('importer.task.entity_placeholder')"
                           size="lg"
                           class="w-full"
                           :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
@@ -5907,11 +5904,11 @@ onUnmounted(() => {
                     </section>
 
                     <section v-if="selectedTaskEntityType === 'task_attachment'" class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                      <div class="text-sm font-semibold text-[#314256]">Массовое добавление вложений</div>
-                      <div class="mt-1 text-sm text-[#6f8194]">Найдём задачи по фильтру и прикрепим к каждой один и тот же файл.</div>
+                      <div class="text-sm font-semibold text-[#314256]">{{ t('importer.task.bulk_title') }}</div>
+                      <div class="mt-1 text-sm text-[#6f8194]">{{ t('importer.task.bulk_subtitle') }}</div>
 
                       <div v-if="selectedTaskEntityType === 'task_attachment' && !bulkFilterPreview" class="mt-5 space-y-4">
-                        <div class="text-[12px] font-medium text-[#5A5E6E]">Фильтр задач:</div>
+                        <div class="text-[12px] font-medium text-[#5A5E6E]">{{ t('importer.task.bulk_filter_label') }}</div>
 
                         <div
                           v-for="condition in bulkFilterConditions"
@@ -5927,7 +5924,7 @@ onUnmounted(() => {
                               class="rounded-full border border-[#f3d3c2] bg-white px-3 py-1 text-xs font-medium text-[#8a4a28] transition hover:border-[#f0b7b7] hover:text-[#c24b53]"
                               @click="removeBulkFilterField(condition.fieldId)"
                             >
-                              Удалить
+                              {{ t('importer.task.bulk_filter_delete') }}
                             </button>
                           </div>
 
@@ -5935,18 +5932,18 @@ onUnmounted(() => {
                             v-if="getBulkFilterValueOptions(condition.fieldId).length"
                             :model-value="condition.value"
                             class="mt-3 w-full"
-                            placeholder="Выберите значение Bitrix24"
+                            :placeholder="t('importer.bulk.filter_value_placeholder')"
                             :items="getBulkFilterValueOptions(condition.fieldId)"
                             value-key="value"
                             :filter-fields="['label']"
-                            :search-input="{ placeholder: 'Поиск значения Bitrix24' }"
+                            :search-input="{ placeholder: t('importer.bulk.filter_value_search') }"
                             @update:model-value="condition.value = String($event || '')"
                           />
                           <input
                             v-else
                             v-model="condition.value"
                             type="text"
-                            :placeholder="`Введите значение для поля «${resolveBulkFilterField(condition.fieldId)?.title || condition.fieldId}»`"
+                            :placeholder="t('importer.bulk.filter_value_input', { field: resolveBulkFilterField(condition.fieldId)?.title || condition.fieldId })"
                             class="mt-3 w-full rounded-[10px] border border-[#f3d3c2] px-3 py-2 text-sm text-[#314256] outline-none focus:border-[#D8632A]"
                           />
                         </div>
@@ -5955,11 +5952,11 @@ onUnmounted(() => {
                           <B24SelectMenu
                             :model-value="pendingBulkFilterFieldId"
                             class="w-full"
-                            placeholder="Выберите поле задачи"
+                            :placeholder="t('importer.task.bulk_filter_placeholder')"
                             :items="bulkFilterFieldOptions"
                             value-key="value"
                             :filter-fields="['label']"
-                            :search-input="{ placeholder: 'Поиск поля Bitrix24' }"
+                            :search-input="{ placeholder: t('importer.task.bulk_filter_search') }"
                             @update:model-value="addBulkFilterField(String($event || ''))"
                           />
                         </div>
@@ -5970,11 +5967,11 @@ onUnmounted(() => {
                           :disabled="Boolean(busyAction)"
                           @click="openAddBulkFilterField"
                         >
-                          Добавить поле
+                          {{ t('importer.task.bulk_filter_add') }}
                         </button>
 
                         <div class="rounded-[16px] border border-[#f3d3c2] bg-[#FFF8F3] px-4 py-3 text-[12px] text-[#8a4a28]">
-                          Если фильтр не задан, будут выбраны все доступные задачи.
+                          {{ t('importer.task.bulk_filter_note') }}
                         </div>
                       </div>
 
@@ -5989,10 +5986,10 @@ onUnmounted(() => {
                             </div>
                             <div>
                               <div class="text-[13px] font-semibold text-[#0F1115]">
-                                Найдено задач: <span :style="{ color: domainAccent.ink }">{{ bulkFilterPreview.total }}</span>
+                                {{ t('importer.task.bulk_preview_found') }} <span :style="{ color: domainAccent.ink }">{{ bulkFilterPreview.total }}</span>
                               </div>
                               <div class="text-[11.5px] text-[#5A5E6E] mt-0.5">
-                                Один файл будет прикреплён ко всем найденным задачам
+                                {{ t('importer.task.bulk_preview_subtitle') }}
                               </div>
                             </div>
                           </div>
@@ -6001,13 +5998,13 @@ onUnmounted(() => {
                         <div v-if="showBulkAttachExecutionState" class="rounded-2xl border border-[#ECEEF3] bg-[#fbfcfe] p-5">
                           <div class="flex items-center justify-between gap-3">
                             <div>
-                              <div class="text-[13px] font-semibold text-[#0F1115]">Загрузка вложения</div>
+                              <div class="text-[13px] font-semibold text-[#0F1115]">{{ t('importer.task.bulk_upload_title') }}</div>
                               <div class="mt-0.5 text-[11.5px] text-[#5A5E6E]">
-                                <template v-if="busyAction === 'bulk-attach-run'">Подготавливаем файл и создаём сессию загрузки.</template>
-                                <template v-else-if="bulkAttachSessionStatus === 'running'">Файл уже прикрепляется, статус обновляется автоматически.</template>
-                                <template v-else-if="bulkAttachSessionStatus === 'completed'">Загрузка завершена.</template>
-                                <template v-else-if="bulkAttachSessionStatus === 'failed'">Во время загрузки произошла ошибка.</template>
-                                <template v-else-if="bulkAttachSessionStatus === 'cancelled'">Загрузка была остановлена.</template>
+                                <template v-if="busyAction === 'bulk-attach-run'">{{ t('importer.task.bulk_upload_preparing') }}</template>
+                                <template v-else-if="bulkAttachSessionStatus === 'running'">{{ t('importer.task.bulk_upload_running') }}</template>
+                                <template v-else-if="bulkAttachSessionStatus === 'completed'">{{ t('importer.task.bulk_upload_complete') }}</template>
+                                <template v-else-if="bulkAttachSessionStatus === 'failed'">{{ t('importer.task.bulk_upload_error') }}</template>
+                                <template v-else-if="bulkAttachSessionStatus === 'cancelled'">{{ t('importer.task.bulk_upload_cancelled') }}</template>
                               </div>
                             </div>
                             <span
@@ -6018,7 +6015,7 @@ onUnmounted(() => {
                                   ? { background: '#FDECEC', color: '#C24B53' }
                                   : { background: domainAccent.bg, color: domainAccent.ink }"
                             >
-                              {{ busyAction === 'bulk-attach-run' ? 'Подготовка' : bulkAttachActionLabel }}
+                              {{ busyAction === 'bulk-attach-run' ? t('importer.bulk.preparing') : bulkAttachActionLabel }}
                             </span>
                           </div>
 
@@ -6030,7 +6027,7 @@ onUnmounted(() => {
                           </div>
 
                           <div class="mt-3 flex items-center justify-between text-[12px] text-[#5A5E6E]">
-                            <span>Обработано: {{ bulkAttachProgressProcessed }} / {{ bulkAttachProgressTotal || bulkFilterPreview.total }}</span>
+                            <span>{{ t('importer.bulk.progress', { processed: bulkAttachProgressProcessed, total: bulkAttachProgressTotal || bulkFilterPreview.total }) }}</span>
                             <span>{{ bulkAttachProgressPercent }}%</span>
                           </div>
 
@@ -6039,15 +6036,15 @@ onUnmounted(() => {
                             class="mt-4 grid grid-cols-3 gap-3"
                           >
                             <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
-                              <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Всего</div>
+                              <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">{{ t('importer.task.bulk_results_total') }}</div>
                               <div class="mt-1 text-lg font-semibold text-[#0F1115]">{{ bulkAttachResultTotal }}</div>
                             </div>
                             <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
-                              <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Успешно</div>
+                              <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">{{ t('importer.task.bulk_results_successful') }}</div>
                               <div class="mt-1 text-lg font-semibold text-[#1E8A52]">{{ bulkAttachResultSuccessful }}</div>
                             </div>
                             <div class="rounded-[14px] border border-[#E5EBF2] bg-white px-4 py-3">
-                              <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">Ошибки</div>
+                              <div class="text-[11px] uppercase tracking-[0.08em] text-[#8EA0B2]">{{ t('importer.task.bulk_results_failed') }}</div>
                               <div class="mt-1 text-lg font-semibold text-[#C24B53]">{{ bulkAttachResultFailed }}</div>
                             </div>
                           </div>
@@ -6055,7 +6052,7 @@ onUnmounted(() => {
                           <div class="mt-4 flex flex-wrap gap-3">
                             <B24Button
                               v-if="canCancelBulkAttach || busyAction === 'bulk-attach-cancel'"
-                              label="Остановить"
+                              :label="t('importer.bulk.stop')"
                               color="air-tertiary"
                               size="lg"
                               :loading="busyAction === 'bulk-attach-cancel'"
@@ -6064,7 +6061,7 @@ onUnmounted(() => {
                             />
                             <B24Button
                               v-if="(bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled') && bulkAttachProgressProcessed < bulkAttachProgressTotal"
-                              :label="`Продолжить с ${bulkAttachProgressProcessed + 1}-й записи`"
+                              :label="t('importer.bulk.continue_from', { from: bulkAttachProgressProcessed + 1 })"
                               color="air-primary"
                               size="lg"
                               :loading="busyAction === 'bulk-attach-resume'"
@@ -6072,7 +6069,7 @@ onUnmounted(() => {
                             />
                             <B24Button
                               v-if="bulkAttachSessionStatus === 'completed' || bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled'"
-                              label="Завершить"
+                              :label="t('importer.bulk.finish')"
                               :color="(bulkAttachSessionStatus === 'failed' || bulkAttachSessionStatus === 'cancelled') && bulkAttachProgressProcessed < bulkAttachProgressTotal ? 'air-secondary' : 'air-primary'"
                               size="lg"
                               @click="finishInlineBulkAttachFlow"
@@ -6083,15 +6080,15 @@ onUnmounted(() => {
                         <div v-else class="rounded-2xl border border-[#ECEEF3] bg-white p-5">
                           <div class="flex items-center justify-between gap-3">
                             <div>
-                              <div class="text-[13px] font-semibold text-[#0F1115]">Показаны первые 5 задач</div>
-                              <div class="mt-0.5 text-[11.5px] text-[#5A5E6E]">Проверьте выборку перед запуском прикрепления.</div>
+                              <div class="text-[13px] font-semibold text-[#0F1115]">{{ t('importer.task.bulk_preview_first') }}</div>
+                              <div class="mt-0.5 text-[11.5px] text-[#5A5E6E]">{{ t('importer.task.bulk_preview_help') }}</div>
                             </div>
                             <button
                               type="button"
                               class="rounded-full border border-[#f0c5ad] bg-white px-3 py-1 text-xs font-medium text-[#8a4a28] transition hover:border-[#D8632A] hover:text-[#D8632A]"
                               @click="goBackFromBulkPreview"
                             >
-                              Изменить фильтр
+                              {{ t('importer.task.bulk_preview_filter_change') }}
                             </button>
                           </div>
 
@@ -6102,10 +6099,10 @@ onUnmounted(() => {
                               class="rounded-[14px] border border-[#f4e0d4] bg-[#fffaf7] px-4 py-3"
                             >
                               <div class="text-sm font-semibold text-[#314256]">#{{ sample.id }}</div>
-                              <div class="mt-1 text-[12.5px] text-[#5A5E6E]">{{ sample.title || 'Без названия' }}</div>
+                              <div class="mt-1 text-[12.5px] text-[#5A5E6E]">{{ sample.title || t('importer.task.untitled') }}</div>
                             </div>
                             <div v-if="!bulkFilterPreview.sample.length" class="rounded-[14px] border border-dashed border-[#f0c5ad] bg-[#fffaf7] px-4 py-4 text-[12px] text-[#8a4a28]">
-                              Превью пустое. Проверьте фильтр или загрузите файл и запустите прикрепление для всей выборки.
+                              {{ t('importer.task.bulk_preview_empty') }}
                             </div>
                           </div>
                         </div>
@@ -6113,7 +6110,7 @@ onUnmounted(() => {
                     </section>
                   </div>
                   <div class="flex flex-col gap-4">
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.file.header') }}</div>
                     <div
                       class="rounded-2xl p-5 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden transition-all"
                       :class="isBulkAttachFlow && isBulkFilePickerLocked ? 'cursor-not-allowed' : 'cursor-pointer'"
@@ -6151,18 +6148,18 @@ onUnmounted(() => {
                       <div class="relative text-[14px] font-semibold tracking-tight text-[#0F1115]">
                         {{ isBulkAttachFlow && isBulkFilePickerLocked
                           ? (isBulkAttachExecutionLocked
-                              ? 'Загрузка уже выполняется'
-                              : 'Сначала настройте выборку задач')
+                              ? t('importer.dropzone.locked_running')
+                              : t('importer.dropzone.locked_task'))
                           : dropzoneDragOver
-                            ? 'Отпустите для загрузки'
-                            : (fileName || 'Перетащите файл сюда') }}
+                            ? t('importer.dropzone.drag_over')
+                            : (fileName || t('importer.dropzone.no_file')) }}
                       </div>
                       <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="currentFilePickerHelperText">
                         {{ isBulkAttachFlow && isBulkFilePickerLocked
                           ? (isBulkAttachExecutionLocked
-                              ? 'Загрузка уже выполняется. Чтобы заменить файл, сначала остановите текущую сессию.'
-                              : 'Правый блок станет активным после проверки выборки задач.')
-                          : (fileName ? 'Нажмите, чтобы заменить файл' : currentFileDropdownLimitText) }}
+                              ? t('importer.dropzone.locked_running_help')
+                              : t('importer.dropzone.locked_help_task'))
+                          : (fileName ? t('importer.dropzone.has_file') : currentFileDropdownLimitText) }}
                       </p>
                       <input ref="fileInputRef" type="file" :accept="isSpreadsheetUploadRequired ? '.xlsx,.xls,.csv' : undefined" class="hidden" @change="handleFileChange" />
                       <button
@@ -6174,11 +6171,11 @@ onUnmounted(() => {
                         :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction) || isBulkFilePickerLocked"
                         @click.stop="openFilePicker"
                       >
-                        Выбрать файл
+                        {{ t('importer.dropzone.button') }}
                       </button>
                     </div>
                     <template v-if="selectedTaskEntityType === 'task_attachment'">
-                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Режим</div>
+                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.task.mode_header') }}</div>
                       <div class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
                         <div class="w-10 h-10 rounded-xl grid place-items-center shrink-0 bg-white" :style="{ color: domainAccent.ink }">
                           <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -6187,13 +6184,13 @@ onUnmounted(() => {
                           </svg>
                         </div>
                         <div class="min-w-0 flex-1">
-                          <div class="text-[12.5px] font-semibold tracking-tight" :style="{ color: domainAccent.ink }">Excel-шаблон здесь не нужен</div>
-                          <div class="text-[11px] mt-0.5 text-[#5A5E6E]">Настройте фильтр задач, загрузите один файл и запустите прикрепление ко всем найденным задачам.</div>
+                          <div class="text-[12.5px] font-semibold tracking-tight" :style="{ color: domainAccent.ink }">{{ t('importer.task.mode_excel_title') }}</div>
+                          <div class="text-[11px] mt-0.5 text-[#5A5E6E]">{{ t('importer.task.mode_excel_subtitle') }}</div>
                         </div>
                       </div>
                     </template>
                     <template v-else>
-                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаблон</div>
+                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.template.download_header') }}</div>
                       <div class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
                         <div class="w-10 h-10 rounded-xl grid place-items-center shrink-0 bg-white" :style="{ color: domainAccent.ink }">
                           <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -6206,7 +6203,7 @@ onUnmounted(() => {
                           <div class="text-[11px] mt-0.5 text-[#5A5E6E]">{{ exampleTemplateDownloadMeta.description }}</div>
                         </div>
                         <B24Button
-                          label="Скачать"
+                          :label="t('importer.template.download_button')"
                           color="air-secondary-accent-2"
                           size="sm"
                           :loading="busyAction === 'example-template'"
@@ -6222,13 +6219,13 @@ onUnmounted(() => {
                 <div v-else-if="selectedFamily === 'hr'" class="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
                   <div class="space-y-4">
                     <section class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                      <div class="text-sm font-semibold text-[#314256]">Пользователи и отделы</div>
-                      <div class="mt-1 text-sm text-[#6f8194]">Импорт пользователей и структуры компании.</div>
-                      <B24FormField label="Выберите тип импорта" class="mt-4">
+                      <div class="text-sm font-semibold text-[#314256]">{{ t('importer.hr.section_title') }}</div>
+                      <div class="mt-1 text-sm text-[#6f8194]">{{ t('importer.hr.section_subtitle') }}</div>
+                      <B24FormField :label="t('importer.hr.entity_label')" class="mt-4">
                         <B24Select
                           :model-value="selectedHrEntityType"
                           :items="hrScenarioItems"
-                          placeholder="Например, Пользователи"
+                          :placeholder="t('importer.hr.entity_placeholder')"
                           size="lg"
                           class="w-full"
                           :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
@@ -6238,14 +6235,14 @@ onUnmounted(() => {
                     </section>
 
                     <section class="rounded-[18px] border border-[#dce7f7] bg-[#f4f9ff] p-4">
-                      <div class="text-sm font-semibold text-[#2e5ba8]">ID отделов</div>
+                      <div class="text-sm font-semibold text-[#2e5ba8]">{{ t('importer.hr.departments_title') }}</div>
                       <div class="mt-1 text-sm text-[#4a6d9c]">
-                        Для привязки к отделу укажите числовой ID в колонке «Отдел (ID)».
-                        Посмотрите список отделов вашего портала с их ID.
+                        {{ t('importer.hr.departments_subtitle') }}
+                        {{ t('importer.hr.departments_subtitle2') }}
                       </div>
                       <B24Button
                         class="mt-3"
-                        :label="departmentsExpanded ? 'Скрыть список' : 'Показать отделы'"
+                        :label="departmentsExpanded ? t('importer.hr.departments_hide') : t('importer.hr.departments_show')"
                         color="air-primary"
                         size="sm"
                         :loading="loadingDepartments"
@@ -6256,9 +6253,9 @@ onUnmounted(() => {
                           <table class="w-full text-sm">
                             <thead class="bg-[#eaf3ff]">
                               <tr>
-                                <th class="px-3 py-2 text-left font-semibold text-[#2e5ba8]">ID</th>
-                                <th class="px-3 py-2 text-left font-semibold text-[#2e5ba8]">Название</th>
-                                <th class="px-3 py-2 text-left font-semibold text-[#2e5ba8]">ID родителя</th>
+                                <th class="px-3 py-2 text-left font-semibold text-[#2e5ba8]">{{ t('importer.hr.departments_col_id') }}</th>
+                                <th class="px-3 py-2 text-left font-semibold text-[#2e5ba8]">{{ t('importer.hr.departments_col_name') }}</th>
+                                <th class="px-3 py-2 text-left font-semibold text-[#2e5ba8]">{{ t('importer.hr.departments_col_parent') }}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -6275,14 +6272,14 @@ onUnmounted(() => {
                           </table>
                         </div>
                         <div v-else-if="!loadingDepartments" class="mt-2 text-sm text-[#7f8d9c]">
-                          Отделы не найдены
+                          {{ t('importer.hr.departments_not_found') }}
                         </div>
                       </div>
                     </section>
                   </div>
 
                   <div class="flex flex-col gap-4">
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Файл</div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.file.header') }}</div>
                     <div
                       class="rounded-2xl p-5 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden transition-all cursor-pointer"
                       :style="{
@@ -6313,10 +6310,10 @@ onUnmounted(() => {
                         </svg>
                       </div>
                       <div class="relative text-[14px] font-semibold tracking-tight text-[#0F1115]">
-                        {{ dropzoneDragOver ? 'Отпустите для загрузки' : (fileName || 'Перетащите файл сюда') }}
+                        {{ dropzoneDragOver ? t('importer.dropzone.drag_over') : (fileName || t('importer.dropzone.no_file')) }}
                       </div>
                       <p class="relative mt-1 text-[11.5px] text-[#5A5E6E]" :title="IMPORT_FILE_PICKER_HELPER_TEXT">
-                        {{ fileName ? 'Нажмите, чтобы заменить файл' : IMPORT_FILE_DROPDOWN_LIMIT_TEXT }}
+                        {{ fileName ? t('importer.dropzone.has_file') : IMPORT_FILE_DROPDOWN_LIMIT_TEXT }}
                       </p>
                       <input ref="fileInputRef" type="file" accept=".xlsx,.xls,.csv" class="hidden" @change="handleFileChange" />
                       <button
@@ -6326,10 +6323,10 @@ onUnmounted(() => {
                         :disabled="!importerPermissionState.canCreateSessions || Boolean(busyAction)"
                         @click.stop="openFilePicker"
                       >
-                        Выбрать файл
+                        {{ t('importer.dropzone.button') }}
                       </button>
                     </div>
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаблон</div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.template.download_header') }}</div>
                     <div class="rounded-2xl p-4 flex items-center gap-3" :style="{ background: domainAccent.bg }">
                       <div class="w-10 h-10 rounded-xl grid place-items-center shrink-0 bg-white" :style="{ color: domainAccent.ink }">
                         <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -6342,7 +6339,7 @@ onUnmounted(() => {
                         <div class="text-[11px] mt-0.5 text-[#5A5E6E]">{{ exampleTemplateDownloadMeta.description }}</div>
                       </div>
                       <B24Button
-                        label="Скачать"
+                        :label="t('importer.template.download_button')"
                         color="air-secondary-accent-2"
                         size="sm"
                         :loading="busyAction === 'example-template'"
@@ -6359,20 +6356,20 @@ onUnmounted(() => {
           <section v-if="currentStep === 2" class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
             <div class="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаг 2</div>
-                <h2 class="mt-1 text-xl font-semibold text-[#314256]">Параметры чтения файла</h2>
+                <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.step.badge', { n: 2 }) }}</div>
+                <h2 class="mt-1 text-xl font-semibold text-[#314256]">{{ t('importer.structure.title') }}</h2>
               </div>
 
               <div class="flex flex-wrap gap-3">
                 <B24Button
-                  label="Назад"
+                  :label="t('importer.step.back')"
                   color="air-primary"
                   size="lg"
                   :disabled="!canGoBack"
                   @click="goBack"
                 />
                 <B24Button
-                  label="Применить и продолжить"
+                  :label="t('importer.structure.apply')"
                   color="air-primary"
                   size="lg"
                   :loading="busyAction === 'structure'"
@@ -6384,7 +6381,7 @@ onUnmounted(() => {
 
             <div class="grid gap-5 lg:grid-cols-[minmax(0,220px)_minmax(0,220px)_minmax(0,1fr)]">
               <div class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                <B24FormField label="Строка заголовков" class="w-full">
+                <B24FormField :label="t('importer.structure.header_row')" class="w-full">
                   <B24InputNumber
                     v-model="headerRowInput"
                     class="w-full"
@@ -6395,7 +6392,7 @@ onUnmounted(() => {
               </div>
 
               <div class="rounded-[18px] border border-[#e5ebf2] bg-white p-4">
-                <B24FormField label="Строка начала данных" class="w-full">
+                <B24FormField :label="t('importer.structure.data_start_row')" class="w-full">
                   <B24InputNumber
                     v-model="dataStartRowInput"
                     class="w-full"
@@ -6407,15 +6404,15 @@ onUnmounted(() => {
 
               <div class="grid gap-3 sm:grid-cols-3">
                 <div class="rounded-[18px] border border-[#e5ebf2] bg-white px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Колонки</div>
+                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.structure.columns') }}</div>
                   <div class="mt-1 text-lg font-semibold text-[#314256]">{{ previewColumnsSource.length || 0 }}</div>
                 </div>
                 <div class="rounded-[18px] border border-[#e5ebf2] bg-white px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Строки данных</div>
+                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.structure.rows') }}</div>
                   <div class="mt-1 text-lg font-semibold text-[#314256]">{{ previewTotalRows || 0 }}</div>
                 </div>
                 <div class="rounded-[18px] border border-[#e5ebf2] bg-white px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Лист</div>
+                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.structure.sheet') }}</div>
                   <div class="mt-1 truncate text-lg font-semibold text-[#314256]">{{ preview?.selected_sheet_name || '—' }}</div>
                 </div>
               </div>
@@ -6425,12 +6422,12 @@ onUnmounted(() => {
               v-if="previewRowLimitExceeded"
               class="mt-5 rounded-[18px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-4 text-[#8f5b18]"
             >
-              <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">Лимит строк на импорт</div>
+              <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">{{ t('importer.structure.row_limit_title') }}</div>
               <div class="mt-2 text-sm font-semibold">
                 {{ previewRowLimitWarning || previewRowLimitError }}
               </div>
               <div class="mt-2 text-sm text-[#9c6a2a]">
-                Будет импортировано: <strong>{{ previewRowsToImport.toLocaleString('ru') }}</strong> из {{ previewTotalRows.toLocaleString('ru') }} строк.
+                {{ t('importer.structure.row_limit_message', { imported: previewRowsToImport.toLocaleString(locale), total: previewTotalRows.toLocaleString(locale) }) }}
               </div>
             </div>
 
@@ -6439,16 +6436,16 @@ onUnmounted(() => {
           <section v-if="currentStep === 3" class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
             <div class="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
-                <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаг 3</div>
-                <h2 class="mt-1 text-xl font-semibold text-[#314256]">Пример файла</h2>
+                <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.step.badge', { n: 3 }) }}</div>
+                <h2 class="mt-1 text-xl font-semibold text-[#314256]">{{ t('importer.preview.title') }}</h2>
               </div>
 
               <div class="flex flex-wrap items-center gap-3">
                 <div class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-1.5 text-sm font-medium text-[#2e6bd9]">
-                  {{ previewTableRows.length }} строк в предпросмотре
+                  {{ t('importer.preview.rows_count', { count: previewTableRows.length }) }}
                 </div>
                 <B24Button
-                  label="Назад"
+                  :label="t('importer.step.back')"
                   color="air-primary"
                   size="lg"
                   :disabled="!canGoBack"
@@ -6468,10 +6465,10 @@ onUnmounted(() => {
               v-if="previewRowLimitExceeded"
               class="mb-5 rounded-[18px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-4 text-[#8f5b18]"
             >
-              <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">Лимит строк на импорт</div>
+              <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">{{ t('importer.preview.row_limit_title') }}</div>
               <div class="mt-2 text-sm font-semibold">{{ previewRowLimitError }}</div>
               <div class="mt-2 text-sm text-[#9c6a2a]">
-                В предпросмотре показаны только первые строки. Всего данных: {{ previewTotalRows }}.
+                {{ t('importer.preview.row_limit_message', { total: previewTotalRows }) }}
               </div>
             </div>
 
@@ -6483,7 +6480,7 @@ onUnmounted(() => {
                 loading-animation="loading"
                 :columns="previewTableColumns"
                 :data="previewTableRows"
-                empty="После загрузки файла здесь появится пример первых строк."
+                :empty="t('importer.preview.empty')"
               />
             </div>
 
@@ -6492,27 +6489,27 @@ onUnmounted(() => {
           <section v-if="currentStep === 4" class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
             <div class="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаг 4</div>
-                <h2 class="mt-1 text-xl font-semibold text-[#314256]">Соответствие полей</h2>
+                <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.step.badge', { n: 4 }) }}</div>
+                <h2 class="mt-1 text-xl font-semibold text-[#314256]">{{ t('importer.mapping.title') }}</h2>
               </div>
 
               <div class="flex flex-wrap gap-3">
                 <B24Button
-                  label="Назад"
+                  :label="t('importer.step.back')"
                   color="air-primary"
                   size="lg"
                   :disabled="!canGoBack"
                   @click="goBack"
                 />
                 <B24Button
-                  label="Заполнить автоматически"
+                  :label="t('importer.mapping.auto_fill')"
                   color="air-secondary-accent-2"
                   size="lg"
                   :disabled="!mappingData"
                   @click="applyCandidateMapping"
                 />
                 <B24Button
-                  label="Сохранить соответствие"
+                  :label="t('importer.mapping.save')"
                   color="air-primary"
                   size="lg"
                   :loading="busyAction === 'mapping'"
@@ -6533,7 +6530,7 @@ onUnmounted(() => {
               v-if="hasPendingMappingChanges"
               class="mb-5 rounded-[16px] border border-[#d7e7ff] bg-[#f4f9ff] px-4 py-3 text-sm text-[#5f7285]"
             >
-              Сохраните соответствие и выбранные значения по умолчанию, чтобы перейти к следующему шагу.
+              {{ t('importer.mapping.pending') }}
             </div>
 
             <section
@@ -6549,14 +6546,14 @@ onUnmounted(() => {
                 >
                   {{ requiredFieldSummary.hasRequiredFields
                     ? (requiredFieldSummary.hasMissingRequired
-                      ? `Минимум без ошибки: ${requiredFieldSummary.mappedRequired} из ${requiredFieldSummary.totalRequired}`
-                      : `Обязательные поля сопоставлены: ${requiredFieldSummary.totalRequired} из ${requiredFieldSummary.totalRequired}`)
-                    : 'Обязательных полей нет' }}
+                      ? t('importer.mapping.required_summary', { mapped: requiredFieldSummary.mappedRequired, total: requiredFieldSummary.totalRequired })
+                      : t('importer.mapping.required_complete', { total: requiredFieldSummary.totalRequired }))
+                    : t('importer.mapping.required_none') }}
                 </span>
                 <span class="text-[#6f8194]">
                   {{ requiredFieldSummary.hasRequiredFields
-                    ? 'На проверке и импорте эти поля нужны в первую очередь.'
-                    : 'Можно продолжать без обязательного минимума.' }}
+                    ? t('importer.mapping.required_info')
+                    : t('importer.mapping.required_no_info') }}
                 </span>
               </div>
 
@@ -6572,7 +6569,7 @@ onUnmounted(() => {
                     ? 'border-[#f2d1ac] bg-white text-[#8a5a24]'
                     : 'border-[#d7e7ff] bg-white text-[#2e6bd9]'"
                 >
-                  {{ requiredFieldMissingIds.has(field.id) ? `Нужно: ${field.title}` : `Готово: ${field.title}` }}
+                  {{ requiredFieldMissingIds.has(field.id) ? t('importer.mapping.required_need', { title: field.title }) : t('importer.mapping.required_done', { title: field.title }) }}
                 </span>
               </div>
             </section>
@@ -6581,23 +6578,23 @@ onUnmounted(() => {
               v-if="showsTaskDefaultResponsible"
               class="mb-5 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
             >
-              <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Исполнитель по умолчанию</div>
+              <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.task_defaults.responsible_title') }}</div>
               <div class="mb-3 text-sm text-[#5f7285]">
-                Если в файле нет колонки `RESPONSIBLE_ID` или в строке значение пустое, для задачи будет использован выбранный пользователь Bitrix24.
+                {{ t('importer.task_defaults.responsible_subtitle') }}
               </div>
               <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr),auto]">
                 <B24Select
                   :model-value="taskDefaultResponsibleId"
                   class="w-full"
                   size="lg"
-                  placeholder="Выберите исполнителя по умолчанию"
+                  :placeholder="t('importer.task_defaults.responsible_placeholder')"
                   :items="taskDefaultUserOptions"
                   @update:model-value="taskDefaultResponsibleId = String($event || '')"
                 />
                 <div class="rounded-[14px] border border-white/70 bg-white/85 px-4 py-3 text-sm text-[#5f7285]">
                   {{ taskDefaultResponsibleId
-                    ? 'Default executor выбран и может заменить пустое значение в строке.'
-                    : 'Если не хотите маппить RESPONSIBLE_ID из файла, выберите исполнителя здесь.' }}
+                    ? t('importer.task_defaults.responsible_hint_set')
+                    : t('importer.task_defaults.responsible_hint_unset') }}
                 </div>
               </div>
             </section>
@@ -6606,23 +6603,23 @@ onUnmounted(() => {
               v-if="showsTaskDefaultCreator"
               class="mb-5 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
             >
-              <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Постановщик по умолчанию</div>
+              <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.task_defaults.creator_title') }}</div>
               <div class="mb-3 text-sm text-[#5f7285]">
-                Если в файле нет колонки `CREATED_BY` или в строке значение пустое, для задачи будет использован выбранный постановщик Bitrix24.
+                {{ t('importer.task_defaults.creator_subtitle') }}
               </div>
               <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr),auto]">
                 <B24Select
                   :model-value="taskDefaultCreatorId"
                   class="w-full"
                   size="lg"
-                  placeholder="Выберите постановщика по умолчанию"
+                  :placeholder="t('importer.task_defaults.creator_placeholder')"
                   :items="taskDefaultUserOptions"
                   @update:model-value="taskDefaultCreatorId = String($event || '')"
                 />
                 <div class="rounded-[14px] border border-white/70 bg-white/85 px-4 py-3 text-sm text-[#5f7285]">
                   {{ taskDefaultCreatorId
-                    ? 'Постановщик по умолчанию выбран и может заменить пустое значение в строке.'
-                    : 'Если не хотите маппить CREATED_BY из файла, выберите постановщика здесь.' }}
+                    ? t('importer.task_defaults.creator_hint_set')
+                    : t('importer.task_defaults.creator_hint_unset') }}
                 </div>
               </div>
             </section>
@@ -6631,23 +6628,23 @@ onUnmounted(() => {
               v-if="showsTaskCommentDefaultAuthor"
               class="mb-5 rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4"
             >
-              <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Пользователь по умолчанию</div>
+              <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.task_defaults.author_title') }}</div>
               <div class="mb-3 text-sm text-[#5f7285]">
-                Если в файле нет колонки `AUTHOR_ID` или в строке значение пустое, комментарий будет отправлен от выбранного пользователя Bitrix24.
+                {{ t('importer.task_defaults.author_subtitle') }}
               </div>
               <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr),auto]">
                 <B24Select
                   :model-value="taskDefaultCommentAuthorId"
                   class="w-full"
                   size="lg"
-                  placeholder="Выберите пользователя по умолчанию"
+                  :placeholder="t('importer.task_defaults.author_placeholder')"
                   :items="taskDefaultUserOptions"
                   @update:model-value="taskDefaultCommentAuthorId = String($event || '')"
                 />
                 <div class="rounded-[14px] border border-white/70 bg-white/85 px-4 py-3 text-sm text-[#5f7285]">
                   {{ taskDefaultCommentAuthorId
-                    ? 'Пользователь по умолчанию выбран и подставится, если AUTHOR_ID пустой.'
-                    : 'Если не хотите маппить AUTHOR_ID из файла, выберите пользователя здесь.' }}
+                    ? t('importer.task_defaults.author_hint_set')
+                    : t('importer.task_defaults.author_hint_unset') }}
                 </div>
               </div>
             </section>
@@ -6662,9 +6659,9 @@ onUnmounted(() => {
               >
                 <div class="mb-3 flex items-start justify-between gap-3">
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Правила сопоставления</div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.alias_rules.title') }}</div>
                     <div class="mt-1 text-sm text-[#5f7285]">
-                      Сохраняйте удачные соответствия заголовков, чтобы автоподбор в следующих импортах срабатывал точнее.
+                      {{ t('importer.alias_rules.subtitle') }}
                     </div>
                   </div>
                   <div class="rounded-full border border-[#d7e7ff] bg-white px-3 py-1 text-xs font-semibold text-[#2e6bd9]">
@@ -6682,7 +6679,7 @@ onUnmounted(() => {
                   </div>
                 </div>
                 <div v-else class="rounded-[14px] border border-dashed border-[#d7e7ff] bg-white/80 px-4 py-3 text-sm text-[#6f8194]">
-                  Пока нет сохранённых правил. Используйте кнопку «Запомнить правило» у нужной строки.
+                  {{ t('importer.alias_rules.empty') }}
                 </div>
               </section>
 
@@ -6696,9 +6693,9 @@ onUnmounted(() => {
               >
                 <div class="mb-3 flex items-start justify-between gap-3">
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Проверка перед запуском</div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.preflight.title') }}</div>
                     <div class="mt-1 text-sm text-[#5f7285]">
-                      Здесь видно, что остановит проверку данных и какие места стоит уточнить заранее.
+                      {{ t('importer.preflight.subtitle') }}
                     </div>
                   </div>
                   <div class="flex flex-wrap gap-2 text-xs font-semibold">
@@ -6706,10 +6703,10 @@ onUnmounted(() => {
                       class="rounded-full px-2.5 py-1"
                       :class="hasBlockingPreflightIssues ? 'bg-[#fff0e0] text-[#a96017]' : 'bg-white text-[#6f8194]'"
                     >
-                      Ошибки: {{ Number(mappingPreflight.blocking_issue_count || 0) }}
+                      {{ t('importer.preflight.errors', { count: Number(mappingPreflight.blocking_issue_count || 0) }) }}
                     </span>
                     <span class="rounded-full bg-white px-2.5 py-1 text-[#2e6bd9]">
-                      Предупреждения: {{ Number(mappingPreflight.warning_count || 0) }}
+                      {{ t('importer.preflight.warnings', { count: Number(mappingPreflight.warning_count || 0) }) }}
                     </span>
                   </div>
                 </div>
@@ -6743,28 +6740,28 @@ onUnmounted(() => {
                       class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
                       @click="toggleTextBlock(makeCollapsibleKey('preflight-issue', `${String(issue.code || 'issue')}:${issueIndex}`))"
                     >
-                      {{ isTextBlockExpanded(makeCollapsibleKey('preflight-issue', `${String(issue.code || 'issue')}:${issueIndex}`)) ? 'Скрыть' : 'Показать полностью' }}
+                      {{ isTextBlockExpanded(makeCollapsibleKey('preflight-issue', `${String(issue.code || 'issue')}:${issueIndex}`)) ? t('importer.preflight.show_less') : t('importer.preflight.show_more') }}
                     </button>
                   </div>
                 </div>
                 <div v-else class="rounded-[14px] border border-[#dcefe1] bg-white/85 px-4 py-3 text-sm text-[#2d7a4b]">
-                  Блокирующих проблем и предупреждений на текущем сопоставлении не найдено.
+                  {{ t('importer.preflight.no_issues') }}
                 </div>
               </section>
             </div>
 
             <div v-if="showsAdvancedImportTools" class="mb-5 grid gap-4 xl:grid-cols-2">
               <section class="rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4">
-                <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Сохранить шаблон</div>
+                <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.template.save_title') }}</div>
                 <div class="flex flex-col gap-3 lg:flex-row">
                   <B24Input
                     v-model="templateNameInput"
                     class="w-full"
                     size="lg"
-                    placeholder="Например, Контакты из Excel"
+                    :placeholder="t('importer.template.save_placeholder')"
                   />
                   <B24Button
-                    label="Сохранить шаблон"
+                    :label="t('importer.template.save_button')"
                     color="air-primary"
                     size="lg"
                     :loading="busyAction === 'template-save'"
@@ -6775,18 +6772,18 @@ onUnmounted(() => {
               </section>
 
               <section class="rounded-[20px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4">
-                <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Применить шаблон</div>
+                <div class="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.template.apply_title') }}</div>
                 <div class="flex flex-col gap-3 lg:flex-row">
                   <B24Select
                     :model-value="selectedTemplateId"
                     class="w-full"
                     size="lg"
-                    placeholder="Выберите шаблон"
+                    :placeholder="t('importer.template.apply_placeholder')"
                     :items="templateItems"
                     @update:model-value="selectedTemplateId = String($event || '')"
                   />
                   <B24Button
-                    label="Применить"
+                    :label="t('importer.template.apply_button')"
                     color="air-secondary-accent-2"
                     size="lg"
                     :loading="busyAction === 'template-apply'"
@@ -6808,7 +6805,7 @@ onUnmounted(() => {
                 @click="valueMappingExpanded = !valueMappingExpanded"
               >
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-sm font-semibold text-[#314256]">Сопоставление значений</span>
+                  <span class="text-sm font-semibold text-[#314256]">{{ t('importer.value_mapping.title') }}</span>
                   <span
                     class="rounded-full px-2.5 py-0.5 text-xs font-medium"
                     :class="valueMappingStatus.hasUnmappedValues
@@ -6816,8 +6813,8 @@ onUnmounted(() => {
                       : 'bg-[#e6f4ea] text-[#2d7a3a]'"
                   >
                     {{ valueMappingStatus.hasUnmappedValues
-                      ? `${valueMappingStatus.unmappedValues} из ${valueMappingStatus.totalValues} не выбрано`
-                      : `Всё готово · ${valueMappingStatus.totalValues} значений` }}
+                      ? t('importer.value_mapping.status_unmapped', { unmapped: valueMappingStatus.unmappedValues, total: valueMappingStatus.totalValues })
+                      : t('importer.value_mapping.status_complete', { total: valueMappingStatus.totalValues }) }}
                   </span>
                 </div>
                 <svg
@@ -6832,8 +6829,8 @@ onUnmounted(() => {
               <!-- Подсказка (всегда видна) -->
               <p class="mt-2 text-xs text-[#6f8194]">
                 {{ valueMappingStatus.hasUnmappedValues
-                  ? 'Система нашла значения из вашего файла, которые нужно привязать к вариантам Bitrix24. Для каждого — выберите соответствующий вариант из списка справа.'
-                  : 'Все значения из файла успешно сопоставлены с вариантами Bitrix24. Можно продолжить.' }}
+                  ? t('importer.value_mapping.subtitle')
+                  : t('importer.value_mapping.subtitle_complete') }}
               </p>
 
               <!-- Сворачиваемый список -->
@@ -6845,26 +6842,26 @@ onUnmounted(() => {
                   :class="!row.selectedTargetValue ? 'border-l-2 border-l-[#ffa05a]' : ''"
                 >
                   <div>
-                    <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Поле Bitrix24</div>
+                    <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.value_mapping.field') }}</div>
                     <div class="mt-1 font-medium text-[#314256]">{{ row.targetFieldTitle }}</div>
                     <div class="mt-0.5 text-xs text-[#9aa9b8]">{{ row.targetFieldId }}</div>
                   </div>
 
                   <div>
-                    <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Значение из файла</div>
+                    <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.value_mapping.source_value') }}</div>
                     <div class="mt-1 font-mono text-sm font-medium text-[#314256]">{{ row.sourceValue }}</div>
-                    <div v-if="!row.selectedTargetValue" class="mt-0.5 text-xs text-[#c07020]">Не сопоставлено — выберите вариант →</div>
-                    <div v-else class="mt-0.5 text-xs text-[#3a8a48]">Сопоставлено</div>
+                    <div v-if="!row.selectedTargetValue" class="mt-0.5 text-xs text-[#c07020]">{{ t('importer.value_mapping.source_unmapped') }}</div>
+                    <div v-else class="mt-0.5 text-xs text-[#3a8a48]">{{ t('importer.value_mapping.source_mapped') }}</div>
                   </div>
 
                   <div>
-                    <div class="mb-2 text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Вариант в Bitrix24</div>
+                    <div class="mb-2 text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.value_mapping.target_value') }}</div>
                     <B24Select
                       :model-value="row.selectedTargetValue || '__none__'"
                       class="w-full"
                       size="md"
-                      placeholder="Выберите вариант..."
-                      :items="[{ value: '__none__', label: '— Не выбрано —' }, ...row.options]"
+                      :placeholder="t('importer.value_mapping.target_placeholder')"
+                      :items="[{ value: '__none__', label: t('importer.value_mapping.target_not_selected') }, ...row.options]"
                       @update:model-value="updateValueMappingSelection(row.targetFieldId, row.sourceValue, $event === '__none__' ? '' : String($event || ''))"
                     />
                   </div>
@@ -6878,7 +6875,7 @@ onUnmounted(() => {
                 v-if="!mappingRows.length && !(busyAction === 'start' || busyAction === 'structure' || busyAction === 'mapping' || busyAction === 'template-apply')"
                 class="px-6 py-10 text-center text-sm text-[#8ea0b2]"
               >
-                После загрузки файла здесь появится список колонок для сопоставления.
+                {{ t('importer.mapping.empty') }}
               </div>
 
               <!-- Загрузка -->
@@ -6886,7 +6883,7 @@ onUnmounted(() => {
                 v-else-if="busyAction === 'start' || busyAction === 'structure' || busyAction === 'mapping' || busyAction === 'template-apply'"
                 class="px-6 py-10 text-center text-sm text-[#8ea0b2]"
               >
-                Загрузка...
+                {{ t('importer.mapping.loading') }}
               </div>
 
               <!-- Таблица с drag-and-drop -->
@@ -6898,13 +6895,13 @@ onUnmounted(() => {
                   <tr class="border-b border-[#dfe5eb] bg-[#f8fafc]">
                     <th class="w-8 px-3 py-3" />
                     <th class="w-[100px] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[#8ea0b2]">
-                      Колонка
+                      {{ t('importer.mapping.col_column') }}
                     </th>
                     <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[#8ea0b2]">
-                      Колонка файла
+                      {{ t('importer.mapping.col_file_column') }}
                     </th>
                     <th class="min-w-[300px] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[#8ea0b2]">
-                      Поле Bitrix24
+                      {{ t('importer.mapping.col_field') }}
                     </th>
                   </tr>
                 </thead>
@@ -6951,11 +6948,11 @@ onUnmounted(() => {
                           :model-value="resolveMappingSelectValue(row.targetFieldId)"
                           class="w-full"
                           size="md"
-                          placeholder="Не импортировать"
+                          :placeholder="t('importer.mapping.field_placeholder')"
                           :items="mappingFieldItems"
                           value-key="value"
                           :filter-fields="['label', 'description']"
-                          :search-input="{ placeholder: 'Поиск полей...' }"
+                          :search-input="{ placeholder: t('importer.mapping.field_search') }"
                           @update:model-value="updateMappingFieldSelection(row, String($event || ''))"
                         />
 
@@ -6965,13 +6962,13 @@ onUnmounted(() => {
                             :model-value="row.columnType || 'auto'"
                             size="xs"
                             :items="[
-                              { value: 'auto', label: 'Авто (по полю Bitrix24)' },
-                              { value: 'string', label: 'Текст' },
-                              { value: 'integer', label: 'Число (целое)' },
-                              { value: 'double', label: 'Число (дробное)' },
-                              { value: 'date', label: 'Дата' },
-                              { value: 'datetime', label: 'Дата и время' },
-                              { value: 'boolean', label: 'Логическое (Да/Нет)' },
+                              { value: 'auto', label: t('importer.mapping.type_auto') },
+                              { value: 'string', label: t('importer.mapping.type_string') },
+                              { value: 'integer', label: t('importer.mapping.type_integer') },
+                              { value: 'double', label: t('importer.mapping.type_double') },
+                              { value: 'date', label: t('importer.mapping.type_date') },
+                              { value: 'datetime', label: t('importer.mapping.type_datetime') },
+                              { value: 'boolean', label: t('importer.mapping.type_boolean') },
                             ]"
                             @update:model-value="row.columnType = $event === 'auto' ? '' : String($event || '')"
                           />
@@ -6985,28 +6982,28 @@ onUnmounted(() => {
                             v-if="showsAdvancedImportTools && row.autoMatchType"
                             class="rounded-full border border-[#d9e6f5] bg-[#f6f9fd] px-2.5 py-1 text-xs font-medium text-[#58708b]"
                           >
-                            {{ row.autoMatchLabel || 'Автоподбор' }}
+                            {{ row.autoMatchLabel || t('importer.mapping.auto_match') }}
                           </span>
                           <span class="rounded-full border border-[#d7e7ff] bg-[#f4f9ff] px-2.5 py-1 text-xs font-medium text-[#2e6bd9]">
-                            {{ row.targetFieldTypeLabel || 'Поле' }}
+                            {{ row.targetFieldTypeLabel || t('importer.mapping.field_fallback') }}
                           </span>
                           <span
                             v-if="row.targetFieldRequired"
                             class="rounded-full border border-[#f2d1ac] bg-[#fff8ef] px-2.5 py-1 text-xs font-medium text-[#9a6432]"
                           >
-                            Обязательное
+                            {{ t('importer.mapping.required') }}
                           </span>
                           <span
                             v-if="row.targetFieldIsCustom"
                             class="rounded-full border border-[#dcefe1] bg-[#f1fbf4] px-2.5 py-1 text-xs font-medium text-[#2d7a4b]"
                           >
-                            Кастомное
+                            {{ t('importer.mapping.custom') }}
                           </span>
                           <span
                             v-if="row.targetFieldIsMultiple"
                             class="rounded-full border border-[#efe3cf] bg-[#fff8ef] px-2.5 py-1 text-xs font-medium text-[#9a6432]"
                           >
-                            Множественное
+                            {{ t('importer.mapping.multiple') }}
                           </span>
                           <span
                             v-if="showsAdvancedImportTools && row.autoMatchReasonLabel"
@@ -7033,7 +7030,7 @@ onUnmounted(() => {
                           class="mt-3 rounded-[14px] border border-[#dce7f7] bg-white/85 px-3 py-3"
                         >
                           <div class="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#8ea0b2]">
-                            Возможные поля
+                            {{ t('importer.mapping.candidate_fields') }}
                           </div>
                           <div class="flex flex-wrap gap-2">
                             <button
@@ -7059,7 +7056,7 @@ onUnmounted(() => {
                           class="mt-3 flex flex-wrap items-center gap-2"
                         >
                           <B24Button
-                            :label="hasImportAliasRule(row) ? 'Правило сохранено' : 'Запомнить правило'"
+                            :label="hasImportAliasRule(row) ? t('importer.alias_rules.saved') : t('importer.alias_rules.save_button')"
                             color="air-secondary-accent-2"
                             size="sm"
                             :loading="busyAction === 'alias-rule'"
@@ -7067,7 +7064,7 @@ onUnmounted(() => {
                             @click="saveImportAliasRule(row)"
                           />
                           <span v-if="hasImportAliasRule(row)" class="text-xs text-[#6f8194]">
-                            Это соответствие уже будет учитываться при следующем автоподборе.
+                            {{ t('importer.alias_rules.saved_hint') }}
                           </span>
                         </div>
                       </div>
@@ -7082,13 +7079,13 @@ onUnmounted(() => {
             <section class="rounded-[24px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-5">
               <div class="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаг 5</div>
-                  <h2 class="mt-1 text-xl font-semibold text-[#314256]">Обработка дублей</h2>
+                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.step.badge', { n: 5 }) }}</div>
+                  <h2 class="mt-1 text-xl font-semibold text-[#314256]">{{ t('importer.step.s5_title') }}</h2>
                 </div>
 
                 <div class="flex flex-wrap gap-3">
                   <B24Button
-                    label="Назад"
+                    :label="t('importer.step.back')"
                     color="air-primary"
                     size="lg"
                     :disabled="!canGoBack"
@@ -7096,7 +7093,7 @@ onUnmounted(() => {
                   />
                   <B24Button
                     v-if="isDedupApplicable"
-                    label="Пропустить шаг"
+                    :label="t('importer.dedup.skip')"
                     color="air-tertiary"
                     size="lg"
                     :disabled="['dedup', 'validation'].includes(String(busyAction || ''))"
@@ -7104,7 +7101,7 @@ onUnmounted(() => {
                   />
                   <B24Button
                     v-if="isDedupApplicable"
-                    label="Сохранить правила дублей"
+                    :label="t('importer.dedup.save')"
                     color="air-secondary-accent-2"
                     size="lg"
                     :loading="busyAction === 'dedup'"
@@ -7113,7 +7110,7 @@ onUnmounted(() => {
                   />
                   <B24Button
                     v-else
-                    label="Проверить данные"
+                    :label="t('importer.dedup.validate')"
                     color="air-primary"
                     size="lg"
                     :loading="busyAction === 'validation'"
@@ -7133,7 +7130,7 @@ onUnmounted(() => {
                     <div class="mt-1 text-sm text-[#5f7285]">{{ dedupProgressDescription }}</div>
                   </div>
                   <div class="shrink-0 rounded-full border border-[#d7e7ff] bg-white px-3 py-1 text-xs font-semibold text-[#2e6bd9]">
-                    {{ preview?.total_rows || session?.total_rows || 0 }} строк
+                    {{ t('importer.dedup.rows_count', { count: preview?.total_rows || session?.total_rows || 0 }) }}
                   </div>
                 </div>
                 <div class="mt-3 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
@@ -7147,10 +7144,10 @@ onUnmounted(() => {
                 class="mb-5 rounded-[16px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-3 text-sm text-[#8f5b18]"
               >
                 <div class="font-semibold text-[#a96017]">
-                  Перед проверкой нужно сопоставить значений: {{ unmappedValueSummary.totalValues }}
+                  {{ t('importer.dedup.unmapped_warning', { count: unmappedValueSummary.totalValues }) }}
                 </div>
                 <div class="mt-1 text-xs text-[#a9783d]">
-                  Вернитесь к шагу «Соответствие полей» и заполните соответствие значений для отмеченных полей.
+                  {{ t('importer.dedup.unmapped_hint') }}
                 </div>
                 <div class="mt-3 flex flex-wrap gap-2">
                   <span
@@ -7170,9 +7167,9 @@ onUnmounted(() => {
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                   </div>
                   <div>
-                    <div class="text-sm font-semibold text-[#314256]">Дедупликация не применяется</div>
+                    <div class="text-sm font-semibold text-[#314256]">{{ t('importer.dedup.not_applicable_title') }}</div>
                     <div class="mt-1 text-sm text-[#6f8194]">
-                      Для данного типа импорта ({{ currentScenarioSummary.selectedLabel }}) поиск дублей не поддерживается — каждая строка файла обрабатывается независимо. Нажмите «Проверить данные», чтобы перейти дальше.
+                      {{ t('importer.dedup.not_applicable_message', { label: currentScenarioSummary.selectedLabel }) }}
                     </div>
                   </div>
                 </div>
@@ -7185,10 +7182,10 @@ onUnmounted(() => {
                   class="mb-5 rounded-[16px] border border-[#ffe1c7] bg-[#fff7ef] px-4 py-3 text-sm text-[#8f5b18]"
                 >
                   <div class="font-semibold text-[#a96017]">
-                    Перед проверкой нужно сопоставить значений: {{ unmappedValueSummary.totalValues }}
+                    {{ t('importer.dedup.unmapped_warning', { count: unmappedValueSummary.totalValues }) }}
                   </div>
                   <div class="mt-1 text-xs text-[#a9783d]">
-                    Пока это не сделано, шаг проверки недоступен.
+                    {{ t('importer.dedup.unmapped_hint_blocked') }}
                   </div>
                   <div class="mt-3 flex flex-wrap gap-2">
                     <span
@@ -7203,7 +7200,7 @@ onUnmounted(() => {
 
                 <div v-if="isLinkedImportEntityType(entityType)" class="space-y-4">
                   <div class="text-sm text-[#5f7285]">
-                    Для связанного импорта правила дублей настраиваются отдельно по каждой сущности. Например, компанию можно обновлять по названию, а контакт создавать заново или спрашивать решение отдельно.
+                    {{ t('importer.dedup.linked_intro') }}
                   </div>
 
                   <div
@@ -7212,7 +7209,7 @@ onUnmounted(() => {
                     class="rounded-[18px] border border-[#e5ebf2] bg-white px-4 py-4"
                   >
                     <div class="mb-3">
-                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Правила для сущности</div>
+                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.dedup.entity_rules') }}</div>
                       <div class="mt-1 text-base font-semibold text-[#314256]">{{ group.label }}</div>
                     </div>
 
@@ -7226,9 +7223,9 @@ onUnmounted(() => {
                       />
 
                       <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                        <div class="font-medium text-[#314256]">Ключи поиска дубля</div>
+                        <div class="font-medium text-[#314256]">{{ t('importer.dedup.keys_title') }}</div>
                         <div class="mt-1 text-xs text-[#7f92a7]">
-                          Используются только поля {{ group.label.toLowerCase() }} из текущего маппинга.
+                          {{ t('importer.dedup.linked_keys_hint', { label: group.label.toLowerCase() }) }}
                         </div>
 
                         <div v-if="(linkedDedupFieldOptions[group.id] || []).length" class="mt-3 flex flex-wrap gap-3">
@@ -7248,14 +7245,14 @@ onUnmounted(() => {
                         </div>
 
                         <div v-else class="mt-3 text-sm text-[#7f92a7]">
-                          Сначала сопоставьте поля {{ group.label.toLowerCase() }} на шаге маппинга.
+                          {{ t('importer.dedup.linked_keys_empty', { label: group.label.toLowerCase() }) }}
                         </div>
 
                         <div
                           v-if="(linkedDedupSettings[group.id]?.strategy || 'create') !== 'create' && (linkedDedupSettings[group.id]?.fields || []).length >= 2"
                           class="mt-4 flex items-center gap-3"
                         >
-                          <span class="text-xs text-[#7f92a7]">Режим совпадения:</span>
+                          <span class="text-xs text-[#7f92a7]">{{ t('importer.dedup.match_mode') }}</span>
                           <div class="flex gap-1 rounded-[10px] border border-[#e5ebf2] bg-[#f4f7fa] p-1">
                             <button
                               type="button"
@@ -7263,7 +7260,7 @@ onUnmounted(() => {
                               :class="(linkedDedupSettings[group.id]?.condition || 'any') === 'any' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
                               @click="updateLinkedDedupCondition(group.id, 'any')"
                             >
-                              Любое поле (OR)
+                              {{ t('importer.dedup.match_any') }}
                             </button>
                             <button
                               type="button"
@@ -7271,7 +7268,7 @@ onUnmounted(() => {
                               :class="(linkedDedupSettings[group.id]?.condition || 'any') === 'all' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
                               @click="updateLinkedDedupCondition(group.id, 'all')"
                             >
-                              Все поля (AND)
+                              {{ t('importer.dedup.match_all') }}
                             </button>
                           </div>
                         </div>
@@ -7280,7 +7277,7 @@ onUnmounted(() => {
                           v-if="(linkedDedupSettings[group.id]?.strategy || 'create') !== 'create' && (linkedDedupFieldOptions[group.id] || []).length && !(linkedDedupSettings[group.id]?.fields || []).length"
                           class="mt-3 rounded-[10px] border border-[#ffd5b3] bg-[#fff7ef] px-3 py-2 text-xs text-[#9a5a10]"
                         >
-                          Выберите хотя бы один ключ поиска для сущности «{{ group.label }}».
+                          {{ t('importer.dedup.linked_keys_required', { label: group.label }) }}
                         </div>
                       </div>
                     </div>
@@ -7289,7 +7286,7 @@ onUnmounted(() => {
 
                 <div v-else-if="isSimpleImportMode" class="space-y-4">
                   <div class="text-sm text-[#5f7285]">
-                    В простом режиме дубли настраиваются без дополнительных опций: выбираете действие, а ключи поиска берутся автоматически из уже сопоставленных полей.
+                    {{ t('importer.dedup.simple_intro') }}
                   </div>
 
                   <div class="grid gap-4 lg:grid-cols-[280px,1fr]">
@@ -7302,9 +7299,9 @@ onUnmounted(() => {
                     />
 
                     <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                      <div class="font-medium text-[#314256]">Проверка дублей</div>
+                      <div class="font-medium text-[#314256]">{{ t('importer.dedup.simple_title') }}</div>
                       <div class="mt-1 text-xs text-[#7f92a7]">
-                        Простая проверка использует только базовые поля из маппинга: Email, Телефон и Название.
+                        {{ t('importer.dedup.simple_hint') }}
                       </div>
 
                       <div
@@ -7324,21 +7321,21 @@ onUnmounted(() => {
                         v-else-if="simpleDedupPreset.available"
                         class="mt-3 rounded-[10px] border border-[#d7e7ff] bg-[#f4f9ff] px-3 py-2 text-xs text-[#5c7592]"
                       >
-                        Если хотите искать дубли, выберите действие «Обновлять» или «Пропускать дубль».
+                        {{ t('importer.dedup.simple_choose') }}
                       </div>
 
                       <div
                         v-else
                         class="mt-3 rounded-[10px] border border-[#ffd5b3] bg-[#fff7ef] px-3 py-2 text-xs text-[#9a5a10]"
                       >
-                        Чтобы искать дубли в простом режиме, сопоставьте хотя бы одно поле EMAIL, PHONE или TITLE.
+                        {{ t('importer.dedup.simple_no_fields') }}
                       </div>
 
                       <div
                         v-if="dedupStrategy !== 'create' && simpleDedupFieldLabels.length"
                         class="mt-3 text-xs text-[#7f92a7]"
                       >
-                        Совпадение ищется по любому из этих ключей. Для сложных сценариев переключитесь в расширенный режим.
+                        {{ t('importer.dedup.simple_match_hint') }}
                       </div>
                     </div>
                   </div>
@@ -7346,7 +7343,7 @@ onUnmounted(() => {
 
                 <template v-else>
                   <div class="mb-5 text-sm text-[#5f7285]">
-                    Отдельно задайте, как искать совпадения и что делать с найденными дублями, чтобы шаг соответствия полей оставался чистым и понятным.
+                    {{ t('importer.dedup.advanced_intro') }}
                   </div>
 
                   <div class="grid gap-4 lg:grid-cols-[280px,1fr]">
@@ -7359,9 +7356,9 @@ onUnmounted(() => {
                     />
 
                     <div class="rounded-[16px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                      <div class="font-medium text-[#314256]">Ключи поиска дубля</div>
+                      <div class="font-medium text-[#314256]">{{ t('importer.dedup.keys_title') }}</div>
                       <div class="mt-1 text-xs text-[#7f92a7]">
-                        Используются сопоставленные поля текущего импорта. Если выбрано несколько ключей, дубль ищется по их совместному совпадению.
+                        {{ t('importer.dedup.advanced_keys_hint') }}
                       </div>
 
                       <div v-if="dedupFieldOptions.length" class="mt-3 flex flex-wrap gap-3">
@@ -7381,14 +7378,14 @@ onUnmounted(() => {
                       </div>
 
                       <div v-else class="mt-3 text-sm text-[#7f92a7]">
-                        Сначала сопоставьте одно из полей EMAIL, PHONE или TITLE на шаге маппинга.
+                        {{ t('importer.dedup.advanced_keys_empty') }}
                       </div>
 
                       <div
                         v-if="dedupStrategy !== 'create' && dedupFields.length >= 2"
                         class="mt-4 flex items-center gap-3"
                       >
-                        <span class="text-xs text-[#7f92a7]">Режим совпадения:</span>
+                        <span class="text-xs text-[#7f92a7]">{{ t('importer.dedup.match_mode') }}</span>
                         <div class="flex gap-1 rounded-[10px] border border-[#e5ebf2] bg-[#f4f7fa] p-1">
                           <button
                             type="button"
@@ -7396,7 +7393,7 @@ onUnmounted(() => {
                             :class="dedupCondition === 'any' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
                             @click="dedupCondition = 'any'"
                           >
-                            Любое поле (OR)
+                            {{ t('importer.dedup.match_any') }}
                           </button>
                           <button
                             type="button"
@@ -7404,11 +7401,11 @@ onUnmounted(() => {
                             :class="dedupCondition === 'all' ? 'bg-white text-[#2e6bd9] shadow-sm' : 'text-[#7f92a7] hover:text-[#314256]'"
                             @click="dedupCondition = 'all'"
                           >
-                            Все поля (AND)
+                            {{ t('importer.dedup.match_all') }}
                           </button>
                         </div>
                         <span class="text-xs text-[#7f92a7]">
-                          {{ dedupCondition === 'all' ? 'Дубль найден только если совпали все выбранные поля' : 'Дубль найден если совпало хотя бы одно поле' }}
+                          {{ dedupCondition === 'all' ? t('importer.dedup.match_all_hint') : t('importer.dedup.match_any_hint') }}
                         </span>
                       </div>
 
@@ -7416,7 +7413,7 @@ onUnmounted(() => {
                         v-if="dedupStrategy !== 'create' && dedupFieldOptions.length && dedupFields.length === 0"
                         class="mt-3 rounded-[10px] border border-[#ffd5b3] bg-[#fff7ef] px-3 py-2 text-xs text-[#9a5a10]"
                       >
-                        Выберите хотя бы один ключ поиска — без него дубли не будут найдены и все строки будут созданы заново.
+                        {{ t('importer.dedup.advanced_keys_required') }}
                       </div>
                     </div>
                   </div>
@@ -7430,20 +7427,20 @@ onUnmounted(() => {
             <section class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-4 md:p-5">
               <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаг 6</div>
-                  <h2 class="mt-1 text-lg font-semibold text-[#314256]">Тестовый импорт и запуск</h2>
+                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.step.badge', { n: 6 }) }}</div>
+                  <h2 class="mt-1 text-lg font-semibold text-[#314256]">{{ t('importer.dryrun.step6_title') }}</h2>
                 </div>
 
                 <div class="flex flex-wrap gap-3">
                   <B24Button
-                    label="Назад"
+                    :label="t('importer.step.back')"
                     color="air-primary"
                     size="lg"
                     :disabled="!canGoBack"
                     @click="goBack"
                   />
                   <B24Button
-                    label="Тестовый импорт"
+                    :label="t('importer.dryrun.run_test')"
                     color="air-secondary-accent-2"
                     size="lg"
                     :loading="busyAction === 'sample-preview'"
@@ -7451,7 +7448,7 @@ onUnmounted(() => {
                     @click="runSamplePreview"
                   />
                   <B24Button
-                    label="Запустить импорт"
+                    :label="t('importer.dryrun.run_import')"
                     color="air-primary"
                     size="lg"
                     :loading="busyAction === 'run'"
@@ -7460,7 +7457,7 @@ onUnmounted(() => {
                   />
                   <B24Button
                     v-if="busyAction === 'sample-preview' || cancelRequested"
-                    label="Остановить тестовый импорт"
+                    :label="t('importer.dryrun.stop_test')"
                     color="air-tertiary"
                     size="lg"
                     :loading="cancelRequested"
@@ -7469,7 +7466,7 @@ onUnmounted(() => {
                   />
                   <B24Button
                     v-if="busyAction === 'run' || cancelRequested"
-                    label="Остановить импорт"
+                    :label="t('importer.common.stop_import')"
                     color="air-tertiary"
                     size="lg"
                     :loading="cancelRequested"
@@ -7508,9 +7505,9 @@ onUnmounted(() => {
                   />
                 </div>
                 <div class="flex flex-wrap gap-4 text-sm text-[#5f7285]">
-                  <span>Обработано: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
-                  <span>{{ showsSessionProgress ? 'Успешно' : 'К записи' }}: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
-                  <span>{{ showsSessionProgress ? 'Ошибки' : 'Пропущено' }}: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
+                  <span>{{ t('importer.progress.processed') }}: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
+                  <span>{{ showsSessionProgress ? t('importer.progress.successful') : t('importer.progress.to_record') }}: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
+                  <span>{{ showsSessionProgress ? t('importer.progress.errors') : t('importer.progress.skipped') }}: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
                 </div>
                 <div v-if="showsSessionProgress" class="mt-4 grid gap-3 md:grid-cols-2">
                   <div
@@ -7533,9 +7530,9 @@ onUnmounted(() => {
                 >
                   <span class="mt-0.5 text-base">⏸</span>
                   <div>
-                    <div class="font-semibold">Пауза: ожидаем сброса лимита Bitrix24</div>
+                    <div class="font-semibold">{{ t('importer.progress.pause_title') }}</div>
                     <div class="mt-0.5 text-[#b38a00]">
-                      Импорт автоматически продолжится через ~{{ session.summary.import_progress.pause_info.wait_seconds }} сек.
+                      {{ t('importer.progress.pause_description', { seconds: session.summary.import_progress.pause_info.wait_seconds }) }}
                     </div>
                   </div>
                 </div>
@@ -7551,7 +7548,7 @@ onUnmounted(() => {
                   {{ stepSixStatusLabel }}
                 </div>
                 <div class="text-sm text-[#6f8194]">
-                  {{ importExecutionStage === 'duplicate-decisions' ? 'Решения по дублям перед импортом' : (dryRunData ? 'Тестовый импорт' : 'Проверка данных') }}
+                  {{ importExecutionStage === 'duplicate-decisions' ? t('importer.dryrun.stage_decisions') : (dryRunData ? t('importer.dryrun.stage_test') : t('importer.dryrun.stage_validation')) }}
                 </div>
               </div>
 
@@ -7570,9 +7567,9 @@ onUnmounted(() => {
                 v-if="dryRunData && importExecutionStage !== 'duplicate-decisions'"
                 class="mb-4 rounded-[18px] border border-[#d7e7ff] bg-[#f8fbff] px-4 py-4 text-sm text-[#5f7285]"
               >
-                <div class="font-semibold text-[#314256]">Тестовый импорт проверяет весь файл</div>
+                <div class="font-semibold text-[#314256]">{{ t('importer.dryrun.checks_all_title') }}</div>
                 <div class="mt-1">
-                  После проверки можно выбрать решения по дублям и отдельно запустить реальный импорт.
+                  {{ t('importer.dryrun.checks_all_desc') }}
                 </div>
               </div>
 
@@ -7582,21 +7579,21 @@ onUnmounted(() => {
               >
                 <div class="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Решения перед импортом</div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.dryrun.decisions_title') }}</div>
                     <div class="mt-1 text-sm text-[#5f7285]">
-                      Тестовый импорт завершён. Выберите действие для каждого найденного дубля перед реальным импортом.
+                      {{ t('importer.dryrun.decisions_desc') }}
                     </div>
                     <div
                       v-if="hasUnresolvedPendingDedupDecisions"
                       class="mt-2 text-xs font-semibold text-[#c24b53]"
                     >
-                      Импорт не начнётся, пока решение не выбрано для всех найденных дублей.
+                      {{ t('importer.dryrun.decisions_blocked') }}
                     </div>
                     <div
                       v-else
                       class="mt-2 text-xs font-semibold text-[#1a7f3c]"
                     >
-                      Все решения выбраны. Теперь можно запускать импорт.
+                      {{ t('importer.dryrun.decisions_ready') }}
                     </div>
                   </div>
                   <div class="flex flex-wrap gap-2 text-xs">
@@ -7605,21 +7602,21 @@ onUnmounted(() => {
                       class="rounded-full border border-[#d7e7ff] bg-white px-3 py-1.5 font-medium text-[#2e6bd9] transition hover:bg-[#edf5ff]"
                       @click="applyBulkPerRowDedupDecision('create')"
                     >
-                      Всё создать
+                      {{ t('importer.dryrun.decisions_all_create') }}
                     </button>
                     <button
                       type="button"
                       class="rounded-full border border-[#d4edda] bg-white px-3 py-1.5 font-medium text-[#1a7f3c] transition hover:bg-[#edf7f0]"
                       @click="applyBulkPerRowDedupDecision('update')"
                     >
-                      Всё обновить
+                      {{ t('importer.dryrun.decisions_all_update') }}
                     </button>
                     <button
                       type="button"
                       class="rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 font-medium text-[#6b7280] transition hover:bg-[#f3f4f6]"
                       @click="applyBulkPerRowDedupDecision('skip')"
                       >
-                        Всё пропустить
+                        {{ t('importer.dryrun.decisions_all_skip') }}
                       </button>
                   </div>
                 </div>
@@ -7628,10 +7625,10 @@ onUnmounted(() => {
                   <table class="w-full text-sm">
                     <thead>
                       <tr class="border-b border-[#e8eef5] bg-[#f5f8fc]">
-                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Строка</th>
-                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">ID дубля</th>
-                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Совпадение по</th>
-                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">Действие</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">{{ t('importer.dryrun.col_row') }}</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">{{ t('importer.dryrun.col_dup_id') }}</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">{{ t('importer.dryrun.col_match') }}</th>
+                        <th class="px-4 py-2.5 text-left font-semibold text-[#5f7285]">{{ t('importer.dryrun.col_action') }}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -7655,7 +7652,7 @@ onUnmounted(() => {
                                 : 'border-[#d9e2ec] bg-white text-[#516478]'"
                               @click="perRowDedupDecisions[String(row.row_number)] = 'create'"
                             >
-                              Создать
+                              {{ t('importer.common.create') }}
                             </button>
                             <button
                               type="button"
@@ -7665,7 +7662,7 @@ onUnmounted(() => {
                                 : 'border-[#d9e2ec] bg-white text-[#516478]'"
                               @click="perRowDedupDecisions[String(row.row_number)] = 'update'"
                             >
-                              Обновить
+                              {{ t('importer.common.update') }}
                             </button>
                             <button
                               type="button"
@@ -7675,7 +7672,7 @@ onUnmounted(() => {
                                 : 'border-[#d9e2ec] bg-white text-[#516478]'"
                               @click="perRowDedupDecisions[String(row.row_number)] = 'skip'"
                             >
-                              Пропустить
+                              {{ t('importer.common.skip') }}
                             </button>
                           </div>
                           <div v-else class="space-y-3">
@@ -7699,7 +7696,7 @@ onUnmounted(() => {
                                     : 'border-[#d9e2ec] bg-white text-[#516478]'"
                                   @click="setPerRowDedupDecision(String(row.row_number), entityId, 'create')"
                                 >
-                                  Создать
+                                  {{ t('importer.common.create') }}
                                 </button>
                                 <button
                                   type="button"
@@ -7709,7 +7706,7 @@ onUnmounted(() => {
                                     : 'border-[#d9e2ec] bg-white text-[#516478]'"
                                   @click="setPerRowDedupDecision(String(row.row_number), entityId, 'update')"
                                 >
-                                  Обновить
+                                  {{ t('importer.common.update') }}
                                 </button>
                                 <button
                                   type="button"
@@ -7719,7 +7716,7 @@ onUnmounted(() => {
                                     : 'border-[#d9e2ec] bg-white text-[#516478]'"
                                   @click="setPerRowDedupDecision(String(row.row_number), entityId, 'skip')"
                                 >
-                                  Пропустить
+                                  {{ t('importer.common.skip') }}
                                 </button>
                               </div>
                             </div>
@@ -7737,7 +7734,7 @@ onUnmounted(() => {
               >
                 <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">Неполный поиск дублей</div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">{{ t('importer.dryrun.weakening_title') }}</div>
                     <div class="mt-1 text-sm font-semibold">{{ dryRunDedupWeakeningNotice.title }}</div>
                     <div class="mt-1 whitespace-pre-wrap break-words text-sm text-[#9c6a2a]">
                       {{ getTextBlockDisplayValue(makeCollapsibleKey('dry-run-dedup', 'description'), dryRunDedupWeakeningNotice.description) }}
@@ -7748,7 +7745,7 @@ onUnmounted(() => {
                       class="mt-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
                       @click="toggleTextBlock(makeCollapsibleKey('dry-run-dedup', 'description'))"
                     >
-                      {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-dedup', 'description')) ? 'Скрыть' : 'Показать полностью' }}
+                      {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-dedup', 'description')) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                     </button>
                   </div>
                   <div class="rounded-full border border-[#f3c995] bg-white px-3 py-1 text-sm font-semibold text-[#a96017]">
@@ -7757,7 +7754,7 @@ onUnmounted(() => {
                 </div>
                 <div class="mt-3 grid gap-2 text-sm text-[#8f5b18] md:grid-cols-2">
                   <div class="min-w-0">
-                    <span>Поля не заполнены: </span>
+                    <span>{{ t('importer.dryrun.weakening_fields') }} </span>
                     <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('dry-run-dedup', 'fields'), dryRunDedupWeakeningNotice.fieldsLabel) }}</span>
                     <button
                       v-if="isTextCollapsible(dryRunDedupWeakeningNotice.fieldsLabel)"
@@ -7765,11 +7762,11 @@ onUnmounted(() => {
                       class="ml-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
                       @click="toggleTextBlock(makeCollapsibleKey('dry-run-dedup', 'fields'))"
                     >
-                      {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-dedup', 'fields')) ? 'Скрыть' : 'Показать полностью' }}
+                      {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-dedup', 'fields')) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                     </button>
                   </div>
                   <div class="min-w-0">
-                    <span>Строки риска: </span>
+                    <span>{{ t('importer.dryrun.weakening_rows') }} </span>
                     <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('dry-run-dedup', 'rows'), dryRunDedupWeakeningNotice.rowsLabel) }}</span>
                     <button
                       v-if="isTextCollapsible(dryRunDedupWeakeningNotice.rowsLabel)"
@@ -7777,7 +7774,7 @@ onUnmounted(() => {
                       class="ml-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
                       @click="toggleTextBlock(makeCollapsibleKey('dry-run-dedup', 'rows'))"
                     >
-                      {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-dedup', 'rows')) ? 'Скрыть' : 'Показать полностью' }}
+                      {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-dedup', 'rows')) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                     </button>
                   </div>
                 </div>
@@ -7787,7 +7784,7 @@ onUnmounted(() => {
                     class="inline-flex items-center rounded-full border border-[#f2d1ac] bg-white px-3 py-2 text-sm font-medium text-[#8a5a24] transition hover:border-[#e8bc86] hover:bg-[#fffaf4]"
                     @click="toggleDryRunDedupRiskOnly"
                   >
-                    {{ activeDryRunDedupRiskOnly ? 'Сбросить фильтр' : 'Показать только строки риска' }}
+                    {{ activeDryRunDedupRiskOnly ? t('importer.dryrun.filter_risk_reset') : t('importer.dryrun.filter_risk_only') }}
                   </button>
                 </div>
               </div>
@@ -7802,8 +7799,8 @@ onUnmounted(() => {
                   :columns="dryRunTableColumns"
                   :data="paginatedDryRunRows"
                   :empty="activeDryRunDedupRiskOnly
-                    ? 'Строки с риском неполного поиска дублей не найдены.'
-                    : 'После тестового импорта здесь появится предварительный отчет по строкам.'"
+                    ? t('importer.dryrun.risk_empty')
+                    : t('importer.dryrun.preview_empty')"
                 >
                   <template #rowNumber-cell="{ row }">
                     <div class="py-1 font-medium text-[#314256]">
@@ -7867,10 +7864,10 @@ onUnmounted(() => {
                           <div class="min-w-0 flex-1">
                             <div v-if="hasExecutionRowHeading(row.original)" class="mb-2">
                               <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                                {{ row.original.entityLabel || 'Запись' }}
+                                {{ row.original.entityLabel || t('importer.common.record') }}
                               </div>
                               <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
-                                {{ row.original.title || 'Без названия' }}
+                                {{ row.original.title || t('importer.common.untitled') }}
                               </div>
                             </div>
                             <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
@@ -7882,7 +7879,7 @@ onUnmounted(() => {
                               class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
                               @click="toggleTextBlock(makeCollapsibleKey('dry-run-row', row.original.key))"
                             >
-                              {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                              {{ isTextBlockExpanded(makeCollapsibleKey('dry-run-row', row.original.key)) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                             </button>
                           </div>
                           <div
@@ -7902,11 +7899,11 @@ onUnmounted(() => {
                 >
                   <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div class="text-sm text-[#5f7285]">
-                      Показаны строки <span class="font-semibold text-[#314256]">{{ dryRunPageRangeStart }}-{{ dryRunPageRangeEnd }}</span>
-                      из <span class="font-semibold text-[#314256]">{{ filteredDryRunRows.length }}</span>.
+                      {{ t('importer.common.pager_shown') }} <span class="font-semibold text-[#314256]">{{ dryRunPageRangeStart }}-{{ dryRunPageRangeEnd }}</span>
+                      {{ t('importer.common.pager_of') }} <span class="font-semibold text-[#314256]">{{ filteredDryRunRows.length }}</span>.
                     </div>
                     <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                      Страница {{ dryRunPage }} из {{ dryRunPageCount }}
+                      {{ t('importer.common.pager_page', { page: dryRunPage, pages: dryRunPageCount }) }}
                     </div>
                   </div>
 
@@ -7917,7 +7914,7 @@ onUnmounted(() => {
                       :disabled="dryRunPage <= 1"
                       @click="setDryRunPage(dryRunPage - 1)"
                     >
-                      Назад
+                      {{ t('importer.common.back') }}
                     </button>
 
                     <button
@@ -7942,7 +7939,7 @@ onUnmounted(() => {
                       :disabled="dryRunPage >= dryRunPageCount"
                       @click="setDryRunPage(dryRunPage + 1)"
                     >
-                      Далее
+                      {{ t('importer.common.next') }}
                     </button>
                   </div>
                 </div>
@@ -7954,7 +7951,7 @@ onUnmounted(() => {
                   loading-animation="loading"
                   :columns="validationTableColumns"
                   :data="validationIssueRows"
-                  empty="Ошибок не найдено. Можно запускать тестовый импорт."
+                  :empty="t('importer.dryrun.validation_empty')"
                 >
                   <template #message-cell="{ row }">
                     <div class="py-1">
@@ -7967,7 +7964,7 @@ onUnmounted(() => {
                         class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
                         @click="toggleTextBlock(makeCollapsibleKey('validation-message', row.original.key))"
                       >
-                        {{ isTextBlockExpanded(makeCollapsibleKey('validation-message', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                        {{ isTextBlockExpanded(makeCollapsibleKey('validation-message', row.original.key)) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                       </button>
                     </div>
                   </template>
@@ -7982,7 +7979,7 @@ onUnmounted(() => {
                         class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
                         @click="toggleTextBlock(makeCollapsibleKey('validation-value', row.original.key))"
                       >
-                        {{ isTextBlockExpanded(makeCollapsibleKey('validation-value', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                        {{ isTextBlockExpanded(makeCollapsibleKey('validation-value', row.original.key)) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                       </button>
                     </div>
                   </template>
@@ -7995,13 +7992,13 @@ onUnmounted(() => {
             <section class="rounded-[24px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-5">
               <div class="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Шаг 7</div>
-                  <h2 class="mt-1 text-xl font-semibold text-[#314256]">Результат импорта</h2>
+                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.step.badge', { n: 7 }) }}</div>
+                  <h2 class="mt-1 text-xl font-semibold text-[#314256]">{{ t('importer.result.title') }}</h2>
                 </div>
 
                 <div class="flex flex-wrap items-center gap-3">
                   <B24Button
-                    label="Назад"
+                    :label="t('importer.step.back')"
                     color="air-primary"
                     size="lg"
                     :disabled="!canGoBack"
@@ -8009,7 +8006,7 @@ onUnmounted(() => {
                   />
                   <B24Button
                     v-if="busyAction === 'run' || busyAction === 'retry' || cancelRequested"
-                    label="Остановить импорт"
+                    :label="t('importer.common.stop_import')"
                     color="air-tertiary"
                     size="lg"
                     :loading="cancelRequested"
@@ -8018,7 +8015,7 @@ onUnmounted(() => {
                   />
                   <B24Button
                     v-if="!busyAction"
-                    label="Завершить"
+                    :label="t('importer.result.finish')"
                     color="air-secondary"
                     size="lg"
                     @click="finishToEntitySelection"
@@ -8028,30 +8025,30 @@ onUnmounted(() => {
                     class="rounded-full px-4 py-2 text-sm font-semibold"
                     :class="importRunFailedRows > 0 ? 'border border-[#ffe1c7] bg-[#fff7ef] text-[#c77d2b]' : 'border border-[#d7e7ff] bg-[#f4f9ff] text-[#2e6bd9]'"
                   >
-                    {{ importRunFailedRows > 0 ? `Есть ошибки: ${importRunFailedRows}` : 'Импорт завершен без ошибок' }}
+                    {{ importRunFailedRows > 0 ? t('importer.result.status_errors', { count: importRunFailedRows }) : t('importer.result.status_ok') }}
                   </div>
                 </div>
               </div>
 
               <div class="grid gap-4 md:grid-cols-5">
                 <div class="rounded-[18px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Проверено</div>
+                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.result.metric_checked') }}</div>
                   <div class="mt-1 text-lg font-semibold text-[#314256]">{{ importRunCheckedRows }}</div>
                 </div>
                 <div class="rounded-[18px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Создано</div>
+                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.result.metric_created') }}</div>
                   <div class="mt-1 text-lg font-semibold text-[#314256]">{{ importRunCreatedRows }}</div>
                 </div>
                 <div class="rounded-[18px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Обновлено</div>
+                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.result.metric_updated') }}</div>
                   <div class="mt-1 text-lg font-semibold text-[#314256]">{{ importRunUpdatedRows }}</div>
                 </div>
                 <div class="rounded-[18px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Ошибки</div>
+                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.result.metric_errors') }}</div>
                   <div class="mt-1 text-lg font-semibold text-[#314256]">{{ importRunFailedRows }}</div>
                 </div>
                 <div class="rounded-[18px] border border-white/70 bg-white/85 px-4 py-4 text-sm text-[#5f7285]">
-                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">Пропущено</div>
+                  <div class="text-xs uppercase tracking-[0.1em] text-[#9aa9b8]">{{ t('importer.result.metric_skipped') }}</div>
                   <div class="mt-1 text-lg font-semibold text-[#314256]">{{ importRunSkippedRows }}</div>
                 </div>
               </div>
@@ -8064,13 +8061,13 @@ onUnmounted(() => {
               <div class="mb-4 flex items-center gap-3">
                 <div class="h-5 w-5 animate-spin rounded-full border-2 border-[#b8d4f8] border-t-[#2e6bd9]" />
                 <div class="text-base font-semibold text-[#2e6bd9]">
-                  Импорт в процессе…
+                  {{ t('importer.progress.in_progress') }}
                 </div>
               </div>
               <div class="mb-2 flex items-center justify-between text-sm">
-                <span class="text-[#5f7285]">Прогресс</span>
+                <span class="text-[#5f7285]">{{ t('importer.progress.label') }}</span>
                 <span class="font-medium text-[#314256]">
-                  {{ session?.processed_rows ?? 0 }} из {{ session?.total_rows || '…' }} строк
+                  {{ t('importer.progress.rows', { processed: session?.processed_rows ?? 0, total: session?.total_rows || '…' }) }}
                 </span>
               </div>
               <div class="mb-4 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
@@ -8080,9 +8077,9 @@ onUnmounted(() => {
                 />
               </div>
               <div class="flex flex-wrap gap-5 text-sm text-[#5f7285]">
-                <span>Обработано: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
-                <span>Успешно: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
-                <span>Ошибки: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
+                <span>{{ t('importer.progress.processed') }}: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
+                <span>{{ t('importer.progress.successful') }}: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
+                <span>{{ t('importer.progress.errors') }}: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
               </div>
               <div
                 v-if="session?.summary?.import_progress?.pause_info"
@@ -8090,9 +8087,9 @@ onUnmounted(() => {
               >
                 <span class="mt-0.5 text-base">⏸</span>
                 <div>
-                  <div class="font-semibold">Пауза: ожидаем сброса лимита Bitrix24</div>
+                  <div class="font-semibold">{{ t('importer.progress.pause_title') }}</div>
                   <div class="mt-0.5 text-[#b38a00]">
-                    Импорт автоматически продолжится через ~{{ session.summary.import_progress.pause_info.wait_seconds }} сек.
+                    {{ t('importer.progress.pause_description', { seconds: session.summary.import_progress.pause_info.wait_seconds }) }}
                   </div>
                 </div>
               </div>
@@ -8105,13 +8102,13 @@ onUnmounted(() => {
               <div class="mb-4 flex items-center gap-3">
                 <div class="h-5 w-5 animate-spin rounded-full border-2 border-[#b8d4f8] border-t-[#2e6bd9]" />
                 <div class="text-base font-semibold text-[#2e6bd9]">
-                  Повтор импорта в процессе…
+                  {{ t('importer.progress.retry_in_progress') }}
                 </div>
               </div>
               <div class="mb-2 flex items-center justify-between text-sm">
-                <span class="text-[#5f7285]">Прогресс</span>
+                <span class="text-[#5f7285]">{{ t('importer.progress.label') }}</span>
                 <span class="font-medium text-[#314256]">
-                  {{ session?.processed_rows ?? 0 }} из {{ retryTotalRows || '…' }} строк
+                  {{ t('importer.progress.rows', { processed: session?.processed_rows ?? 0, total: retryTotalRows || '…' }) }}
                 </span>
               </div>
               <div class="mb-4 h-2 w-full overflow-hidden rounded-full bg-[#dde8f8]">
@@ -8121,9 +8118,9 @@ onUnmounted(() => {
                 />
               </div>
               <div class="flex flex-wrap gap-5 text-sm text-[#5f7285]">
-                <span>Обработано: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
-                <span>Успешно: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
-                <span>Ошибки: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
+                <span>{{ t('importer.progress.processed') }}: <strong class="text-[#314256]">{{ session?.processed_rows ?? 0 }}</strong></span>
+                <span>{{ t('importer.progress.successful') }}: <strong class="text-[#1a7a4a]">{{ session?.successful_rows ?? 0 }}</strong></span>
+                <span>{{ t('importer.progress.errors') }}: <strong class="text-[#c24b53]">{{ session?.failed_rows ?? 0 }}</strong></span>
               </div>
               <div
                 v-if="session?.summary?.import_progress?.pause_info"
@@ -8131,9 +8128,9 @@ onUnmounted(() => {
               >
                 <span class="mt-0.5 text-base">⏸</span>
                 <div>
-                  <div class="font-semibold">Пауза: ожидаем сброса лимита Bitrix24</div>
+                  <div class="font-semibold">{{ t('importer.progress.pause_title') }}</div>
                   <div class="mt-0.5 text-[#b38a00]">
-                    Импорт автоматически продолжится через ~{{ session.summary.import_progress.pause_info.wait_seconds }} сек.
+                    {{ t('importer.progress.pause_description', { seconds: session.summary.import_progress.pause_info.wait_seconds }) }}
                   </div>
                 </div>
               </div>
@@ -8146,8 +8143,8 @@ onUnmounted(() => {
               <div class="border-b border-[#e5ebf1] bg-[linear-gradient(180deg,#ffffff_0%,#f4f8fe_100%)] px-6 py-5">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">Итог</div>
-                    <h3 class="mt-1.5 text-[17px] font-semibold text-[#2f4254]">Что создано по связанному импорту</h3>
+                    <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">{{ t('importer.result.linked_eyebrow') }}</div>
+                    <h3 class="mt-1.5 text-[17px] font-semibold text-[#2f4254]">{{ t('importer.result.linked_title') }}</h3>
                   </div>
                   <div
                     v-if="linkedImportRunSummary.hasOverflow"
@@ -8166,9 +8163,9 @@ onUnmounted(() => {
                 >
                   <div class="flex items-start justify-between gap-3">
                     <div>
-                      <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">Сущность</div>
+                      <div class="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8ea0b2]">{{ t('importer.result.linked_entity') }}</div>
                       <div class="mt-1.5 text-[15px] font-semibold text-[#2f4254]">{{ section.title }}</div>
-                      <div class="mt-1 text-sm leading-relaxed text-[#6c8093]">Всего: {{ section.total }}</div>
+                      <div class="mt-1 text-sm leading-relaxed text-[#6c8093]">{{ t('importer.result.linked_total', { total: section.total }) }}</div>
                     </div>
                   </div>
 
@@ -8211,7 +8208,7 @@ onUnmounted(() => {
               <div class="flex flex-wrap gap-3 border-t border-[#e5ebf1] px-6 py-5">
                 <B24Button
                   v-if="busyAction === 'retry' || cancelRequested"
-                  label="Остановить импорт"
+                  :label="t('importer.common.stop_import')"
                   color="air-tertiary"
                   size="lg"
                   :loading="cancelRequested"
@@ -8219,7 +8216,7 @@ onUnmounted(() => {
                   @click="cancelActiveImport"
                 />
                 <B24Button
-                  label="Скачать CSV-отчет"
+                  :label="t('importer.result.download_csv')"
                   color="air-secondary-accent-2"
                   size="lg"
                   :loading="busyAction === 'report'"
@@ -8227,7 +8224,7 @@ onUnmounted(() => {
                   @click="downloadImportReport"
                 />
                 <B24Button
-                  label="Повторить неуспешные строки"
+                  :label="t('importer.result.retry_failed')"
                   color="air-primary"
                   size="lg"
                   :loading="busyAction === 'retry'"
@@ -8247,11 +8244,11 @@ onUnmounted(() => {
                 @click="isStepSevenDryRunExpanded = !isStepSevenDryRunExpanded"
               >
                 <div>
-                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Тестовый импорт</div>
-                  <h3 class="mt-1 text-xl font-semibold text-[#314256]">Результат тестового импорта</h3>
+                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.dryrun.stage_test') }}</div>
+                  <h3 class="mt-1 text-xl font-semibold text-[#314256]">{{ t('importer.dryrun.result_title') }}</h3>
                 </div>
                 <div class="inline-flex items-center rounded-full border border-[#d9e2ec] bg-white px-4 py-2 text-sm font-semibold text-[#516478]">
-                  {{ isStepSevenDryRunExpanded ? 'Свернуть' : 'Развернуть' }}
+                  {{ isStepSevenDryRunExpanded ? t('importer.dryrun.collapse') : t('importer.dryrun.expand') }}
                 </div>
               </button>
 
@@ -8261,7 +8258,7 @@ onUnmounted(() => {
                     class="w-full"
                     :columns="dryRunTableColumns"
                     :data="paginatedDryRunRows"
-                    empty="После тестового импорта здесь появится предварительный отчет по строкам."
+                    :empty="t('importer.dryrun.preview_empty')"
                   >
                     <template #rowNumber-cell="{ row }">
                       <div class="py-1 font-medium text-[#314256]">
@@ -8325,10 +8322,10 @@ onUnmounted(() => {
                             <div class="min-w-0 flex-1">
                               <div v-if="hasExecutionRowHeading(row.original)" class="mb-2">
                                 <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                                  {{ row.original.entityLabel || 'Запись' }}
+                                  {{ row.original.entityLabel || t('importer.common.record') }}
                                 </div>
                                 <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
-                                  {{ row.original.title || 'Без названия' }}
+                                  {{ row.original.title || t('importer.common.untitled') }}
                                 </div>
                               </div>
                               <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
@@ -8340,7 +8337,7 @@ onUnmounted(() => {
                                 class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
                                 @click="toggleTextBlock(makeCollapsibleKey('step-seven-dry-run-row', row.original.key))"
                               >
-                                {{ isTextBlockExpanded(makeCollapsibleKey('step-seven-dry-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                                {{ isTextBlockExpanded(makeCollapsibleKey('step-seven-dry-run-row', row.original.key)) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                               </button>
                             </div>
                             <div
@@ -8360,11 +8357,11 @@ onUnmounted(() => {
                   >
                     <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <div class="text-sm text-[#5f7285]">
-                        Показаны строки <span class="font-semibold text-[#314256]">{{ dryRunPageRangeStart }}-{{ dryRunPageRangeEnd }}</span>
-                        из <span class="font-semibold text-[#314256]">{{ filteredDryRunRows.length }}</span>.
+                        {{ t('importer.common.pager_shown') }} <span class="font-semibold text-[#314256]">{{ dryRunPageRangeStart }}-{{ dryRunPageRangeEnd }}</span>
+                        {{ t('importer.common.pager_of') }} <span class="font-semibold text-[#314256]">{{ filteredDryRunRows.length }}</span>.
                       </div>
                       <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                        Страница {{ dryRunPage }} из {{ dryRunPageCount }}
+                        {{ t('importer.common.pager_page', { page: dryRunPage, pages: dryRunPageCount }) }}
                       </div>
                     </div>
                   </div>
@@ -8375,14 +8372,14 @@ onUnmounted(() => {
             <section class="rounded-[24px] border border-[#e3e9f0] bg-[#fbfcfe] p-5">
               <div class="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Детали</div>
-                  <h3 class="mt-1 text-xl font-semibold text-[#314256]">Результат по строкам</h3>
+                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.result.details_eyebrow') }}</div>
+                  <h3 class="mt-1 text-xl font-semibold text-[#314256]">{{ t('importer.result.by_rows_title') }}</h3>
                 </div>
 
                 <div class="flex flex-wrap gap-3">
                   <B24Button
                     v-if="busyAction === 'retry' || cancelRequested"
-                    label="Остановить импорт"
+                    :label="t('importer.common.stop_import')"
                     color="air-tertiary"
                     size="lg"
                     :loading="cancelRequested"
@@ -8390,7 +8387,7 @@ onUnmounted(() => {
                     @click="cancelActiveImport"
                   />
                   <B24Button
-                    label="Скачать CSV-отчет"
+                    :label="t('importer.result.download_csv')"
                     color="air-secondary-accent-2"
                     size="lg"
                     :loading="busyAction === 'report'"
@@ -8398,7 +8395,7 @@ onUnmounted(() => {
                     @click="downloadImportReport"
                   />
                   <B24Button
-                    label="Повторить неуспешные строки"
+                    :label="t('importer.result.retry_failed')"
                     color="air-primary"
                     size="lg"
                     :loading="busyAction === 'retry'"
@@ -8430,10 +8427,10 @@ onUnmounted(() => {
                     class="mt-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
                     @click="toggleTextBlock(makeCollapsibleKey('import-group-reason', group.key))"
                   >
-                    {{ isTextBlockExpanded(makeCollapsibleKey('import-group-reason', group.key)) ? 'Скрыть' : 'Показать полностью' }}
+                    {{ isTextBlockExpanded(makeCollapsibleKey('import-group-reason', group.key)) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                   </button>
                   <div class="mt-3 text-xs text-[#8a6c4a]">
-                    <span>Строки: </span>
+                    <span>{{ t('importer.result.group_rows') }} </span>
                     <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('import-group-rows', group.key), group.rowNumbers.join(', ')) }}</span>
                     <button
                       v-if="isTextCollapsible(group.rowNumbers.join(', '))"
@@ -8441,7 +8438,7 @@ onUnmounted(() => {
                       class="ml-2 text-[11px] font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
                       @click="toggleTextBlock(makeCollapsibleKey('import-group-rows', group.key))"
                     >
-                      {{ isTextBlockExpanded(makeCollapsibleKey('import-group-rows', group.key)) ? 'Скрыть' : 'Показать полностью' }}
+                      {{ isTextBlockExpanded(makeCollapsibleKey('import-group-rows', group.key)) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                     </button>
                   </div>
                 </div>
@@ -8468,7 +8465,7 @@ onUnmounted(() => {
               >
                 <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
-                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">Неполный поиск дублей</div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#c77d2b]">{{ t('importer.dryrun.weakening_title') }}</div>
                     <div class="mt-1 text-sm font-semibold">{{ importRunDedupWeakeningNotice.title }}</div>
                     <div class="mt-1 whitespace-pre-wrap break-words text-sm text-[#9c6a2a]">
                       {{ getTextBlockDisplayValue(makeCollapsibleKey('import-dedup', 'description'), importRunDedupWeakeningNotice.description) }}
@@ -8479,7 +8476,7 @@ onUnmounted(() => {
                       class="mt-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
                       @click="toggleTextBlock(makeCollapsibleKey('import-dedup', 'description'))"
                     >
-                      {{ isTextBlockExpanded(makeCollapsibleKey('import-dedup', 'description')) ? 'Скрыть' : 'Показать полностью' }}
+                      {{ isTextBlockExpanded(makeCollapsibleKey('import-dedup', 'description')) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                     </button>
                   </div>
                   <div class="rounded-full border border-[#f3c995] bg-white px-3 py-1 text-sm font-semibold text-[#a96017]">
@@ -8488,7 +8485,7 @@ onUnmounted(() => {
                 </div>
                 <div class="mt-3 grid gap-2 text-sm text-[#8f5b18] md:grid-cols-2">
                   <div class="min-w-0">
-                    <span>Поля не заполнены: </span>
+                    <span>{{ t('importer.dryrun.weakening_fields') }} </span>
                     <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('import-dedup', 'fields'), importRunDedupWeakeningNotice.fieldsLabel) }}</span>
                     <button
                       v-if="isTextCollapsible(importRunDedupWeakeningNotice.fieldsLabel)"
@@ -8496,11 +8493,11 @@ onUnmounted(() => {
                       class="ml-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
                       @click="toggleTextBlock(makeCollapsibleKey('import-dedup', 'fields'))"
                     >
-                      {{ isTextBlockExpanded(makeCollapsibleKey('import-dedup', 'fields')) ? 'Скрыть' : 'Показать полностью' }}
+                      {{ isTextBlockExpanded(makeCollapsibleKey('import-dedup', 'fields')) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                     </button>
                   </div>
                   <div class="min-w-0">
-                    <span>Строки риска: </span>
+                    <span>{{ t('importer.dryrun.weakening_rows') }} </span>
                     <span class="whitespace-pre-wrap break-words">{{ getTextBlockDisplayValue(makeCollapsibleKey('import-dedup', 'rows'), importRunDedupWeakeningNotice.rowsLabel) }}</span>
                     <button
                       v-if="isTextCollapsible(importRunDedupWeakeningNotice.rowsLabel)"
@@ -8508,7 +8505,7 @@ onUnmounted(() => {
                       class="ml-2 text-xs font-semibold text-[#a96017] transition hover:text-[#8f4d12]"
                       @click="toggleTextBlock(makeCollapsibleKey('import-dedup', 'rows'))"
                     >
-                      {{ isTextBlockExpanded(makeCollapsibleKey('import-dedup', 'rows')) ? 'Скрыть' : 'Показать полностью' }}
+                      {{ isTextBlockExpanded(makeCollapsibleKey('import-dedup', 'rows')) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                     </button>
                   </div>
                 </div>
@@ -8518,7 +8515,7 @@ onUnmounted(() => {
                     class="inline-flex items-center rounded-full border border-[#f2d1ac] bg-white px-3 py-2 text-sm font-medium text-[#8a5a24] transition hover:border-[#e8bc86] hover:bg-[#fffaf4]"
                     @click="selectImportRunFilter(activeImportRunFilter === 'dedup_risk' ? 'all' : 'dedup_risk')"
                   >
-                    {{ activeImportRunFilter === 'dedup_risk' ? 'Сбросить фильтр' : 'Показать только строки риска' }}
+                    {{ activeImportRunFilter === 'dedup_risk' ? t('importer.dryrun.filter_risk_reset') : t('importer.dryrun.filter_risk_only') }}
                   </button>
                 </div>
               </div>
@@ -8532,8 +8529,8 @@ onUnmounted(() => {
                   :columns="importRunTableColumns"
                   :data="paginatedImportRunRows"
                   :empty="activeImportRunFilter === 'all'
-                    ? 'После запуска импорта здесь появится итог по строкам.'
-                    : 'Для выбранного фильтра строк не найдено.'"
+                    ? t('importer.result.run_empty')
+                    : t('importer.result.run_filter_empty')"
                 >
                   <template #rowNumber-cell="{ row }">
                     <div class="py-1 font-medium text-[#314256]">
@@ -8597,10 +8594,10 @@ onUnmounted(() => {
                           <div class="min-w-0 flex-1">
                             <div v-if="hasExecutionRowHeading(row.original)" class="mb-2">
                               <div class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                                {{ row.original.entityLabel || 'Запись' }}
+                                {{ row.original.entityLabel || t('importer.common.record') }}
                               </div>
                               <div class="mt-1 truncate text-sm font-semibold text-[#314256]">
-                                {{ row.original.title || 'Без названия' }}
+                                {{ row.original.title || t('importer.common.untitled') }}
                               </div>
                             </div>
                             <div class="whitespace-pre-wrap break-words text-sm text-[#314256]">
@@ -8612,7 +8609,7 @@ onUnmounted(() => {
                               class="mt-2 text-xs font-semibold text-[#2e6bd9] transition hover:text-[#1f56b2]"
                               @click="toggleTextBlock(makeCollapsibleKey('import-run-row', row.original.key))"
                             >
-                              {{ isTextBlockExpanded(makeCollapsibleKey('import-run-row', row.original.key)) ? 'Скрыть' : 'Показать полностью' }}
+                              {{ isTextBlockExpanded(makeCollapsibleKey('import-run-row', row.original.key)) ? t('importer.common.show_less') : t('importer.common.show_more') }}
                             </button>
                           </div>
                           <div
@@ -8632,11 +8629,11 @@ onUnmounted(() => {
                 >
                   <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div class="text-sm text-[#5f7285]">
-                      Показаны строки <span class="font-semibold text-[#314256]">{{ importRunPageRangeStart }}-{{ importRunPageRangeEnd }}</span>
-                      из <span class="font-semibold text-[#314256]">{{ filteredImportRunRows.length }}</span>.
+                      {{ t('importer.common.pager_shown') }} <span class="font-semibold text-[#314256]">{{ importRunPageRangeStart }}-{{ importRunPageRangeEnd }}</span>
+                      {{ t('importer.common.pager_of') }} <span class="font-semibold text-[#314256]">{{ filteredImportRunRows.length }}</span>.
                     </div>
                     <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">
-                      Страница {{ importRunPage }} из {{ importRunPageCount }}
+                      {{ t('importer.common.pager_page', { page: importRunPage, pages: importRunPageCount }) }}
                     </div>
                   </div>
 
@@ -8647,7 +8644,7 @@ onUnmounted(() => {
                       :disabled="importRunPage <= 1"
                       @click="setImportRunPage(importRunPage - 1)"
                     >
-                      Назад
+                      {{ t('importer.common.back') }}
                     </button>
 
                     <button
@@ -8672,7 +8669,7 @@ onUnmounted(() => {
                       :disabled="importRunPage >= importRunPageCount"
                       @click="setImportRunPage(importRunPage + 1)"
                     >
-                      Далее
+                      {{ t('importer.common.next') }}
                     </button>
                   </div>
                 </div>

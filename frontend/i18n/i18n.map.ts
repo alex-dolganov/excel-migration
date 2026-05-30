@@ -4,14 +4,14 @@ import type { LocaleObject } from '@nuxtjs/i18n'
  * @memo file put at frontend/i18n/locales
  */
 export const contentLocales: LocaleObject[] = [
-  { code: 'en', name: 'English', file: 'en.json' },
+  { code: 'en', language: 'en-US', name: 'English', file: 'en.json' },
   { code: 'de', name: 'Deutsch', file: 'de.json' },
   { code: 'la', name: 'Español', file: 'la.json' },
-  { code: 'br', name: 'Português (Brasil)', file: 'br.json' },
+  { code: 'br', language: 'pt-BR', name: 'Português (Brasil)', file: 'br.json' },
   { code: 'fr', name: 'Français', file: 'fr.json' },
   { code: 'it', name: 'Italiano', file: 'it.json' },
   { code: 'pl', name: 'Polski', file: 'pl.json' },
-  { code: 'ru', name: 'Русский', file: 'ru.json' },
+  { code: 'ru', language: 'ru-RU', name: 'Русский', file: 'ru.json' },
   { code: 'ua', name: 'Українська', file: 'ua.json' },
   { code: 'tr', name: 'Türkçe', file: 'tr.json' },
   { code: 'sc', name: '中文（简体）', file: 'sc.json' },
