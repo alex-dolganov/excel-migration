@@ -3,6 +3,7 @@ const emit = defineEmits<{ select: [mode: string] }>()
 
 const hover = ref<string | null>(null)
 const runtimeConfig = useRuntimeConfig()
+const { t } = useI18n()
 
 const palette = {
   simple:   { bg: '#E8F6EE', ink: '#1E8A52', glow: 'rgba(30,138,82,0.18)' },
@@ -11,12 +12,22 @@ const palette = {
 
 const defaultImportMaxFileSizeBytes = 50 * 1024 * 1024
 const normalizedImportMaxFileSizeBytes = Math.max(1, Number(runtimeConfig.public.importMaxFileSizeBytes || defaultImportMaxFileSizeBytes))
-const importMaxFileSizeLabel = normalizedImportMaxFileSizeBytes % (1024 * 1024) === 0
-  ? `${normalizedImportMaxFileSizeBytes / (1024 * 1024)} МБ`
-  : `${(normalizedImportMaxFileSizeBytes / (1024 * 1024)).toFixed(1)} МБ`
+const importMaxFileSizeLabel = computed(() => {
+  const mb = normalizedImportMaxFileSizeBytes / (1024 * 1024)
+  const unit = t('importer.file.size_mb')
+  return Number.isInteger(mb) ? `${mb} ${unit}` : `${mb.toFixed(1)} ${unit}`
+})
 
-const simpleFeatures  = [`Файл XLSX / CSV до ${importMaxFileSizeLabel}`, 'Автосопоставление полей', 'Базовая защита от дублей']
-const advancedFeatures = ['Сохранённые шаблоны маппинга', 'Гибкие правила поиска дублей', 'Детальный отчёт по каждой строке']
+const simpleFeatures  = computed(() => [
+  t('importer.landing.simple_f1', { size: importMaxFileSizeLabel.value }),
+  t('importer.landing.simple_f2'),
+  t('importer.landing.simple_f3'),
+])
+const advancedFeatures = computed(() => [
+  t('importer.landing.advanced_f1'),
+  t('importer.landing.advanced_f2'),
+  t('importer.landing.advanced_f3'),
+])
 </script>
 
 <template>
@@ -45,10 +56,10 @@ const advancedFeatures = ['Сохранённые шаблоны маппинг�
         <!-- Text -->
         <div>
           <h1 class="text-[26px] font-semibold leading-[1.15] tracking-[-0.02em] text-[#0F1115]">
-            Перенесите Excel в&nbsp;ваш&nbsp;портал
+            {{ t('importer.landing.hero_title') }}
           </h1>
           <p class="mt-1 text-[13px] text-[#5A5E6E]">
-            CRM-сущности, задачи, сотрудники — за&nbsp;7 шагов с&nbsp;предпросмотром, проверкой дублей и&nbsp;тестовым запуском.
+            {{ t('importer.landing.hero_subtitle') }}
           </p>
         </div>
       </div>
@@ -58,15 +69,15 @@ const advancedFeatures = ['Сохранённые шаблоны маппинг�
     <section class="px-8 pb-8 pt-6 sm:px-10">
       <div class="mb-4 flex items-center justify-between">
         <div>
-          <div class="mb-1 text-[10px] uppercase tracking-[0.16em] text-[#8B8FA0]">Шаг 0 · Выбор режима</div>
-          <h2 class="text-[18px] font-semibold tracking-tight text-[#0F1115]">Как импортируем?</h2>
+          <div class="mb-1 text-[10px] uppercase tracking-[0.16em] text-[#8B8FA0]">{{ t('importer.landing.step_badge') }}</div>
+          <h2 class="text-[18px] font-semibold tracking-tight text-[#0F1115]">{{ t('importer.landing.step_title') }}</h2>
         </div>
         <div class="hidden items-center gap-1.5 text-[11.5px] text-[#8B8FA0] sm:flex">
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
             <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.2" />
             <path d="M7 4.5v3M7 9.2v.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
           </svg>
-          Режим можно сменить внутри приложения
+          {{ t('importer.landing.mode_hint') }}
         </div>
       </div>
 
@@ -98,16 +109,16 @@ const advancedFeatures = ['Сохранённые шаблоны маппинг�
                 </svg>
               </div>
               <span class="text-[10px] font-semibold uppercase tracking-[0.18em]" :style="{ color: palette.simple.ink }">
-                Режим · Простой
+                {{ t('importer.landing.simple_badge') }}
               </span>
             </div>
           </div>
 
           <!-- Card body -->
           <div class="flex flex-1 flex-col px-5 pb-5 pt-4">
-            <h3 class="text-[17px] font-semibold tracking-tight text-[#0F1115]">Простой импорт</h3>
+            <h3 class="text-[17px] font-semibold tracking-tight text-[#0F1115]">{{ t('importer.landing.simple_title') }}</h3>
             <p class="mt-1.5 text-[12.5px] leading-relaxed text-[#5A5E6E]">
-              Загрузите файл, выберите сущность, подтвердите сопоставление — и&nbsp;запускайте.
+              {{ t('importer.landing.simple_desc') }}
             </p>
             <ul class="mt-3 space-y-1.5">
               <li v-for="f in simpleFeatures" :key="f" class="flex items-center gap-2 text-[12.5px] text-[#3A3D47]">
@@ -125,7 +136,7 @@ const advancedFeatures = ['Сохранённые шаблоны маппинг�
               :style="{ background: palette.simple.ink }"
               @click.stop="emit('select', 'simple')"
             >
-              Начать простой импорт
+              {{ t('importer.landing.simple_btn') }}
               <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
                 <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
@@ -170,16 +181,16 @@ const advancedFeatures = ['Сохранённые шаблоны маппинг�
                 </svg>
               </div>
               <span class="text-[10px] font-semibold uppercase tracking-[0.18em]" :style="{ color: palette.advanced.ink }">
-                Режим · Расширенный
+                {{ t('importer.landing.advanced_badge') }}
               </span>
             </div>
           </div>
 
           <!-- Card body -->
           <div class="flex flex-1 flex-col px-5 pb-5 pt-4">
-            <h3 class="text-[17px] font-semibold tracking-tight text-[#0F1115]">Расширенный импорт</h3>
+            <h3 class="text-[17px] font-semibold tracking-tight text-[#0F1115]">{{ t('importer.landing.advanced_title') }}</h3>
             <p class="mt-1.5 text-[12.5px] leading-relaxed text-[#5A5E6E]">
-              Шаблоны маппинга, тонкая настройка дублей, тестовый запуск и&nbsp;детальный отчёт.
+              {{ t('importer.landing.advanced_desc') }}
             </p>
             <ul class="mt-3 space-y-1.5">
               <li v-for="f in advancedFeatures" :key="f" class="flex items-center gap-2 text-[12.5px] text-[#3A3D47]">
@@ -197,7 +208,7 @@ const advancedFeatures = ['Сохранённые шаблоны маппинг�
               :style="{ background: palette.advanced.ink }"
               @click.stop="emit('select', 'advanced')"
             >
-              Начать расширенный
+              {{ t('importer.landing.advanced_btn') }}
               <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
                 <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
               </svg>

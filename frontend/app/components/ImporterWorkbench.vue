@@ -1387,7 +1387,7 @@ const sidebarFacts = computed(() => {
     { label: t('importer.summary.rows'), value: previewRows.value.length ? String(previewRows.value.length) : '—' },
   ]
 })
-const mappingFieldItems = computed(() => buildMappingFieldItems(fieldOptions.value))
+const mappingFieldItems = computed(() => buildMappingFieldItems(fieldOptions.value, t))
 const taskDefaultUserOptions = computed(() => (
   Array.isArray(mappingData.value?.task_user_options) ? mappingData.value.task_user_options : []
 ))
@@ -1541,6 +1541,7 @@ const dedupStrategyItems = computed(() => {
 const dedupFieldOptions = computed(() => buildDedupFieldOptions(
   mappingRows.value,
   mappingData.value?.fields,
+  t,
 ))
 const previewTableRows = computed(() => {
   const headerRowIndex = (headerRowInput.value || 1) - 1
@@ -2138,6 +2139,7 @@ function syncMappingRows() {
     candidateSuggestions: mappingData.value.candidate_suggestions,
     savedMapping: sessionSavedMapping.value,
     preferSavedMapping: Object.keys(sessionSavedMapping.value).length > 0,
+    t,
   })
   importAliasRules.value = Array.isArray(mappingData.value.alias_rules) ? mappingData.value.alias_rules : []
   taskDefaultResponsibleId.value = String(mappingData.value?.task_defaults?.default_responsible_id || '')
@@ -2192,7 +2194,7 @@ function resolveImporterFieldLabel(fieldId: string, fieldTitle = '') {
 
   const resolvedField = normalizedFieldOptionsIndex.value.get(normalizedFieldId.toUpperCase())
   const resolvedTitle = String(resolvedField?.title || fieldTitle || '').trim()
-  return formatImporterFieldLabel(normalizedFieldId, resolvedTitle)
+  return formatImporterFieldLabel(normalizedFieldId, resolvedTitle, t)
 }
 
 function buildPreflightIssueMeta(issue: Record<string, any>) {
@@ -3481,6 +3483,7 @@ function applyCandidateMapping() {
     candidateMapping: mappingData.value.candidate_mapping,
     candidateSuggestions: mappingData.value.candidate_suggestions,
     savedMapping: {},
+    t,
   })
 
   const mappedCount = newRows.filter((row) => row.targetFieldId).length

@@ -514,6 +514,11 @@ const LINKED_FIELD_PREFIX_LABELS = {
   CONTACT__: 'Контакт',
   DEAL__: 'Сделка',
 }
+const LINKED_FIELD_PREFIX_I18N = {
+  COMPANY__: 'importer.entities.company_single',
+  CONTACT__: 'importer.entities.contact_single',
+  DEAL__: 'importer.entities.deal_single',
+}
 
 const LINKED_ENTITY_DISPLAY_META = {
   company: {
@@ -848,8 +853,29 @@ function normalizeFieldType(fieldType) {
   return String(fieldType || 'string').trim().toLowerCase() || 'string'
 }
 
-export function buildFieldTypeLabel(fieldType) {
+export function buildFieldTypeLabel(fieldType, t = null) {
   const normalizedType = normalizeFieldType(fieldType)
+  if (t) {
+    const i18nMap = {
+      string: 'string', text: 'string',
+      crm_status: 'crm_status',
+      crm_category: 'crm_category',
+      enumeration: 'enumeration', list: 'enumeration',
+      boolean: 'boolean', bool: 'boolean',
+      integer: 'integer', int: 'integer',
+      double: 'double', float: 'double', money: 'double', number: 'double',
+      date: 'date',
+      datetime: 'datetime',
+      crm_multifield: 'crm_multifield',
+      phone: 'crm_multifield',
+      email: 'crm_multifield',
+      web: 'url',
+      im: 'crm_multifield',
+      file: 'file',
+    }
+    const key = i18nMap[normalizedType]
+    if (key) return t(`importer.field_types.${key}`)
+  }
   const typeLabels = {
     string: 'Текст',
     text: 'Текст',
@@ -878,24 +904,24 @@ export function buildFieldTypeLabel(fieldType) {
   return typeLabels[normalizedType] || normalizedType || 'Текст'
 }
 
-function buildAutoMatchLabel(matchType) {
+function buildAutoMatchLabel(matchType, t = null) {
   const normalizedMatchType = String(matchType || '').trim().toLowerCase()
   if (normalizedMatchType === 'exact') {
-    return 'Точное'
+    return t ? t('importer.auto_match_type.exact') : 'Точное'
   }
   if (normalizedMatchType === 'fuzzy') {
-    return 'Похожее'
+    return t ? t('importer.auto_match_type.fuzzy') : 'Похожее'
   }
   return ''
 }
 
-function buildAutoMatchReasonLabel(matchReason) {
+function buildAutoMatchReasonLabel(matchReason, t = null) {
   const normalizedMatchReason = String(matchReason || '').trim().toLowerCase()
   if (normalizedMatchReason === 'alias_rule') {
-    return 'Пользовательское правило'
+    return t ? t('importer.auto_match_reason.alias_rule') : 'Пользовательское правило'
   }
   if (normalizedMatchReason === 'translit_alias') {
-    return 'Транслит / синоним'
+    return t ? t('importer.auto_match_reason.translit_alias') : 'Транслит / синоним'
   }
   return ''
 }
@@ -1105,11 +1131,11 @@ function buildSelectionIndex(mapping) {
   return index
 }
 
-export function buildMappingFieldItems(fields) {
+export function buildMappingFieldItems(fields, t = null) {
   return [
-    { value: EMPTY_MAPPING_SELECT_VALUE, label: 'Не импортировать' },
+    { value: EMPTY_MAPPING_SELECT_VALUE, label: t ? t('importer.mapping.field_placeholder') : 'Не импортировать' },
     ...(Array.isArray(fields) ? fields : []).map((field) => {
-      const typeLabel = buildFieldTypeLabel(field?.type)
+      const typeLabel = buildFieldTypeLabel(field?.type, t)
       const titlePrefix = field?.required ? '★ ' : ''
       const title = String(field?.title || field?.id || '')
       return {
@@ -1121,7 +1147,7 @@ export function buildMappingFieldItems(fields) {
   ]
 }
 
-function normalizeCandidateSuggestions(items, fieldMap) {
+function normalizeCandidateSuggestions(items, fieldMap, t = null) {
   const seenSuggestions = new Set()
 
   return (Array.isArray(items) ? items : []).reduce((normalized, item) => {
@@ -1137,9 +1163,9 @@ function normalizeCandidateSuggestions(items, fieldMap) {
       targetFieldId,
       targetFieldTitle: String(item?.target_field_title || fieldMap.get(targetFieldId) || targetFieldId),
       matchType,
-      matchLabel: buildAutoMatchLabel(matchType),
+      matchLabel: buildAutoMatchLabel(matchType, t),
       matchReason,
-      matchReasonLabel: buildAutoMatchReasonLabel(matchReason),
+      matchReasonLabel: buildAutoMatchReasonLabel(matchReason, t),
     })
     return normalized
   }, [])
@@ -1153,6 +1179,7 @@ export function buildMappingRows({
   candidateSuggestions,
   savedMapping,
   preferSavedMapping = true,
+  t = null,
 }) {
   const safeHeaders = Array.isArray(headers) ? headers : []
   const safeColumns = Array.isArray(columns) ? columns : []
@@ -1175,6 +1202,7 @@ export function buildMappingRows({
     const normalizedCandidateSuggestions = normalizeCandidateSuggestions(
       candidateSuggestions?.[`${column}:${sourceHeader}`],
       fieldMap,
+      t,
     )
 
     const row = {
@@ -1184,7 +1212,7 @@ export function buildMappingRows({
       targetFieldId,
       targetFieldTitle: targetFieldId ? String(fieldMap.get(targetFieldId) || '') : '',
       targetFieldType: field ? normalizeFieldType(field.type) : '',
-      targetFieldTypeLabel: field ? buildFieldTypeLabel(field.type) : '',
+      targetFieldTypeLabel: field ? buildFieldTypeLabel(field.type, t) : '',
       targetFieldRequired: Boolean(field?.required),
       targetFieldIsCustom: Boolean(field?.is_custom),
       targetFieldIsMultiple: Boolean(field?.multiple),
@@ -1197,12 +1225,12 @@ export function buildMappingRows({
 
     if (autoMatchType) {
       row.autoMatchType = autoMatchType
-      row.autoMatchLabel = buildAutoMatchLabel(autoMatchType)
+      row.autoMatchLabel = buildAutoMatchLabel(autoMatchType, t)
     }
 
     if (autoMatchReason) {
       row.autoMatchReason = autoMatchReason
-      row.autoMatchReasonLabel = buildAutoMatchReasonLabel(autoMatchReason)
+      row.autoMatchReasonLabel = buildAutoMatchReasonLabel(autoMatchReason, t)
     }
 
     if (normalizedCandidateSuggestions.length > 0) {
@@ -1512,15 +1540,24 @@ function normalizeImporterFieldTitleKey(value) {
     .replace(/[^A-Z0-9]+/g, '')
 }
 
-export function formatImporterFieldLabel(fieldId, fieldTitle = '') {
+export function formatImporterFieldLabel(fieldId, fieldTitle = '', t = null) {
   const normalizedFieldId = String(fieldId || '').trim().toUpperCase()
   if (!normalizedFieldId) {
     return ''
   }
 
-  for (const [prefix, entityLabel] of Object.entries(LINKED_FIELD_PREFIX_LABELS)) {
+  for (const [prefix, i18nKey] of Object.entries(LINKED_FIELD_PREFIX_I18N)) {
     if (normalizedFieldId.startsWith(prefix) && normalizedFieldId.length > prefix.length) {
-      return `${entityLabel}: ${formatImporterFieldLabel(normalizedFieldId.slice(prefix.length), fieldTitle)}`
+      const entityLabel = t ? t(i18nKey) : LINKED_FIELD_PREFIX_LABELS[prefix]
+      return `${entityLabel}: ${formatImporterFieldLabel(normalizedFieldId.slice(prefix.length), fieldTitle, t)}`
+    }
+  }
+
+  if (t) {
+    const i18nKey = `importer.field_labels.${normalizedFieldId}`
+    const translated = t(i18nKey, '')
+    if (translated && translated !== i18nKey) {
+      return translated
     }
   }
 
@@ -1529,8 +1566,15 @@ export function formatImporterFieldLabel(fieldId, fieldTitle = '') {
   }
 
   const normalizedFieldTitle = String(fieldTitle || '').trim()
-  if (normalizedFieldTitle && containsCyrillic(normalizedFieldTitle)) {
-    return normalizedFieldTitle
+
+  if (t) {
+    if (normalizedFieldTitle) {
+      return normalizedFieldTitle
+    }
+  } else {
+    if (normalizedFieldTitle && containsCyrillic(normalizedFieldTitle)) {
+      return normalizedFieldTitle
+    }
   }
 
   const normalizedFieldTitleKey = normalizeImporterFieldTitleKey(normalizedFieldTitle)
@@ -1541,7 +1585,7 @@ export function formatImporterFieldLabel(fieldId, fieldTitle = '') {
   return normalizedFieldTitle || normalizedFieldId
 }
 
-export function buildDedupFieldOptions(mappingRows, fields) {
+export function buildDedupFieldOptions(mappingRows, fields, t = null) {
   const fieldPattern = /^[A-Z][A-Z0-9_]*$/
   const fieldIndex = new Map(
     (Array.isArray(fields) ? fields : [])
@@ -1559,10 +1603,11 @@ export function buildDedupFieldOptions(mappingRows, fields) {
     .filter((fieldId) => !fieldId.startsWith('UF_') && !fieldIndex.get(fieldId)?.is_custom)
     .map((fieldId) => {
       const field = fieldIndex.get(fieldId)
+      const idHint = t ? t('importer.dedup.id_search_hint', 'Прямой поиск по ID записи Bitrix24') : 'Прямой поиск по ID записи Bitrix24'
       return {
         id: fieldId,
-        label: formatImporterFieldLabel(fieldId, field?.title),
-        hint: fieldId === 'ID' ? 'Прямой поиск по ID записи Bitrix24' : undefined,
+        label: formatImporterFieldLabel(fieldId, field?.title, t),
+        hint: fieldId === 'ID' ? idHint : undefined,
       }
     })
 }
@@ -1683,14 +1728,16 @@ function buildLinkedEntityExtraDetails(entityId, fields, prefix = '') {
     .join(' · ')
 }
 
-function buildLinkedMatchDetails(entityId, entityMeta, prefix = '') {
+function buildLinkedMatchDetails(entityId, entityMeta, prefix = '', t = null) {
   const duplicateMatchFields = Array.isArray(entityMeta?.duplicate_match_fields) ? entityMeta.duplicate_match_fields : []
   const dedupMissingFields = Array.isArray(entityMeta?.dedup_missing_fields) ? entityMeta.dedup_missing_fields : []
-  const matchDetails = duplicateMatchFields.length > 0
-    ? `Совпадение: ${duplicateMatchFields.map((fieldId) => formatImporterFieldLabel(`${prefix}${String(fieldId || '').trim()}`)).join(', ')}`
+  const matchFields = duplicateMatchFields.map((fieldId) => formatImporterFieldLabel(`${prefix}${String(fieldId || '').trim()}`, '', t)).join(', ')
+  const missingFields = dedupMissingFields.map((fieldId) => formatImporterFieldLabel(`${prefix}${String(fieldId || '').trim()}`, '', t)).join(', ')
+  const matchDetails = matchFields
+    ? (t ? t('importer.dedup_warning.match_label', { fields: matchFields }) : `Совпадение: ${matchFields}`)
     : ''
-  const missingDetails = dedupMissingFields.length > 0
-    ? `Неполный поиск дублей: ${dedupMissingFields.map((fieldId) => formatImporterFieldLabel(`${prefix}${String(fieldId || '').trim()}`)).join(', ')}`
+  const missingDetails = missingFields
+    ? (t ? t('importer.dedup_warning.fields_label', { fields: missingFields }) : `Неполный поиск дублей: ${missingFields}`)
     : ''
 
   return [matchDetails, missingDetails].filter(Boolean).join(' · ')
