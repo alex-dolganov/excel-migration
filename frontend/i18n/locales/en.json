@@ -554,7 +554,11 @@
       "file_required": "First select a file to import.",
       "entity_required": "First select an entity to import.",
       "smart_process_required": "First select a specific smart process.",
-      "format_required": "Only .xlsx, .xls, or .csv files can be uploaded."
+      "format_required": "Only .xlsx, .xls, or .csv files can be uploaded.",
+      "download_csv_failed": "Failed to download the CSV report",
+      "download_template_failed": "Failed to download the Excel template",
+      "template_invalid_format": "The downloaded Excel template is corrupted or in an invalid format.",
+      "download_invalid_format": "The downloaded file is corrupted or in an invalid format."
     },
     "confirm": {
       "mass_create": "Will create {count} new records in \"{entity}\". Existing records will not be updated because the \"Always create\" duplicate rule is currently selected. Continue import?",
@@ -828,7 +832,8 @@
       "import_existing": "Found",
       "import_skipped": "Skipped",
       "import_failed": "Error",
-      "import_cancelled": "Stopped"
+      "import_cancelled": "Stopped",
+      "import_processed": "Processed"
     },
     "run_filters": {
       "all": "All",
@@ -964,17 +969,46 @@
     "auto_match_reason": {
       "alias_rule": "Custom rule",
       "translit_alias": "Transliteration / alias"
+    },
+    "families": {
+      "crm_title": "CRM entities",
+      "crm_desc": "Direct import into standard CRM sections.",
+      "task_title": "Import into tasks",
+      "task_desc": "Choose what to import into tasks.",
+      "linked_title": "Linked import",
+      "linked_desc": "A single Excel row creates and links several entities.",
+      "hr_title": "Users and departments",
+      "hr_desc": "Import users and the org structure.",
+      "crm_files_title": "File import into CRM",
+      "crm_files_desc": "Bulk-attach files to CRM records."
+    },
+    "status_badge": {
+      "error": "Error",
+      "busy": "In progress",
+      "ok": "All good",
+      "idle": "Awaiting start"
     }
   },
   "page": {
     "index": {
-      "seo": { "title": "[playground] Application Testing" },
-      "menu": { "main": "Open" },
-      "message": { "title": "Hello!", "line1": "Let's test the application's operation in Bitrix24." },
-      "action": { "telemetry_test": "Telemetry Test" }
+      "seo": {
+        "title": "[playground] Application Testing"
+      },
+      "menu": {
+        "main": "Open"
+      },
+      "message": {
+        "title": "Hello!",
+        "line1": "Let's test the application's operation in Bitrix24."
+      },
+      "action": {
+        "telemetry_test": "Telemetry Test"
+      }
     },
     "telemetry-test": {
-      "seo": { "title": "Telemetry Test" },
+      "seo": {
+        "title": "Telemetry Test"
+      },
       "title": "Telemetry Test",
       "description": "Visual verification of all telemetry channels: backend events, frontend events, Bitrix24 API calls.",
       "section": {
@@ -995,27 +1029,64 @@
         "b24_placement": "placement.info",
         "back": "← Back"
       },
-      "label": { "select": "Select (ui_select_change)", "form_field": "Form field" },
-      "status": { "idle": "Idle", "ok": "✓ Sent", "error": "✗ Error", "result": "Result" }
+      "label": {
+        "select": "Select (ui_select_change)",
+        "form_field": "Form field"
+      },
+      "status": {
+        "idle": "Idle",
+        "ok": "✓ Sent",
+        "error": "✗ Error",
+        "result": "Result"
+      }
     },
     "install": {
-      "seo": { "title": "Application Installation" },
-      "ui": { "title": "Application Installation" },
+      "seo": {
+        "title": "Application Installation"
+      },
+      "ui": {
+        "title": "Application Installation"
+      },
       "step": {
-        "init": { "caption": "Please wait a moment..." },
-        "demo": { "caption": "Examples..." },
-        "events": { "caption": "Events..." },
-        "placement": { "caption": "Widgets..." },
-        "userFields": { "caption": "Uf..." },
-        "crm": { "caption": "CRM..." },
-        "serverSide": { "caption": "Server-side scripts..." },
-        "finish": { "caption": "Completion" }
+        "init": {
+          "caption": "Please wait a moment..."
+        },
+        "demo": {
+          "caption": "Examples..."
+        },
+        "events": {
+          "caption": "Events..."
+        },
+        "placement": {
+          "caption": "Widgets..."
+        },
+        "userFields": {
+          "caption": "Uf..."
+        },
+        "crm": {
+          "caption": "CRM..."
+        },
+        "serverSide": {
+          "caption": "Server-side scripts..."
+        },
+        "finish": {
+          "caption": "Completion"
+        }
       }
     },
     "app-options": {
-      "seo": { "title": "Application Settings", "description": "Example of working with application settings." },
-      "actions": { "save": "Save", "cancel": "Cancel" },
-      "error": { "title": "Error", "notAdmin": "Only an administrator can edit the application settings." },
+      "seo": {
+        "title": "Application Settings",
+        "description": "Example of working with application settings."
+      },
+      "actions": {
+        "save": "Save",
+        "cancel": "Cancel"
+      },
+      "error": {
+        "title": "Error",
+        "notAdmin": "Only an administrator can edit the application settings."
+      },
       "option": {
         "history": {
           "title": "Operation history",
@@ -1024,27 +1095,46 @@
           "property_2": "Event title",
           "property_bool": "Upward trend?"
         },
-        "present": { "title": "Event Log", "alert": "Every employee login is displayed in the Event Log." }
+        "present": {
+          "title": "Event Log",
+          "alert": "Every employee login is displayed in the Event Log."
+        }
       }
     }
   },
   "uf": {
     "demo": {
-      "alert": { "title": "Demonstration of working with the property.", "description": "Similarly, any application properties can be configured" },
-      "field": { "label": "Example field", "description": "Changing the value causes the chart to be rebuilt", "hint": "Trend" },
-      "action": { "settings": "Open settings" }
+      "alert": {
+        "title": "Demonstration of working with the property.",
+        "description": "Similarly, any application properties can be configured"
+      },
+      "field": {
+        "label": "Example field",
+        "description": "Changing the value causes the chart to be rebuilt",
+        "hint": "Trend"
+      },
+      "action": {
+        "settings": "Open settings"
+      }
     }
   },
   "placement": {
     "crm_deal_detail_tab": {
-      "seo": { "title": "Embedding in the deal card", "description": "Demonstration." },
+      "seo": {
+        "title": "Embedding in the deal card",
+        "description": "Demonstration."
+      },
       "action": "Shuffle"
     }
   },
   "components": {
     "backendStatus": {
       "title": "Backend Status",
-      "description": { "healthy": "Backend is healthy ({msg})", "checking": "Checking backend health...", "error": "Internal connection error" },
+      "description": {
+        "healthy": "Backend is healthy ({msg})",
+        "checking": "Checking backend health...",
+        "error": "Internal connection error"
+      },
       "action": "Update status"
     }
   }

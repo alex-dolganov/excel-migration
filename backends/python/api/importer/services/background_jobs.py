@@ -7,7 +7,7 @@ from django.utils import timezone
 from main.models import Bitrix24Account
 
 from importer.models import ImportSession
-from importer.services.error_messages import safe_format_import_error
+from importer.services.error_messages import safe_format_import_error, set_import_error_language
 
 STUCK_SESSION_TIMEOUT_MINUTES = int(os.getenv("IMPORT_STUCK_TIMEOUT_MINUTES", "40"))
 
@@ -246,6 +246,8 @@ def execute_bulk_attach_resume_background(*, session_id: str, account_id: str, r
 def _load_background_context(session_id: str, account_id: str) -> tuple[ImportSession, Bitrix24Account]:
     session = ImportSession.objects.get(id=session_id)
     account = Bitrix24Account.objects.get(pk=account_id)
+    import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
+    set_import_error_language(import_settings.get("language"))
     return session, account
 
 

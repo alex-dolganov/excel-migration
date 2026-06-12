@@ -1,6 +1,7 @@
 from django.utils import timezone
 
 from .b24_fields import SMART_PROCESS_ENTITY_TYPE, get_linked_import_schema
+from .error_messages import get_import_error_language
 from .validation import normalize_value
 
 
@@ -28,6 +29,77 @@ REPORT_ENTITY_LABELS = {
     "linked_deal_company": "Сделка + Компания",
     "linked_deal_contact": "Сделка + Контакт",
 }
+
+REPORT_ENTITY_LABELS_EN = {
+    "lead": "Lead",
+    "contact": "Contact",
+    "company": "Company",
+    "deal": "Deal",
+    "task": "Task",
+    "task_comment": "Task comment",
+    "task_checklist_item": "Checklist item",
+    "task_attachment": "Task attachment",
+    "crm_activity": "CRM activity",
+    "crm_note": "CRM note",
+    "crm_files_lead": "CRM file: lead",
+    "crm_files_contact": "CRM file: contact",
+    "crm_files_company": "CRM file: company",
+    "crm_files_deal": "CRM file: deal",
+    "user": "User",
+    "department": "Department",
+    "linked_company_contact": "Company + Contact",
+    "linked_company_deal": "Company + Deal",
+    "linked_contact_company": "Contact + Company",
+    "linked_contact_deal": "Contact + Deal",
+    "linked_deal_company": "Deal + Company",
+    "linked_deal_contact": "Deal + Contact",
+}
+
+REPORT_ENTITY_LABELS_BR = {
+    "lead": "Lead",
+    "contact": "Contato",
+    "company": "Empresa",
+    "deal": "Negócio",
+    "task": "Tarefa",
+    "task_comment": "Comentário da tarefa",
+    "task_checklist_item": "Item do checklist",
+    "task_attachment": "Anexo da tarefa",
+    "crm_activity": "Atividade CRM",
+    "crm_note": "Nota CRM",
+    "crm_files_lead": "Arquivo CRM: lead",
+    "crm_files_contact": "Arquivo CRM: contato",
+    "crm_files_company": "Arquivo CRM: empresa",
+    "crm_files_deal": "Arquivo CRM: negócio",
+    "user": "Usuário",
+    "department": "Departamento",
+    "linked_company_contact": "Empresa + Contato",
+    "linked_company_deal": "Empresa + Negócio",
+    "linked_contact_company": "Contato + Empresa",
+    "linked_contact_deal": "Contato + Negócio",
+    "linked_deal_company": "Negócio + Empresa",
+    "linked_deal_contact": "Negócio + Contato",
+}
+
+SMART_PROCESS_REPORT_LABELS = {
+    "ru": "Смарт-процесс",
+    "en": "Smart Process",
+    "br": "Processo inteligente",
+}
+
+LINKED_RECORD_ID_ENTITY_LABELS = {
+    "ru": {"company": "Компания", "contact": "Контакт", "deal": "Сделка"},
+    "en": {"company": "Company", "contact": "Contact", "deal": "Deal"},
+    "br": {"company": "Empresa", "contact": "Contato", "deal": "Negócio"},
+}
+
+
+def _get_localized_report_entity_labels() -> dict:
+    language = get_import_error_language()
+    if language == "en":
+        return REPORT_ENTITY_LABELS_EN
+    if language == "br":
+        return REPORT_ENTITY_LABELS_BR
+    return REPORT_ENTITY_LABELS
 
 
 def build_report_timestamp(timestamp=None) -> str:
@@ -122,11 +194,18 @@ def _build_linked_title(entity_type: str, linked_records=None, linked_payload=No
 
 
 def build_report_entity_label(entity_type: str, *, entity_config: dict | None = None) -> str:
+    language = get_import_error_language()
     if entity_type == SMART_PROCESS_ENTITY_TYPE:
+        smart_process_label = SMART_PROCESS_REPORT_LABELS.get(language, SMART_PROCESS_REPORT_LABELS["ru"])
         smart_process_title = normalize_value((entity_config or {}).get("title"))
         if smart_process_title:
-            return f"Смарт-процесс: {smart_process_title}"
-        return "Смарт-процесс"
+            return f"{smart_process_label}: {smart_process_title}"
+        return smart_process_label
+
+    normalized_entity_type = str(entity_type or "").strip()
+    localized_labels = _get_localized_report_entity_labels()
+    if language != "ru" and normalized_entity_type in localized_labels:
+        return localized_labels[normalized_entity_type]
 
     linked_schema = get_linked_import_schema(entity_type)
     if linked_schema is not None:
@@ -134,7 +213,7 @@ def build_report_entity_label(entity_type: str, *, entity_config: dict | None = 
         if linked_label:
             return linked_label
 
-    return REPORT_ENTITY_LABELS.get(str(entity_type or "").strip(), str(entity_type or "").strip())
+    return REPORT_ENTITY_LABELS.get(normalized_entity_type, normalized_entity_type)
 
 
 def build_report_title(
@@ -210,11 +289,10 @@ def build_report_record_id(entity_type: str, record_id=None, *, linked_records: 
         if not entity_ids:
             entity_ids = list(linked_records_map.keys())
 
-        entity_labels = {
-            "company": "Компания",
-            "contact": "Контакт",
-            "deal": "Сделка",
-        }
+        entity_labels = LINKED_RECORD_ID_ENTITY_LABELS.get(
+            get_import_error_language(),
+            LINKED_RECORD_ID_ENTITY_LABELS["ru"],
+        )
         labels = []
         for entity_id in entity_ids:
             entity_record_id = normalize_value((linked_records_map.get(entity_id) or {}).get("id"))

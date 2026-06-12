@@ -50,7 +50,8 @@ import {
   normalizeMappingSelectValue,
   resolveMappingSelectValue,
   buildSessionHistoryRows,
-  FILE_ATTACH_IMPORT_SCENARIOS,
+  setImporterUiTranslator,
+  buildFileAttachEntityOptions,
 } from '~/utils/importer-ui'
 import { sleepAction } from '~/utils/sleep'
 
@@ -196,6 +197,7 @@ const apiStore = useApiStore()
 const userStore = useUserStore()
 const runtimeConfig = useRuntimeConfig()
 const { t, locale } = useI18n()
+setImporterUiTranslator(t)
 const DEFAULT_MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
 
 function normalizeImportFileSizeBytes(value: unknown) {
@@ -579,9 +581,7 @@ const linkedScenarioItems = computed(() => scenarioSections.value.find((section)
 const linkedPrimaryEntityItems = computed(() => buildLinkedPrimaryEntityOptions())
 const linkedSecondaryEntityItems = computed(() => buildLinkedSecondaryEntityOptions(selectedLinkedPrimaryEntityType.value))
 const hrScenarioItems = computed(() => scenarioSections.value.find((section) => section.id === 'hr')?.items || [])
-const fileAttachCrmEntityItems = computed(() =>
-  Object.values(FILE_ATTACH_IMPORT_SCENARIOS).map((s) => ({ value: s.value, label: s.entityLabel })),
-)
+const fileAttachCrmEntityItems = computed(() => buildFileAttachEntityOptions())
 const isFileAttachMode = computed(() => String(entityType.value || '').startsWith('crm_files_'))
 const isTaskBulkAttachFlow = computed(() => (
   selectedFamily.value === 'task'
@@ -3423,6 +3423,7 @@ async function startImporterSetup() {
       source_format: sourceFormat.value,
       original_filename: selectedFile.value.name,
       import_mode: importModeMeta.value.value,
+      language: String(locale.value || ''),
       ...(selectedSmartProcessConfig.value ? { entity_config: selectedSmartProcessConfig.value } : {}),
     })
     session.value = createResponse.item
@@ -4190,6 +4191,7 @@ async function downloadExampleTemplate() {
     const { blob, filename } = await apiStore.downloadImportExampleTemplateXlsx(
       entityType.value,
       selectedSmartProcessConfig.value,
+      String(locale.value || ''),
     )
     const downloadUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')

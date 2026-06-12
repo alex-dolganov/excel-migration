@@ -1,4 +1,5 @@
 import ast
+import contextvars
 
 from b24pysdk.error import BitrixRequestTimeout
 
@@ -15,6 +16,76 @@ BITRIX_USER_INVITATION_UNKNOWN_ERROR = (
     "Частая причина — дневной лимит приглашений по e-mail. "
     "Проверьте приглашение вручную на портале и повторите попытку позже."
 )
+
+SUPPORTED_IMPORT_LANGUAGES = ("ru", "en", "br")
+
+_IMPORT_ERROR_TEXTS = {
+    "missing_record_id": {
+        "ru": MISSING_BITRIX_RECORD_ID_ERROR,
+        "en": "Bitrix24 did not confirm record creation: no ID was returned.",
+        "br": "O Bitrix24 não confirmou a criação do registro: nenhum ID foi retornado.",
+    },
+    "unreachable": {
+        "ru": BITRIX_UNREACHABLE_ERROR,
+        "en": "Could not reach Bitrix24. Check that the portal is available and retry the import.",
+        "br": "Não foi possível conectar ao Bitrix24. Verifique a disponibilidade do portal e repita a importação.",
+    },
+    "operation_time_limit": {
+        "ru": BITRIX_OPERATION_TIME_LIMIT_ERROR,
+        "en": "Bitrix24 temporarily blocked the method due to the operation time limit. Wait 10 minutes and retry the import.",
+        "br": "O Bitrix24 bloqueou temporariamente o método devido ao limite de tempo de execução. Aguarde 10 minutos e repita a importação.",
+    },
+    "daily_invitation_limit": {
+        "ru": BITRIX_DAILY_INVITATION_LIMIT_ERROR,
+        "en": "Bitrix24 has reached the daily e-mail invitation limit. User import stopped, try again later.",
+        "br": "O Bitrix24 atingiu o limite diário de convites por e-mail. A importação de usuários foi interrompida, tente novamente mais tarde.",
+    },
+    "invitation_unknown": {
+        "ru": BITRIX_USER_INVITATION_UNKNOWN_ERROR,
+        "en": "Bitrix24 did not accept the user invitation. A frequent cause is the daily e-mail invitation limit. Check the invitation manually on the portal and try again later.",
+        "br": "O Bitrix24 não aceitou o convite do usuário. Uma causa frequente é o limite diário de convites por e-mail. Verifique o convite manualmente no portal e tente novamente mais tarde.",
+    },
+    "timeout_seconds": {
+        "ru": "Bitrix24 не ответил за {seconds} сек. Повторите импорт.",
+        "en": "Bitrix24 did not respond within {seconds} sec. Retry the import.",
+        "br": "O Bitrix24 não respondeu em {seconds} s. Repita a importação.",
+    },
+    "timeout": {
+        "ru": "Bitrix24 не ответил вовремя. Повторите импорт.",
+        "en": "Bitrix24 did not respond in time. Retry the import.",
+        "br": "O Bitrix24 não respondeu a tempo. Repita a importação.",
+    },
+    "no_description": {
+        "ru": "Без описания",
+        "en": "No description",
+        "br": "Sem descrição",
+    },
+}
+
+_import_error_language = contextvars.ContextVar("import_error_language", default="ru")
+
+
+def normalize_import_language(language) -> str:
+    normalized = str(language or "").strip().lower().replace("_", "-")
+    if normalized in {"br", "pt", "pt-br"}:
+        return "br"
+    if normalized == "en" or normalized.startswith("en-"):
+        return "en"
+    return "ru"
+
+
+def set_import_error_language(language) -> None:
+    _import_error_language.set(normalize_import_language(language))
+
+
+def get_import_error_language() -> str:
+    return _import_error_language.get()
+
+
+def get_import_error_text(key: str, **params) -> str:
+    texts = _IMPORT_ERROR_TEXTS.get(key) or {}
+    template = texts.get(get_import_error_language()) or texts.get("ru") or ""
+    return template.format(**params) if params else template
 
 _BITRIX_DAILY_INVITATION_LIMIT_MARKERS = (
     "дневной лимит количества приглашений",
@@ -137,18 +208,18 @@ def format_import_error(error) -> str:
     if isinstance(error, BitrixRequestTimeout):
         timeout_seconds = _format_timeout_seconds(getattr(error, "timeout", None))
         if timeout_seconds:
-            return f"Bitrix24 не ответил за {timeout_seconds} сек. Повторите импорт."
-        return "Bitrix24 не ответил вовремя. Повторите импорт."
+            return get_import_error_text("timeout_seconds", seconds=timeout_seconds)
+        return get_import_error_text("timeout")
 
     if is_daily_invitation_limit_error(error):
-        return BITRIX_DAILY_INVITATION_LIMIT_ERROR
+        return get_import_error_text("daily_invitation_limit")
 
     message = _extract_error_message(error)
     normalized_message = message.lower()
     if "Read timed out" in message:
-        return "Bitrix24 не ответил вовремя. Повторите импорт."
+        return get_import_error_text("timeout")
     if "operation time limit" in normalized_message or "operation_time_limit" in normalized_message:
-        return BITRIX_OPERATION_TIME_LIMIT_ERROR
+        return get_import_error_text("operation_time_limit")
     if any(marker in normalized_message for marker in (
         "failed to resolve",
         "nameresolutionerror",
@@ -156,9 +227,9 @@ def format_import_error(error) -> str:
         "temporary failure in name resolution",
         "name or service not known",
     )):
-        return BITRIX_UNREACHABLE_ERROR
+        return get_import_error_text("unreachable")
 
-    return message or "Без описания"
+    return message or get_import_error_text("no_description")
 
 
 def safe_format_import_error(error) -> str:
@@ -170,4 +241,4 @@ def safe_format_import_error(error) -> str:
         except Exception:
             message = ""
 
-        return str(message or "").strip() or "Без описания"
+        return str(message or "").strip() or get_import_error_text("no_description")

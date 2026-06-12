@@ -7,6 +7,9 @@ import {
   SUPPORTED_IMPORT_ENTITIES,
   buildExampleTemplateDownloadMeta,
   buildImportScenarioSections,
+  buildImportModeOptions,
+  getImportModeMeta,
+  buildFileAttachEntityOptions,
   buildScenarioSelectionSummary,
   buildRoleAssignmentPayload,
   buildRoleAssignmentsRows,
@@ -30,6 +33,7 @@ import {
   buildDedupWeakeningNotice,
   buildImportRunProblemGroups,
   buildImportRunRows,
+  setImporterUiTranslator,
   buildImportRunCompletionNotice,
   buildImportRunSummaryFromSessionSnapshot,
   buildImportRunStatusFilters,
@@ -3704,4 +3708,79 @@ test('final import results render 20 rows per page with compact bottom paginatio
   assert.equal(importerWorkbenchSource.includes('function buildVisibleImportRunPageItems()'), true)
   assert.equal(importerWorkbenchSource.includes('Страница {{ importRunPage }} из {{ importRunPageCount }}'), true)
   assert.equal(importerWorkbenchSource.includes(':data="paginatedImportRunRows"'), true)
+})
+
+test('importer ui uses module translator for run tables and notices when set', () => {
+  setImporterUiTranslator((key, params = null) => {
+    const map = {
+      'importer.run_status.import_created': 'Created (en)',
+      'importer.run_completion.done_ok': 'Import complete (en)',
+      'importer.dedup_warning.match_label': `Match (en): ${params?.fields || ''}`,
+      'importer.field_labels.PHONE': 'Phone (en)',
+    }
+    return map[key] || key
+  })
+
+  try {
+    const rows = buildImportRunRows({
+      results: [
+        { row_number: 1, status: 'created', duplicate_match_fields: ['PHONE'] },
+      ],
+    })
+    assert.equal(rows[0].statusLabel, 'Created (en)')
+    assert.equal(rows[0].details.includes('Match (en): Phone (en)'), true)
+
+    const notice = buildImportRunCompletionNotice({ status: 'completed', failed_rows: 0 })
+    assert.equal(notice.message, 'Import complete (en)')
+  } finally {
+    setImporterUiTranslator(null)
+  }
+
+  const fallbackNotice = buildImportRunCompletionNotice({ status: 'completed', failed_rows: 0 })
+  assert.equal(fallbackNotice.message, 'Импорт завершен. Все строки обработаны.')
+})
+
+test('import mode, scenario, wizard, badge and filter labels use the module translator when set', () => {
+  setImporterUiTranslator((key) => {
+    const map = {
+      'importer.modes.simple_label': 'Simple import (en)',
+      'importer.modes.simple_desc': 'Simple desc (en)',
+      'importer.modes.advanced_label': 'Advanced import (en)',
+      'importer.families.crm_title': 'CRM entities (en)',
+      'importer.entities.lead': 'Leads (en)',
+      'importer.entities.contact_single': 'Contact (en)',
+      'importer.wizard_next.prefix': 'Next: ',
+      'importer.wizard_next.step3': 'Preview (en)',
+      'importer.wizard_next.finish': 'Finish (en)',
+      'importer.status_badge.idle': 'Awaiting start (en)',
+      'importer.run_filters.all': 'All (en)',
+    }
+    return map[key] || key
+  })
+
+  try {
+    assert.equal(getImportModeMeta('simple').label, 'Simple import (en)')
+    assert.equal(getImportModeMeta('simple').description, 'Simple desc (en)')
+    assert.equal(buildImportModeOptions()[1].label, 'Advanced import (en)')
+
+    const sections = buildImportScenarioSections()
+    const crmSection = sections.find((section) => section.id === 'crm')
+    assert.equal(crmSection.title, 'CRM entities (en)')
+    assert.equal(crmSection.items.find((item) => item.value === 'lead').label, 'Leads (en)')
+
+    assert.equal(getWizardNextLabel(2), 'Next: Preview (en)')
+    assert.equal(getWizardNextLabel(7), 'Finish (en)')
+
+    assert.equal(buildMigrationStatusBadge({}).label, 'Awaiting start (en)')
+    assert.equal(buildImportRunStatusFilters({ results: [] })[0].label, 'All (en)')
+
+    const fileAttachOptions = buildFileAttachEntityOptions()
+    assert.equal(fileAttachOptions.find((item) => item.value === 'crm_files_contact').label, 'Contact (en)')
+  } finally {
+    setImporterUiTranslator(null)
+  }
+
+  assert.equal(getImportModeMeta('simple').label, 'Простой импорт')
+  assert.equal(getWizardNextLabel(2), 'Далее: Предпросмотр')
+  assert.equal(buildMigrationStatusBadge({}).label, 'Ожидает запуска')
 })

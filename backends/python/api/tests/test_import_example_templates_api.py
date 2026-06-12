@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from importer.models import ImporterUserRole
@@ -91,6 +91,22 @@ class ImportExampleTemplatesApiTest(TestCase):
                     self.assertIn(str(value), sheet_xml)
             for value in unexpected_values:
                 self.assertNotIn(str(value), sheet_xml)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_example_template_respects_lang_query_param(self, get_from_jwt_token):
+        self.create_role(user_id=7, role=ROLE_OPERATOR)
+        get_from_jwt_token.return_value = self.create_account(is_admin=False)
+
+        response = self.client.get(
+            f"{reverse('importer:example-template-xlsx')}?entity_type=deal&lang=en",
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        sheet_xml = read_sheet_xml_from_xlsx(response.content)
+        self.assertIn("Deal name", sheet_xml)
+        self.assertIn("Website redesign", sheet_xml)
+        self.assertNotIn("Название сделки", sheet_xml)
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_viewer_can_download_example_template_when_import_access_is_open(self, get_from_jwt_token):
@@ -554,3 +570,51 @@ class ImportExampleTemplatesApiTest(TestCase):
         self.assertIn("Стадия", sheet_xml)
         self.assertIn("Согласования", sheet_xml)
         self.assertNotIn("Пример", sheet_xml)
+
+
+class ExampleTemplateLocalizationTest(SimpleTestCase):
+    def test_lead_template_is_translated_to_english(self):
+        from importer.services.example_templates import build_example_template_xlsx
+
+        sheet_xml = read_sheet_xml_from_xlsx(build_example_template_xlsx("lead", language="en"))
+        self.assertIn("Title", sheet_xml)
+        self.assertIn("First name", sheet_xml)
+        self.assertIn("Website inquiry", sheet_xml)
+        self.assertNotIn("Заголовок", sheet_xml)
+        self.assertNotIn("Запрос с сайта", sheet_xml)
+
+    def test_lead_template_is_translated_to_portuguese(self):
+        from importer.services.example_templates import build_example_template_xlsx
+
+        sheet_xml = read_sheet_xml_from_xlsx(build_example_template_xlsx("lead", language="br"))
+        self.assertIn("Título", sheet_xml)
+        self.assertIn("Sobrenome", sheet_xml)
+        self.assertNotIn("Фамилия", sheet_xml)
+
+    def test_unknown_language_falls_back_to_russian(self):
+        from importer.services.example_templates import build_example_template_xlsx
+
+        sheet_xml = read_sheet_xml_from_xlsx(build_example_template_xlsx("lead", language="de"))
+        self.assertIn("Заголовок", sheet_xml)
+
+    def test_every_russian_template_string_has_en_and_br_translation(self):
+        from importer.services.example_templates import (
+            EXAMPLE_TEMPLATE_DEFINITIONS,
+            TEMPLATE_VALUE_TRANSLATIONS,
+        )
+
+        import re
+
+        def has_cyrillic(value):
+            return bool(re.search(r"[А-Яа-яЁё]", str(value)))
+
+        missing = set()
+        for definition in EXAMPLE_TEMPLATE_DEFINITIONS.values():
+            candidates = [definition["sheet_name"]]
+            for row in definition["rows"]:
+                candidates.extend(row)
+            for value in candidates:
+                if has_cyrillic(value) and str(value) not in TEMPLATE_VALUE_TRANSLATIONS:
+                    missing.add(str(value))
+
+        self.assertEqual(missing, set(), f"Untranslated template strings: {sorted(missing)}")

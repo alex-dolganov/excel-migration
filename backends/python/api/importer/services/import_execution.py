@@ -21,8 +21,7 @@ from .validation import (
 )
 from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, download_attachment_source
 from .error_messages import (
-    MISSING_BITRIX_RECORD_ID_ERROR,
-    BITRIX_USER_INVITATION_UNKNOWN_ERROR,
+    get_import_error_text,
     is_daily_invitation_limit_error,
     iter_error_messages,
     safe_format_import_error,
@@ -187,7 +186,7 @@ def _flush_crm_batch(account, entity_type: str, pending_batch: list) -> tuple:
                     {
                         "row_number": row_number,
                         "status": "failed",
-                        "error": MISSING_BITRIX_RECORD_ID_ERROR,
+                        "error": get_import_error_text("missing_record_id"),
                         **build_import_result_report_meta(entity_type, row_payload=row_payload),
                     }
                 )
@@ -272,7 +271,7 @@ def _resolve_fatal_import_error(error, *, entity_type: str) -> str:
     if is_daily_invitation_limit_error(error):
         fatal_error = safe_format_import_error(error)
     elif any("unknown error" in message for message in normalized_messages):
-        fatal_error = BITRIX_USER_INVITATION_UNKNOWN_ERROR
+        fatal_error = get_import_error_text("invitation_unknown")
     else:
         return ""
 

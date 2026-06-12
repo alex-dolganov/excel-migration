@@ -6,6 +6,9 @@ from importer.services.error_messages import (
     BITRIX_DAILY_INVITATION_LIMIT_ERROR,
     BITRIX_UNREACHABLE_ERROR,
     format_import_error,
+    get_import_error_text,
+    normalize_import_language,
+    set_import_error_language,
 )
 
 
@@ -59,4 +62,45 @@ class ErrorMessagesTest(SimpleTestCase):
         self.assertEqual(
             format_import_error(FakeBitrixInvitationLimitError()),
             BITRIX_DAILY_INVITATION_LIMIT_ERROR,
+        )
+
+
+class ErrorMessageLocalizationTest(SimpleTestCase):
+    def tearDown(self):
+        set_import_error_language("ru")
+
+    def test_normalize_import_language_maps_browser_and_portal_tags(self):
+        self.assertEqual(normalize_import_language("pt-BR"), "br")
+        self.assertEqual(normalize_import_language("pt"), "br")
+        self.assertEqual(normalize_import_language("br"), "br")
+        self.assertEqual(normalize_import_language("en-US"), "en")
+        self.assertEqual(normalize_import_language("en"), "en")
+        self.assertEqual(normalize_import_language("de"), "ru")
+        self.assertEqual(normalize_import_language(None), "ru")
+
+    def test_format_import_error_localizes_operation_time_limit_to_english(self):
+        set_import_error_language("en")
+        self.assertEqual(
+            format_import_error("Method is blocked due to operation time limit."),
+            "Bitrix24 temporarily blocked the method due to the operation time limit. Wait 10 minutes and retry the import.",
+        )
+
+    def test_format_import_error_localizes_operation_time_limit_to_portuguese(self):
+        set_import_error_language("pt-BR")
+        self.assertEqual(
+            format_import_error("Method is blocked due to operation time limit."),
+            "O Bitrix24 bloqueou temporariamente o método devido ao limite de tempo de execução. Aguarde 10 minutos e repita a importação.",
+        )
+
+    def test_format_import_error_defaults_to_russian_without_language(self):
+        self.assertEqual(
+            format_import_error("Method is blocked due to operation time limit."),
+            "Bitrix24 временно заблокировал метод из-за лимита времени выполнения. Подождите 10 минут и повторите импорт.",
+        )
+
+    def test_get_import_error_text_falls_back_to_russian_for_unknown_language(self):
+        set_import_error_language("de")
+        self.assertEqual(
+            get_import_error_text("no_description"),
+            "Без описания",
         )

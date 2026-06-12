@@ -1,3 +1,27 @@
+let importerUiTranslator = null
+
+export function setImporterUiTranslator(t) {
+  importerUiTranslator = typeof t === 'function' ? t : null
+}
+
+export function translateImporterUi(key, params = null, fallback = '') {
+  if (importerUiTranslator) {
+    const translated = String((params ? importerUiTranslator(key, params) : importerUiTranslator(key)) || '').trim()
+    if (translated && translated !== key) {
+      return translated
+    }
+  }
+
+  if (!params) {
+    return fallback
+  }
+
+  return Object.entries(params).reduce(
+    (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+    fallback,
+  )
+}
+
 export const EMPTY_MAPPING_SELECT_VALUE = '__skip_import__'
 export const SUPPORTED_DEDUP_FIELDS = ['EMAIL', 'PHONE', 'TITLE']  // legacy list kept for reference
 const _DEDUP_FIELD_RE = /^[A-Za-z][A-Za-z0-9_]*$/
@@ -77,6 +101,10 @@ export const SUPPORTED_IMPORT_ENTITIES = [
 const IMPORT_ENTITY_LABELS = new Map(
   SUPPORTED_IMPORT_ENTITIES.map((entity) => [String(entity.value || ''), String(entity.label || '')]),
 )
+
+function translateImportEntityLabel(value, fallback) {
+  return translateImporterUi(`importer.entities.${String(value || '').trim()}`, null, fallback)
+}
 const TASK_IMPORT_FAMILY_LABEL = 'Импорт в задачи'
 const CRM_IMPORT_FAMILY_LABEL = 'CRM-сущности'
 const LINKED_IMPORT_FAMILY_LABEL = 'Связанный импорт'
@@ -467,14 +495,22 @@ export const LINKED_IMPORT_SCENARIOS = {
   },
 }
 
+function localizeImportMode(meta) {
+  return {
+    ...meta,
+    label: translateImporterUi(`importer.modes.${meta.value}_label`, null, meta.label),
+    description: translateImporterUi(`importer.modes.${meta.value}_desc`, null, meta.description),
+  }
+}
+
 export function buildImportModeOptions() {
-  return IMPORT_MODE_OPTIONS.map((item) => ({ ...item }))
+  return IMPORT_MODE_OPTIONS.map((item) => localizeImportMode(item))
 }
 
 export function getImportModeMeta(mode) {
   const normalizedMode = String(mode || '').trim().toLowerCase()
   const selectedMode = Object.hasOwn(IMPORT_MODE_META, normalizedMode) ? normalizedMode : 'advanced'
-  return { ...IMPORT_MODE_META[selectedMode] }
+  return localizeImportMode(IMPORT_MODE_META[selectedMode])
 }
 
 export function buildSimpleDedupPreset({ entityType, mappingRows } = {}) {
@@ -588,6 +624,17 @@ export const FILE_ATTACH_IMPORT_SCENARIOS = {
 
 const FILE_ATTACH_IMPORT_FAMILY_LABEL = 'Импорт файлов в CRM'
 
+export function buildFileAttachEntityOptions() {
+  return Object.values(FILE_ATTACH_IMPORT_SCENARIOS).map((scenario) => ({
+    value: scenario.value,
+    label: translateImporterUi(
+      `importer.entities.${String(scenario.value || '').replace(/^crm_files_/, '')}_single`,
+      null,
+      scenario.entityLabel,
+    ),
+  }))
+}
+
 function isTaskImportEntity(entityType) {
   return Object.hasOwn(TASK_IMPORT_SCENARIOS, String(entityType || '').trim())
 }
@@ -609,49 +656,49 @@ export function buildImportScenarioSections() {
     .filter((entity) => !isTaskImportEntity(entity?.value) && !isLinkedImportEntityType(entity?.value) && !isHrImportEntity(entity?.value))
     .map((entity) => ({
       value: String(entity?.value || ''),
-      label: String(entity?.label || ''),
+      label: translateImportEntityLabel(entity?.value, String(entity?.label || '')),
       family: 'crm',
     }))
 
   const taskItems = Object.values(TASK_IMPORT_SCENARIOS).map((scenario) => ({
     value: scenario.value,
-    label: scenario.label,
+    label: translateImportEntityLabel(scenario.value, scenario.label),
     family: scenario.family,
   }))
   const linkedItems = Object.values(LINKED_IMPORT_SCENARIOS).map((scenario) => ({
     value: scenario.value,
-    label: scenario.label,
+    label: translateImportEntityLabel(scenario.value, scenario.label),
     family: scenario.family,
   }))
   const hrItems = Object.values(HR_IMPORT_SCENARIOS).map((scenario) => ({
     value: scenario.value,
-    label: scenario.label,
+    label: translateImportEntityLabel(scenario.value, scenario.label),
     family: scenario.family,
   }))
 
   return [
     {
       id: 'crm',
-      title: CRM_IMPORT_FAMILY_LABEL,
-      description: 'Прямой импорт в стандартные CRM-разделы.',
+      title: translateImporterUi('importer.families.crm_title', null, CRM_IMPORT_FAMILY_LABEL),
+      description: translateImporterUi('importer.families.crm_desc', null, 'Прямой импорт в стандартные CRM-разделы.'),
       items: crmItems,
     },
     {
       id: 'task',
-      title: TASK_IMPORT_FAMILY_LABEL,
-      description: 'Выберите, что импортировать в задачи.',
+      title: translateImporterUi('importer.families.task_title', null, TASK_IMPORT_FAMILY_LABEL),
+      description: translateImporterUi('importer.families.task_desc', null, 'Выберите, что импортировать в задачи.'),
       items: taskItems,
     },
     {
       id: 'linked',
-      title: LINKED_IMPORT_FAMILY_LABEL,
-      description: 'Одна строка Excel создаёт и связывает несколько сущностей.',
+      title: translateImporterUi('importer.families.linked_title', null, LINKED_IMPORT_FAMILY_LABEL),
+      description: translateImporterUi('importer.families.linked_desc', null, 'Одна строка Excel создаёт и связывает несколько сущностей.'),
       items: linkedItems,
     },
     {
       id: 'hr',
-      title: HR_IMPORT_FAMILY_LABEL,
-      description: 'Импорт пользователей и организационной структуры.',
+      title: translateImporterUi('importer.families.hr_title', null, HR_IMPORT_FAMILY_LABEL),
+      description: translateImporterUi('importer.families.hr_desc', null, 'Импорт пользователей и организационной структуры.'),
       items: hrItems,
     },
   ]
@@ -663,8 +710,8 @@ export function buildScenarioSelectionSummary(entityType) {
   if (taskScenario) {
     return {
       family: 'task',
-      familyLabel: TASK_IMPORT_FAMILY_LABEL,
-      selectedLabel: taskScenario.label,
+      familyLabel: translateImporterUi('importer.families.task_title', null, TASK_IMPORT_FAMILY_LABEL),
+      selectedLabel: translateImportEntityLabel(normalizedEntityType, taskScenario.label),
       title: taskScenario.title,
       description: taskScenario.description,
       minimumFields: [...taskScenario.minimumFields],
@@ -676,8 +723,8 @@ export function buildScenarioSelectionSummary(entityType) {
   if (crmScenario) {
     return {
       family: 'crm',
-      familyLabel: CRM_IMPORT_FAMILY_LABEL,
-      selectedLabel: crmScenario.label,
+      familyLabel: translateImporterUi('importer.families.crm_title', null, CRM_IMPORT_FAMILY_LABEL),
+      selectedLabel: translateImportEntityLabel(normalizedEntityType, crmScenario.label),
       title: crmScenario.title,
       description: crmScenario.description,
       minimumFields: [...crmScenario.minimumFields],
@@ -689,8 +736,8 @@ export function buildScenarioSelectionSummary(entityType) {
   if (linkedScenario) {
     return {
       family: 'linked',
-      familyLabel: LINKED_IMPORT_FAMILY_LABEL,
-      selectedLabel: linkedScenario.label,
+      familyLabel: translateImporterUi('importer.families.linked_title', null, LINKED_IMPORT_FAMILY_LABEL),
+      selectedLabel: translateImportEntityLabel(normalizedEntityType, linkedScenario.label),
       title: linkedScenario.title,
       description: linkedScenario.description,
       minimumFields: [...linkedScenario.minimumFields],
@@ -702,8 +749,8 @@ export function buildScenarioSelectionSummary(entityType) {
   if (hrScenario) {
     return {
       family: 'hr',
-      familyLabel: HR_IMPORT_FAMILY_LABEL,
-      selectedLabel: hrScenario.label,
+      familyLabel: translateImporterUi('importer.families.hr_title', null, HR_IMPORT_FAMILY_LABEL),
+      selectedLabel: translateImportEntityLabel(normalizedEntityType, hrScenario.label),
       title: hrScenario.title,
       description: hrScenario.description,
       minimumFields: [...hrScenario.minimumFields],
@@ -715,8 +762,8 @@ export function buildScenarioSelectionSummary(entityType) {
   if (fileAttachScenario) {
     return {
       family: 'crm_files',
-      familyLabel: FILE_ATTACH_IMPORT_FAMILY_LABEL,
-      selectedLabel: fileAttachScenario.label,
+      familyLabel: translateImporterUi('importer.families.crm_files_title', null, FILE_ATTACH_IMPORT_FAMILY_LABEL),
+      selectedLabel: translateImportEntityLabel(normalizedEntityType.replace(/^crm_files_/, ''), fileAttachScenario.label),
       title: fileAttachScenario.title,
       description: fileAttachScenario.description,
       minimumFields: [...fileAttachScenario.minimumFields],
@@ -724,10 +771,10 @@ export function buildScenarioSelectionSummary(entityType) {
     }
   }
 
-  const selectedLabel = getImportEntityLabel(normalizedEntityType)
+  const selectedLabel = translateImportEntityLabel(normalizedEntityType, getImportEntityLabel(normalizedEntityType))
   return {
     family: 'crm',
-    familyLabel: CRM_IMPORT_FAMILY_LABEL,
+    familyLabel: translateImporterUi('importer.families.crm_title', null, CRM_IMPORT_FAMILY_LABEL),
     selectedLabel,
     title: selectedLabel,
     description: 'Каждая строка создаёт или обновляет отдельную CRM-запись в выбранном разделе.',
@@ -743,7 +790,7 @@ export function buildLinkedPrimaryEntityOptions() {
       .filter(Boolean),
   )).map((entityType) => ({
     value: entityType,
-    label: LINKED_ENTITY_OPTION_META[entityType]?.label || entityType,
+    label: translateImporterUi(`importer.entities.${entityType}_single`, null, LINKED_ENTITY_OPTION_META[entityType]?.label || entityType),
   }))
 }
 
@@ -759,7 +806,7 @@ export function buildLinkedSecondaryEntityOptions(primaryEntityType) {
     .filter(Boolean)
     .map((entityType) => ({
       value: entityType,
-      label: LINKED_ENTITY_OPTION_META[entityType]?.label || entityType,
+      label: translateImporterUi(`importer.entities.${entityType}_single`, null, LINKED_ENTITY_OPTION_META[entityType]?.label || entityType),
     }))
 }
 
@@ -855,26 +902,26 @@ function normalizeFieldType(fieldType) {
 
 export function buildFieldTypeLabel(fieldType, t = null) {
   const normalizedType = normalizeFieldType(fieldType)
-  if (t) {
-    const i18nMap = {
-      string: 'string', text: 'string',
-      crm_status: 'crm_status',
-      crm_category: 'crm_category',
-      enumeration: 'enumeration', list: 'enumeration',
-      boolean: 'boolean', bool: 'boolean',
-      integer: 'integer', int: 'integer',
-      double: 'double', float: 'double', money: 'double', number: 'double',
-      date: 'date',
-      datetime: 'datetime',
-      crm_multifield: 'crm_multifield',
-      phone: 'crm_multifield',
-      email: 'crm_multifield',
-      web: 'url',
-      im: 'crm_multifield',
-      file: 'file',
-    }
-    const key = i18nMap[normalizedType]
-    if (key) return t(`importer.field_types.${key}`)
+  const i18nMap = {
+    string: 'string', text: 'string',
+    crm_status: 'crm_status',
+    crm_category: 'crm_category',
+    enumeration: 'enumeration', list: 'enumeration',
+    boolean: 'boolean', bool: 'boolean',
+    integer: 'integer', int: 'integer',
+    double: 'double', float: 'double', money: 'double', number: 'double',
+    date: 'date',
+    datetime: 'datetime',
+    crm_multifield: 'crm_multifield',
+    phone: 'crm_multifield',
+    email: 'crm_multifield',
+    web: 'url',
+    im: 'crm_multifield',
+    file: 'file',
+  }
+  const i18nKey = i18nMap[normalizedType]
+  if (t && i18nKey) {
+    return t(`importer.field_types.${i18nKey}`)
   }
   const typeLabels = {
     string: 'Текст',
@@ -901,16 +948,20 @@ export function buildFieldTypeLabel(fieldType, t = null) {
     file: 'Файл',
   }
 
-  return typeLabels[normalizedType] || normalizedType || 'Текст'
+  const fallbackLabel = typeLabels[normalizedType] || normalizedType || 'Текст'
+  if (i18nKey) {
+    return translateImporterUi(`importer.field_types.${i18nKey}`, null, fallbackLabel)
+  }
+  return fallbackLabel
 }
 
 function buildAutoMatchLabel(matchType, t = null) {
   const normalizedMatchType = String(matchType || '').trim().toLowerCase()
   if (normalizedMatchType === 'exact') {
-    return t ? t('importer.auto_match_type.exact') : 'Точное'
+    return t ? t('importer.auto_match_type.exact') : translateImporterUi('importer.auto_match_type.exact', null, 'Точное')
   }
   if (normalizedMatchType === 'fuzzy') {
-    return t ? t('importer.auto_match_type.fuzzy') : 'Похожее'
+    return t ? t('importer.auto_match_type.fuzzy') : translateImporterUi('importer.auto_match_type.fuzzy', null, 'Похожее')
   }
   return ''
 }
@@ -918,10 +969,10 @@ function buildAutoMatchLabel(matchType, t = null) {
 function buildAutoMatchReasonLabel(matchReason, t = null) {
   const normalizedMatchReason = String(matchReason || '').trim().toLowerCase()
   if (normalizedMatchReason === 'alias_rule') {
-    return t ? t('importer.auto_match_reason.alias_rule') : 'Пользовательское правило'
+    return t ? t('importer.auto_match_reason.alias_rule') : translateImporterUi('importer.auto_match_reason.alias_rule', null, 'Пользовательское правило')
   }
   if (normalizedMatchReason === 'translit_alias') {
-    return t ? t('importer.auto_match_reason.translit_alias') : 'Транслит / синоним'
+    return t ? t('importer.auto_match_reason.translit_alias') : translateImporterUi('importer.auto_match_reason.translit_alias', null, 'Транслит / синоним')
   }
   return ''
 }
@@ -1541,6 +1592,7 @@ function normalizeImporterFieldTitleKey(value) {
 }
 
 export function formatImporterFieldLabel(fieldId, fieldTitle = '', t = null) {
+  t = t || importerUiTranslator
   const normalizedFieldId = String(fieldId || '').trim().toUpperCase()
   if (!normalizedFieldId) {
     return ''
@@ -1625,8 +1677,6 @@ export function buildValidationIssueRows(validationData) {
 }
 
 function buildFlatImportRunRows(importRunData) {
-  const statusLabels = IMPORT_RUN_STATUS_LABELS
-
   return (Array.isArray(importRunData?.results) ? importRunData.results : []).map((item) => {
     const status = String(item?.status || '')
     const linkedRecords = item?.linked_records && typeof item.linked_records === 'object' ? item.linked_records : null
@@ -1640,7 +1690,7 @@ function buildFlatImportRunRows(importRunData) {
       key: `${Number(item?.row_number || 0)}:${status}`,
       rowNumber: Number(item?.row_number || 0),
       status,
-      statusLabel: statusLabels[status] || status || '—',
+      statusLabel: getImportRunStatusLabel(status),
       createdAt: buildImportRunCreatedAt(item),
       entityLabel: buildImportRunEntityLabel(item, linkedRecords),
       title: buildImportRunTitle(item, linkedRecords),
@@ -1803,25 +1853,35 @@ function buildLinkedDryRunEntityStatus(itemStatus, entityMeta) {
 }
 
 function getDryRunStatusLabel(status) {
-  return {
+  const normalizedStatus = String(status || '').trim()
+  const fallback = {
     ready: 'Готово',
     ready_update: 'Готово к обновлению',
     skipped: 'Пропущено',
     skipped_duplicate: 'Дубль пропущен',
     pending_decision: 'Ожидает решения',
     cancelled: 'Остановлено',
-  }[String(status || '').trim()] || String(status || '').trim() || '—'
+  }[normalizedStatus]
+  if (!fallback) {
+    return normalizedStatus || '—'
+  }
+  return translateImporterUi(`importer.run_status.dry_${normalizedStatus}`, null, fallback)
 }
 
 function getLinkedImportEntityStatusLabel(status) {
-  return {
+  const normalizedStatus = String(status || '').trim()
+  const fallback = {
     created: 'Создано',
     updated: 'Обновлено',
     existing: 'Найдено',
     skipped: 'Пропущено',
     failed: 'Ошибка',
     cancelled: 'Остановлено',
-  }[String(status || '').trim()] || String(status || '').trim() || '—'
+  }[normalizedStatus]
+  if (!fallback) {
+    return normalizedStatus || '—'
+  }
+  return translateImporterUi(`importer.run_status.import_${normalizedStatus}`, null, fallback)
 }
 
 function resolveGroupedPrimaryStatus(currentStatus, nextStatus) {
@@ -2066,6 +2126,18 @@ const IMPORT_RUN_STATUS_LABELS = {
   cancelled: 'Остановлено',
 }
 
+function getImportRunStatusLabel(status) {
+  const normalizedStatus = String(status || '').trim()
+  const fallback = IMPORT_RUN_STATUS_LABELS[normalizedStatus]
+  if (!fallback) {
+    return normalizedStatus || '—'
+  }
+  const i18nKey = normalizedStatus === 'skipped_duplicate'
+    ? 'importer.run_status.dry_skipped_duplicate'
+    : `importer.run_status.import_${normalizedStatus}`
+  return translateImporterUi(i18nKey, null, fallback)
+}
+
 const IMPORT_RUN_PROBLEM_STATUSES = new Set(['failed', 'skipped', 'cancelled'])
 const IMPORT_RUN_SKIPPED_STATUSES = new Set(['skipped', 'skipped_duplicate'])
 const DEDUP_RISK_DETAILS_PREFIX = 'Неполный поиск дублей:'
@@ -2089,10 +2161,20 @@ function getLinkedRecordSectionIds(linkedRecords) {
 
 function getLinkedEntityDisplayMeta(sectionId) {
   const normalizedSectionId = String(sectionId || '').trim()
-  return LINKED_ENTITY_DISPLAY_META[normalizedSectionId] || {
-    singular: normalizedSectionId || 'Связанная запись',
-    plural: normalizedSectionId || 'Связанные записи',
-    emptyTitle: 'Без названия',
+  const meta = LINKED_ENTITY_DISPLAY_META[normalizedSectionId]
+  if (!meta) {
+    return {
+      singular: normalizedSectionId || 'Связанная запись',
+      plural: normalizedSectionId || 'Связанные записи',
+      emptyTitle: translateImporterUi('importer.common.untitled', null, 'Без названия'),
+    }
+  }
+  return {
+    singular: translateImporterUi(`importer.entities.${normalizedSectionId}_single`, null, meta.singular),
+    plural: translateImporterUi(`importer.entities.${normalizedSectionId}`, null, meta.plural),
+    emptyTitle: normalizedSectionId === 'contact'
+      ? translateImporterUi('importer.session_status.unnamed', null, meta.emptyTitle)
+      : translateImporterUi('importer.common.untitled', null, meta.emptyTitle),
   }
 }
 
@@ -2176,14 +2258,14 @@ export function buildImportRunStatusFilters(importRunData, entityType = '') {
   }
 
   return [
-    { id: 'all', label: 'Все', count: counts.all },
-    { id: 'problem', label: 'Проблемные', count: counts.problem },
-    { id: 'dedup_risk', label: 'Риск дублей', count: counts.dedup_risk },
-    { id: 'created', label: 'Создано', count: counts.created },
-    { id: 'updated', label: 'Обновлено', count: counts.updated },
-    { id: 'failed', label: 'Ошибки', count: counts.failed },
-    { id: 'skipped', label: 'Пропущено', count: counts.skipped },
-    { id: 'cancelled', label: 'Остановлено', count: counts.cancelled },
+    { id: 'all', label: translateImporterUi('importer.run_filters.all', null, 'Все'), count: counts.all },
+    { id: 'problem', label: translateImporterUi('importer.run_filters.problem', null, 'Проблемные'), count: counts.problem },
+    { id: 'dedup_risk', label: translateImporterUi('importer.run_filters.dedup_risk', null, 'Риск дублей'), count: counts.dedup_risk },
+    { id: 'created', label: translateImporterUi('importer.run_filters.created', null, 'Создано'), count: counts.created },
+    { id: 'updated', label: translateImporterUi('importer.run_filters.updated', null, 'Обновлено'), count: counts.updated },
+    { id: 'failed', label: translateImporterUi('importer.run_filters.failed', null, 'Ошибки'), count: counts.failed },
+    { id: 'skipped', label: translateImporterUi('importer.run_filters.skipped', null, 'Пропущено'), count: counts.skipped },
+    { id: 'cancelled', label: translateImporterUi('importer.run_filters.cancelled', null, 'Остановлено'), count: counts.cancelled },
   ]
 }
 
@@ -2223,9 +2305,11 @@ export function filterImportRunRows(rows, filterId = 'all') {
   }
 
   if (normalizedFilterId === 'dedup_risk') {
+    const localizedPrefix = translateImporterUi('importer.dedup_warning.fields_label', { fields: '' }, DEDUP_RISK_DETAILS_PREFIX).trim()
     return safeRows.filter((row) => (
       row?.hasDedupRisk === true
         || String(row?.details || '').includes(DEDUP_RISK_DETAILS_PREFIX)
+        || (localizedPrefix && String(row?.details || '').includes(localizedPrefix))
     ))
   }
 
@@ -2259,7 +2343,7 @@ export function buildImportRunProblemGroups(importRunData) {
 
     groupsByKey.set(key, {
       key,
-      label: IMPORT_RUN_STATUS_LABELS[status] || status || '—',
+      label: getImportRunStatusLabel(status),
       reason,
       count: 1,
       rowNumbers: Number.isInteger(rowNumber) && rowNumber > 0 ? [rowNumber] : [],
@@ -2310,7 +2394,8 @@ function buildDuplicateMatchDetails(item) {
     return ''
   }
 
-  return `Совпадение: ${fields.map((field) => formatImporterFieldLabel(field)).join(', ')}`
+  const fieldsLabel = fields.map((field) => formatImporterFieldLabel(field)).join(', ')
+  return translateImporterUi('importer.dedup_warning.match_label', { fields: fieldsLabel }, `Совпадение: ${fieldsLabel}`)
 }
 
 function normalizeLinkedRecord(item) {
@@ -2386,16 +2471,16 @@ function buildLinkedSummaryItem(sectionId, record, index) {
   }
 
   const statusLabelMap = {
-    created: 'Создано',
-    updated: 'Обновлено',
-    existing: 'Найдено',
+    created: translateImporterUi('importer.run_status.import_created', null, 'Создано'),
+    updated: translateImporterUi('importer.run_status.import_updated', null, 'Обновлено'),
+    existing: translateImporterUi('importer.run_status.import_existing', null, 'Найдено'),
   }
 
   return {
     key: `${sectionId}:${normalizedRecord.id || 'none'}:${index}`,
-    title: normalizedRecord.title || 'Без названия',
+    title: normalizedRecord.title || translateImporterUi('importer.common.untitled', null, 'Без названия'),
     recordId: normalizedRecord.id || '—',
-    statusLabel: statusLabelMap[normalizedRecord.status] || 'Обработано',
+    statusLabel: statusLabelMap[normalizedRecord.status] || translateImporterUi('importer.run_status.import_processed', null, 'Обработано'),
   }
 }
 
@@ -2747,35 +2832,39 @@ export function buildImportRunCompletionNotice(importRunData, { mode = 'run' } =
   }
 
   if (String(importRunData?.status || '').trim().toLowerCase() === 'running') {
+    const checkedCount = Number(importRunData?.checked_rows || 0).toLocaleString('ru-RU')
     return {
       type: 'success',
-      message: `Импорт продолжает выполняться в фоне. Уже обработано ${Number(importRunData?.checked_rows || 0).toLocaleString('ru-RU')} строк.`,
+      message: translateImporterUi('importer.run_completion.background', { count: checkedCount }, `Импорт продолжает выполняться в фоне. Уже обработано ${checkedCount} строк.`),
     }
   }
 
   if (String(importRunData?.status || '').trim().toLowerCase() === 'cancelled') {
+    const remainingCount = Number(importRunData?.remaining_rows || 0)
     return {
       type: 'success',
       message: normalizedMode === 'retry'
-        ? `Повтор остановлен. Не запущено строк: ${Number(importRunData?.remaining_rows || 0)}.`
-        : `Импорт остановлен. Не запущено строк: ${Number(importRunData?.remaining_rows || 0)}.`,
+        ? translateImporterUi('importer.run_completion.stopped_retry', { count: remainingCount }, `Повтор остановлен. Не запущено строк: ${remainingCount}.`)
+        : translateImporterUi('importer.run_completion.stopped', { count: remainingCount }, `Импорт остановлен. Не запущено строк: ${remainingCount}.`),
     }
   }
 
   if (normalizedMode === 'retry') {
+    const failedCount = Number(importRunData?.failed_rows || 0)
+    const retriedCount = Number(importRunData?.retried_rows || 0)
     return {
       type: 'success',
-      message: Number(importRunData?.failed_rows || 0) > 0
-        ? `Повтор выполнен. Осталось неуспешных строк: ${Number(importRunData?.failed_rows || 0)}.`
-        : `Повтор выполнен. Обработано строк: ${Number(importRunData?.retried_rows || 0)}.`,
+      message: failedCount > 0
+        ? translateImporterUi('importer.run_completion.retried_ok', { count: failedCount }, `Повтор выполнен. Осталось неуспешных строк: ${failedCount}.`)
+        : translateImporterUi('importer.run_completion.retried', { count: retriedCount }, `Повтор выполнен. Обработано строк: ${retriedCount}.`),
     }
   }
 
   return {
     type: 'success',
     message: Number(importRunData?.failed_rows || 0) > 0
-      ? 'Импорт завершен. Часть строк требует внимания.'
-      : 'Импорт завершен. Все строки обработаны.',
+      ? translateImporterUi('importer.run_completion.done_issues', null, 'Импорт завершен. Часть строк требует внимания.')
+      : translateImporterUi('importer.run_completion.done_ok', null, 'Импорт завершен. Все строки обработаны.'),
   }
 }
 
@@ -2820,7 +2909,7 @@ export function buildLinkedImportRunSummary(importRunData, { pageSize = 5, maxPa
     sections,
     hasOverflow,
     overflowMessage: hasOverflow
-      ? 'Показаны первые 15 элементов. Остальные детали доступны в CSV-отчете.'
+      ? translateImporterUi('importer.run_completion.first_n', null, 'Показаны первые 15 элементов. Остальные детали доступны в CSV-отчете.')
       : '',
   }
 }
@@ -2835,14 +2924,10 @@ function formatRowCountLabel(count) {
   const mod100 = normalizedCount % 100
 
   if (mod10 === 1 && mod100 !== 11) {
-    return 'строке'
+    return translateImporterUi('importer.dedup_warning.rows_1', null, 'строке')
   }
 
-  if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) {
-    return 'строках'
-  }
-
-  return 'строках'
+  return translateImporterUi('importer.dedup_warning.rows_2', null, 'строках')
 }
 
 export function buildDedupWeakeningNotice(data) {
@@ -2901,8 +2986,8 @@ export function buildDedupWeakeningNotice(data) {
   return {
     hasWarnings: true,
     count: warnings.length,
-    title: `Неполный поиск дублей в ${warnings.length} ${formatRowCountLabel(warnings.length)}`,
-    description: 'Поиск дублей выполнен не по всем выбранным полям.',
+    title: translateImporterUi('importer.dedup_warning.title', { count: warnings.length, rows: formatRowCountLabel(warnings.length) }, `Неполный поиск дублей в ${warnings.length} ${formatRowCountLabel(warnings.length)}`),
+    description: translateImporterUi('importer.dedup_warning.desc', null, 'Поиск дублей выполнен не по всем выбранным полям.'),
     fieldsLabel: uniqueFields.map((field) => formatDedupFieldLabel(field)).join(', '),
     rowsLabel: rowNumbers.join(', '),
     rowNumbers,
@@ -2918,7 +3003,8 @@ function buildDedupMissingDetails(item) {
     return ''
   }
 
-  return `Неполный поиск дублей: ${fields.map((field) => formatImporterFieldLabel(field)).join(', ')}`
+  const fieldsLabel = fields.map((field) => formatImporterFieldLabel(field)).join(', ')
+  return translateImporterUi('importer.dedup_warning.fields_label', { fields: fieldsLabel }, `Неполный поиск дублей: ${fieldsLabel}`)
 }
 
 function buildFlatDryRunRows(dryRunData, catalogFields = []) {
@@ -2963,7 +3049,7 @@ export function buildDryRunRows(dryRunData, entityType = '', fields = []) {
 }
 
 export function buildSessionHistoryRows(sessions) {
-  const statusLabels = {
+  const statusFallbacks = {
     draft: 'Черновик',
     uploaded: 'Файл загружен',
     validated: 'Проверено',
@@ -2973,36 +3059,44 @@ export function buildSessionHistoryRows(sessions) {
     failed: 'Ошибка',
     cancelled: 'Отменено',
   }
+  const getSessionStatusLabel = (status) => {
+    const normalizedStatus = String(status || '').trim()
+    const fallback = statusFallbacks[normalizedStatus]
+    if (!fallback) {
+      return normalizedStatus || '—'
+    }
+    return translateImporterUi(`importer.session_status.${normalizedStatus}`, null, fallback)
+  }
 
   const buildResultMeta = (status) => {
     const normalizedStatus = String(status || '').trim()
     if (normalizedStatus === 'completed') {
       return {
-        resultLabel: 'Успех',
+        resultLabel: translateImporterUi('importer.session_status.result_ok', null, 'Успех'),
         resultTone: 'success',
       }
     }
     if (normalizedStatus === 'failed') {
       return {
-        resultLabel: 'Ошибка',
+        resultLabel: translateImporterUi('importer.session_status.result_fail', null, 'Ошибка'),
         resultTone: 'danger',
       }
     }
     if (normalizedStatus === 'cancelled') {
       return {
-        resultLabel: 'Остановлен',
+        resultLabel: translateImporterUi('importer.session_status.result_stopped', null, 'Остановлен'),
         resultTone: 'warning',
       }
     }
     if (normalizedStatus === 'running') {
       return {
-        resultLabel: 'В процессе',
+        resultLabel: translateImporterUi('importer.session_status.result_running', null, 'В процессе'),
         resultTone: 'info',
       }
     }
 
     return {
-      resultLabel: statusLabels[normalizedStatus] || normalizedStatus || '—',
+      resultLabel: getSessionStatusLabel(normalizedStatus),
       resultTone: 'neutral',
     }
   }
@@ -3022,10 +3116,10 @@ export function buildSessionHistoryRows(sessions) {
     const normalizedStatus = String(status || '').trim()
 
     if (['draft', 'uploaded', 'validated', 'ready', 'running'].includes(normalizedStatus)) {
-      return 'Продолжить'
+      return translateImporterUi('importer.session_status.action_continue', null, 'Продолжить')
     }
 
-    return 'Открыть'
+    return translateImporterUi('importer.session_status.action_open', null, 'Открыть')
   }
 
   const buildCounters = (session) => {
@@ -3074,10 +3168,10 @@ export function buildSessionHistoryRows(sessions) {
 
     return {
       key: String(session?.id || ''),
-      fileName: String(session?.original_filename || '').trim() || 'Без имени',
+      fileName: String(session?.original_filename || '').trim() || translateImporterUi('importer.session_status.unnamed', null, 'Без имени'),
       status,
       entityType: getImportEntityLabel(session?.entity_type, session?.entity_config),
-      statusLabel: statusLabels[status] || status || '—',
+      statusLabel: getSessionStatusLabel(status),
       resultLabel: resultMeta.resultLabel,
       resultTone: resultMeta.resultTone,
       actionLabel: buildActionLabel(status),
@@ -3141,10 +3235,17 @@ export function getWizardNextLabel(step) {
   }
 
   if (normalizedStep >= 7) {
-    return 'Финиш'
+    return translateImporterUi('importer.wizard_next.finish', null, 'Финиш')
   }
 
-  return `Далее: ${labels[normalizedStep + 1] || 'Следующий шаг'}`
+  const nextStep = normalizedStep + 1
+  const stepLabel = translateImporterUi(
+    `importer.wizard_next.step${nextStep}`,
+    null,
+    labels[nextStep] || 'Следующий шаг',
+  )
+  const prefix = translateImporterUi('importer.wizard_next.prefix', null, 'Далее:').trim()
+  return `${prefix} ${stepLabel}`
 }
 
 export function buildMigrationStatusBadge({
@@ -3160,27 +3261,27 @@ export function buildMigrationStatusBadge({
     || Number(importRunFailedRows || 0) > 0
   ) {
     return {
-      label: 'Ошибка',
+      label: translateImporterUi('importer.status_badge.error', null, 'Ошибка'),
       tone: 'error',
     }
   }
 
   if (String(busyAction || '').trim().length > 0) {
     return {
-      label: 'В процессе',
+      label: translateImporterUi('importer.status_badge.busy', null, 'В процессе'),
       tone: 'busy',
     }
   }
 
   if (String(sessionId || '').trim().length > 0) {
     return {
-      label: 'Все в порядке',
+      label: translateImporterUi('importer.status_badge.ok', null, 'Все в порядке'),
       tone: 'ok',
     }
   }
 
   return {
-    label: 'Ожидает запуска',
+    label: translateImporterUi('importer.status_badge.idle', null, 'Ожидает запуска'),
     tone: 'idle',
   }
 }

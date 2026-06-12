@@ -1,3 +1,5 @@
+import { translateImporterUi } from './importer-ui.js'
+
 export const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 export const XLSX_MAGIC_BYTES = [0x50, 0x4b, 0x03, 0x04]
 
@@ -23,7 +25,7 @@ export async function buildValidatedBinaryDownload(response, {
   fallbackFilename = 'download.bin',
   fallbackMimeType = 'application/octet-stream',
   expectedMagicBytes = [],
-  invalidFormatMessage = 'Скачанный файл поврежден или пришел в неверном формате.',
+  invalidFormatMessage = translateImporterUi('importer.error.download_invalid_format', null, 'Скачанный файл поврежден или пришел в неверном формате.'),
 } = {}) {
   const arrayBuffer = await response.arrayBuffer()
   const bytes = new Uint8Array(arrayBuffer)

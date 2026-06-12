@@ -41,7 +41,11 @@ from .services.example_templates import (
     build_smart_process_example_template_filename,
     build_smart_process_example_template_xlsx,
 )
-from .services.error_messages import safe_format_import_error
+from .services.error_messages import (
+    normalize_import_language,
+    safe_format_import_error,
+    set_import_error_language,
+)
 from .services.excel_values import normalize_xlsx_cell_value, parse_xlsx_date_style_formats
 from .services.import_execution import execute_dry_run, execute_import, normalize_entity_dedup_settings
 from .services.mapping import (
@@ -213,6 +217,11 @@ def resolve_import_mode_marker(value: object) -> str:
     if normalized_value in {IMPORT_MODE_SIMPLE, IMPORT_MODE_ADVANCED}:
         return normalized_value
     return ""
+
+
+def get_session_language(session: ImportSession) -> str:
+    import_settings = session.import_settings if isinstance(session.import_settings, dict) else {}
+    return normalize_import_language(import_settings.get("language"))
 
 
 def resolve_session_mode_settings(import_settings: object, import_mode: object) -> tuple[str, dict, dict, dict]:
@@ -513,14 +522,15 @@ def import_example_template_xlsx(request: AuthorizedRequest):
         return permission_denied_response()
 
     entity_type = str(request.GET.get("entity_type") or "").strip()
+    language = normalize_import_language(request.GET.get("lang"))
     try:
         if entity_type == SMART_PROCESS_ENTITY_TYPE:
             entity_config = normalize_session_entity_config(entity_type, request.GET)
             fields = fetch_entity_fields(account, entity_type, entity_config=entity_config)
-            template_content = build_smart_process_example_template_xlsx(entity_config, fields)
+            template_content = build_smart_process_example_template_xlsx(entity_config, fields, language=language)
             filename = build_smart_process_example_template_filename(entity_config)
         else:
-            template_content = build_example_template_xlsx(entity_type)
+            template_content = build_example_template_xlsx(entity_type, language=language)
             filename = build_example_template_filename(entity_type)
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
@@ -1914,6 +1924,7 @@ def import_sessions(request: AuthorizedRequest):
         import_settings={
             **({"entity_config": entity_config} if entity_config else {}),
             "import_mode": import_mode,
+            "language": normalize_import_language(payload.get("language")),
         },
     )
 
@@ -2689,6 +2700,7 @@ def execute_import_session_dry_run_now(
     *,
     mode: str = DRY_RUN_MODE_PREIMPORT_SCAN,
 ) -> dict:
+    set_import_error_language(get_session_language(session))
     preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
     columns = preview_data.get("columns")
     selected_sheet_name = preview_data.get("selected_sheet_name") or session.source_sheet_name
@@ -2921,6 +2933,7 @@ def import_session_dry_run(request: AuthorizedRequest, session_id):
 
 
 def execute_import_session_run_now(session: ImportSession, account, *, per_row_decisions: dict | None = None) -> dict:
+    set_import_error_language(get_session_language(session))
     preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
     columns = preview_data.get("columns")
     selected_sheet_name = preview_data.get("selected_sheet_name") or session.source_sheet_name
@@ -3371,6 +3384,7 @@ def import_session_report_csv(request: AuthorizedRequest, session_id):
 
 
 def execute_import_session_retry_now(session: ImportSession, account) -> dict:
+    set_import_error_language(get_session_language(session))
     preview_data = session.preview_data if isinstance(session.preview_data, dict) else {}
     columns = preview_data.get("columns")
     selected_sheet_name = preview_data.get("selected_sheet_name") or session.source_sheet_name

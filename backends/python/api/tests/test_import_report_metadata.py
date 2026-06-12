@@ -3,7 +3,8 @@ from datetime import datetime, timezone as dt_timezone
 from django.test import SimpleTestCase, override_settings
 
 from importer.services.b24_fields import SMART_PROCESS_ENTITY_TYPE
-from importer.services.report_metadata import build_import_result_report_meta
+from importer.services.error_messages import set_import_error_language
+from importer.services.report_metadata import build_import_result_report_meta, build_report_entity_label
 from importer.views import build_import_report_csv
 
 
@@ -212,3 +213,28 @@ class ImportReportMetadataTest(SimpleTestCase):
         )
         self.assertIn("2;Создано;14.05.2026 09:30:45;Контакт;Анна Иванова;701;;", csv_text)
         self.assertIn('3;Ошибка;14.05.2026 09:31:10;Сделка;Сделка Бета;;;"Bitrix create failed for ""Бета"""', csv_text)
+
+
+class ImportReportEntityLocalizationTest(SimpleTestCase):
+    def tearDown(self):
+        set_import_error_language("ru")
+
+    def test_report_entity_label_localizes_to_english(self):
+        set_import_error_language("en")
+        self.assertEqual(build_report_entity_label("lead"), "Lead")
+        self.assertEqual(build_report_entity_label("deal"), "Deal")
+        self.assertEqual(build_report_entity_label("linked_company_contact"), "Company + Contact")
+        self.assertEqual(
+            build_report_entity_label(SMART_PROCESS_ENTITY_TYPE, entity_config={"title": "Orders"}),
+            "Smart Process: Orders",
+        )
+
+    def test_report_entity_label_localizes_to_portuguese(self):
+        set_import_error_language("br")
+        self.assertEqual(build_report_entity_label("contact"), "Contato")
+        self.assertEqual(build_report_entity_label("deal"), "Negócio")
+        self.assertEqual(build_report_entity_label("task"), "Tarefa")
+
+    def test_report_entity_label_defaults_to_russian(self):
+        self.assertEqual(build_report_entity_label("lead"), "Лид")
+        self.assertEqual(build_report_entity_label("linked_company_contact"), "Компания + Контакт")

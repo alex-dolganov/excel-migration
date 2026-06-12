@@ -554,7 +554,11 @@
       "file_required": "Primeiro selecione um arquivo para importar.",
       "entity_required": "Primeiro selecione uma entidade para importar.",
       "smart_process_required": "Primeiro selecione um processo inteligente específico.",
-      "format_required": "Somente arquivos .xlsx, .xls ou .csv podem ser carregados."
+      "format_required": "Somente arquivos .xlsx, .xls ou .csv podem ser carregados.",
+      "download_csv_failed": "Não foi possível baixar o relatório CSV",
+      "download_template_failed": "Não foi possível baixar o modelo do Excel",
+      "template_invalid_format": "O modelo do Excel baixado está corrompido ou em formato inválido.",
+      "download_invalid_format": "O arquivo baixado está corrompido ou em formato inválido."
     },
     "confirm": {
       "mass_create": "Serão criados {count} novos registros em \"{entity}\". Os registros existentes não serão atualizados porque a regra de duplicatas «Sempre criar» está selecionada. Continuar a importação?",
@@ -828,7 +832,8 @@
       "import_existing": "Encontrado",
       "import_skipped": "Ignorado",
       "import_failed": "Erro",
-      "import_cancelled": "Parado"
+      "import_cancelled": "Parado",
+      "import_processed": "Processado"
     },
     "run_filters": {
       "all": "Todos",
@@ -964,17 +969,46 @@
     "auto_match_reason": {
       "alias_rule": "Regra personalizada",
       "translit_alias": "Transliteração / sinônimo"
+    },
+    "families": {
+      "crm_title": "Entidades de CRM",
+      "crm_desc": "Importação direta para as seções padrão do CRM.",
+      "task_title": "Importar para tarefas",
+      "task_desc": "Escolha o que importar para as tarefas.",
+      "linked_title": "Importação vinculada",
+      "linked_desc": "Uma única linha do Excel cria e vincula várias entidades.",
+      "hr_title": "Usuários e departamentos",
+      "hr_desc": "Importação de usuários e da estrutura organizacional.",
+      "crm_files_title": "Importação de arquivos para o CRM",
+      "crm_files_desc": "Anexação em massa de arquivos a registros do CRM."
+    },
+    "status_badge": {
+      "error": "Erro",
+      "busy": "Em andamento",
+      "ok": "Tudo certo",
+      "idle": "Aguardando início"
     }
   },
   "page": {
     "index": {
-      "seo": { "title": "[playground] Teste do aplicativo" },
-      "menu": { "main": "Abrir" },
-      "message": { "title": "Olá!", "line1": "Vamos testar o funcionamento do aplicativo no Bitrix24." },
-      "action": { "telemetry_test": "Teste de Telemetria" }
+      "seo": {
+        "title": "[playground] Teste do aplicativo"
+      },
+      "menu": {
+        "main": "Abrir"
+      },
+      "message": {
+        "title": "Olá!",
+        "line1": "Vamos testar o funcionamento do aplicativo no Bitrix24."
+      },
+      "action": {
+        "telemetry_test": "Teste de Telemetria"
+      }
     },
     "telemetry-test": {
-      "seo": { "title": "Teste de Telemetria" },
+      "seo": {
+        "title": "Teste de Telemetria"
+      },
       "title": "Teste de Telemetria",
       "description": "Verificação visual de todos os canais de telemetria: eventos de backend, eventos de frontend, chamadas da API Bitrix24.",
       "section": {
@@ -995,27 +1029,64 @@
         "b24_placement": "placement.info",
         "back": "← Voltar"
       },
-      "label": { "select": "Selecionar (ui_select_change)", "form_field": "Campo do formulário" },
-      "status": { "idle": "Aguardando", "ok": "✓ Enviado", "error": "✗ Erro", "result": "Resultado" }
+      "label": {
+        "select": "Selecionar (ui_select_change)",
+        "form_field": "Campo do formulário"
+      },
+      "status": {
+        "idle": "Aguardando",
+        "ok": "✓ Enviado",
+        "error": "✗ Erro",
+        "result": "Resultado"
+      }
     },
     "install": {
-      "seo": { "title": "Instalação do aplicativo" },
-      "ui": { "title": "Instalação do aplicativo" },
+      "seo": {
+        "title": "Instalação do aplicativo"
+      },
+      "ui": {
+        "title": "Instalação do aplicativo"
+      },
       "step": {
-        "init": { "caption": "Precisa aguardar um pouco..." },
-        "demo": { "caption": "Exemplos..." },
-        "events": { "caption": "Eventos..." },
-        "placement": { "caption": "Widgets..." },
-        "userFields": { "caption": "Uf..." },
-        "crm": { "caption": "CRM..." },
-        "serverSide": { "caption": "Scripts do servidor..." },
-        "finish": { "caption": "Conclusão" }
+        "init": {
+          "caption": "Precisa aguardar um pouco..."
+        },
+        "demo": {
+          "caption": "Exemplos..."
+        },
+        "events": {
+          "caption": "Eventos..."
+        },
+        "placement": {
+          "caption": "Widgets..."
+        },
+        "userFields": {
+          "caption": "Uf..."
+        },
+        "crm": {
+          "caption": "CRM..."
+        },
+        "serverSide": {
+          "caption": "Scripts do servidor..."
+        },
+        "finish": {
+          "caption": "Conclusão"
+        }
       }
     },
     "app-options": {
-      "seo": { "title": "Configurações do aplicativo", "description": "Exemplo de trabalho com as configurações do aplicativo." },
-      "actions": { "save": "Salvar", "cancel": "Cancelar" },
-      "error": { "title": "Erro", "notAdmin": "Apenas um administrador pode editar as configurações do aplicativo." },
+      "seo": {
+        "title": "Configurações do aplicativo",
+        "description": "Exemplo de trabalho com as configurações do aplicativo."
+      },
+      "actions": {
+        "save": "Salvar",
+        "cancel": "Cancelar"
+      },
+      "error": {
+        "title": "Erro",
+        "notAdmin": "Apenas um administrador pode editar as configurações do aplicativo."
+      },
       "option": {
         "history": {
           "title": "Histórico de operações",
@@ -1024,27 +1095,46 @@
           "property_2": "Título do evento",
           "property_bool": "Tendência de alta?"
         },
-        "present": { "title": "Registro de eventos", "alert": "Cada login dos colaboradores é exibido no Registro de eventos." }
+        "present": {
+          "title": "Registro de eventos",
+          "alert": "Cada login dos colaboradores é exibido no Registro de eventos."
+        }
       }
     }
   },
   "uf": {
     "demo": {
-      "alert": { "title": "Demonstração do trabalho com a propriedade.", "description": "Por analogia, é possível configurar qualquer propriedade do aplicativo" },
-      "field": { "label": "Exemplo de campo", "description": "A alteração do valor leva à reconstrução do gráfico", "hint": "Tendência" },
-      "action": { "settings": "Abrir configurações" }
+      "alert": {
+        "title": "Demonstração do trabalho com a propriedade.",
+        "description": "Por analogia, é possível configurar qualquer propriedade do aplicativo"
+      },
+      "field": {
+        "label": "Exemplo de campo",
+        "description": "A alteração do valor leva à reconstrução do gráfico",
+        "hint": "Tendência"
+      },
+      "action": {
+        "settings": "Abrir configurações"
+      }
     }
   },
   "placement": {
     "crm_deal_detail_tab": {
-      "seo": { "title": "Incorporação no cartão do negócio", "description": "Demonstração." },
+      "seo": {
+        "title": "Incorporação no cartão do negócio",
+        "description": "Demonstração."
+      },
       "action": "Embaralhar"
     }
   },
   "components": {
     "backendStatus": {
       "title": "Status do backend",
-      "description": { "healthy": "Backend saudável ({msg})", "checking": "Verificando a operacionalidade do backend...", "error": "Erro de conexão interna" },
+      "description": {
+        "healthy": "Backend saudável ({msg})",
+        "checking": "Verificando a operacionalidade do backend...",
+        "error": "Erro de conexão interna"
+      },
       "action": "Atualizar status"
     }
   }

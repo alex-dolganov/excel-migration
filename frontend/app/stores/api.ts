@@ -1,6 +1,7 @@
 import type { B24Frame } from '@bitrix24/b24jssdk'
 import { withoutTrailingSlash } from 'ufo'
 import { buildValidatedBinaryDownload, XLSX_MAGIC_BYTES, XLSX_MIME_TYPE } from '~/utils/downloads'
+import { translateImporterUi } from '~/utils/importer-ui'
 
 export const useApiStore = defineStore(
   'api',
@@ -89,6 +90,7 @@ export const useApiStore = defineStore(
       source_format: string
       original_filename: string
       import_mode?: string
+      language?: string
       entity_config?: Record<string, any>
     }): Promise<{ item: Record<string, any> }> => {
       return await $api('/api/import-sessions', {
@@ -403,12 +405,12 @@ export const useApiStore = defineStore(
       if (!response.ok) {
         try {
           const payload = await response.json()
-          throw new Error(String(payload?.error || 'Не удалось скачать CSV-отчет'))
+          throw new Error(String(payload?.error || translateImporterUi('importer.error.download_csv_failed', null, 'Не удалось скачать CSV-отчет')))
         } catch (error) {
           if (error instanceof Error) {
             throw error
           }
-          throw new Error('Не удалось скачать CSV-отчет')
+          throw new Error(translateImporterUi('importer.error.download_csv_failed', null, 'Не удалось скачать CSV-отчет'))
         }
       }
 
@@ -500,10 +502,14 @@ export const useApiStore = defineStore(
     const downloadImportExampleTemplateXlsx = async (
       entityType: string,
       entityConfig?: Record<string, any> | null,
+      lang?: string,
     ): Promise<{ blob: Blob, filename: string }> => {
       const searchParams = new URLSearchParams()
       if (entityType) {
         searchParams.set('entity_type', entityType)
+      }
+      if (lang) {
+        searchParams.set('lang', lang)
       }
       if (entityType === 'smart_process' && entityConfig?.entityTypeId) {
         searchParams.set('entity_type_id', String(entityConfig.entityTypeId))
@@ -522,12 +528,12 @@ export const useApiStore = defineStore(
       if (!response.ok) {
         try {
           const payload = await response.json()
-          throw new Error(String(payload?.error || 'Не удалось скачать Excel-шаблон'))
+          throw new Error(String(payload?.error || translateImporterUi('importer.error.download_template_failed', null, 'Не удалось скачать Excel-шаблон')))
         } catch (error) {
           if (error instanceof Error) {
             throw error
           }
-          throw new Error('Не удалось скачать Excel-шаблон')
+          throw new Error(translateImporterUi('importer.error.download_template_failed', null, 'Не удалось скачать Excel-шаблон'))
         }
       }
 
@@ -535,7 +541,7 @@ export const useApiStore = defineStore(
         fallbackFilename: `${entityType || 'import'}-import-example.xlsx`,
         fallbackMimeType: XLSX_MIME_TYPE,
         expectedMagicBytes: XLSX_MAGIC_BYTES,
-        invalidFormatMessage: 'Скачанный Excel-шаблон поврежден или пришел в неверном формате.',
+        invalidFormatMessage: translateImporterUi('importer.error.template_invalid_format', null, 'Скачанный Excel-шаблон поврежден или пришел в неверном формате.'),
       })
     }
 
