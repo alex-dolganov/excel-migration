@@ -1061,10 +1061,10 @@
           "caption": "Widgets..."
         },
         "userFields": {
-          "caption": "Uf..."
+          "caption": "Campos personalizados..."
         },
         "crm": {
-          "caption": "CRM..."
+          "caption": "Configuração de CRM..."
         },
         "serverSide": {
           "caption": "Scripts do servidor..."

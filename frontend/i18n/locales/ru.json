@@ -1061,10 +1061,10 @@
           "caption": "Виджеты..."
         },
         "userFields": {
-          "caption": "Uf..."
+          "caption": "Пользовательские поля..."
         },
         "crm": {
-          "caption": "CRM..."
+          "caption": "Настройка CRM..."
         },
         "serverSide": {
           "caption": "Серверные скрипты..."

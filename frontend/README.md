@@ -29,5 +29,5 @@ docker-compose build frontend && docker-compose up -d frontend   # деплой 
 
 ## Ключевые правила
 
-- Названия полей Bitrix24 в UI — только через `formatImporterFieldLabel(fieldId)` из `app/utils/importer-ui.js`. Сырые ID (`TITLE`, `PHONE`) пользователю не показывать.
+- Названия полей Bitrix24 в UI — только через `formatImporterFieldLabel(fieldId, fieldTitle, t)` из `app/utils/importer-ui.js` (перевод через i18n, с RU-fallback). Сырые ID (`TITLE`, `PHONE`) пользователю не показывать.
 - При изменении меток полей в `importer-ui.js` — обновить ожидания в `tests/importer-ui.test.mjs`.

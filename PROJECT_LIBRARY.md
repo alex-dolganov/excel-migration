@@ -13,7 +13,7 @@
 | `backends/` | Три backend-варианта; **рабочий — python** | [backends/README.md](backends/README.md) |
 | `backends/python/` | Django-приложение (основной backend) | [backends/python/README.md](backends/python/README.md) |
 | `backends/python/api/importer/` | Ядро импорта: модели, 27 endpoint'ов, Celery-задачи | [importer/README.md](backends/python/api/importer/README.md) |
-| `backends/python/api/importer/services/` | Бизнес-логика импорта (17 сервисов, ~14k строк) | [services/README.md](backends/python/api/importer/services/README.md) |
+| `backends/python/api/importer/services/` | Бизнес-логика импорта (17 сервисов, ~10k строк) | [services/README.md](backends/python/api/importer/services/README.md) |
 | `backends/python/api/main/` | OAuth/установка приложения, аккаунты Bitrix24 | [main/README.md](backends/python/api/main/README.md) |
 | `backends/python/api/tests/` | 27 тестовых модулей backend | [tests/README.md](backends/python/api/tests/README.md) |
 | `frontend/` | Nuxt 3 приложение | [frontend/README.md](frontend/README.md) |

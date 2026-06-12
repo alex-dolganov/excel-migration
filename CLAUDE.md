@@ -77,7 +77,7 @@ docker-compose build frontend && docker-compose up -d frontend
 
 - `models.py` — `ImportSession` (status: pending → running → completed/failed), `ImportTemplate`, `ImportAliasRule`, `ImporterUserRole`
 - `tasks.py` — Celery tasks: `run_import_session`, `dry_run`, `retry`, `bulk_attach`, `cleanup_stuck`
-- `views.py` — 17 API endpoints, `MAX_IMPORT_ROWS=100_000`, `SAMPLE_PREVIEW_ROW_LIMIT=30`
+- `views.py` — 27 API endpoints (see `urls.py`), `MAX_IMPORT_ROWS=100_000`, `SAMPLE_PREVIEW_ROW_LIMIT=30`
 - `services/import_execution.py` — core import loop, calls `build_import_result_report_meta()` for each processed row
 - `services/report_metadata.py` — `build_import_result_report_meta()` → builds `report_entity`, `report_title`, `report_record_id` for every result row
 - `services/b24_fields.py` — Bitrix24 field definitions, `SMART_PROCESS_ENTITY_TYPE`
@@ -88,12 +88,12 @@ Queue: RabbitMQ + Celery when available; falls back to synchronous execution.
 
 `frontend/app/`
 
-- `components/ImporterWorkbench.vue` — main 7-step wizard component (~6500 lines)
-- `utils/importer-ui.js` — all UI business logic (~3070 lines):
+- `components/ImporterWorkbench.vue` — main 7-step wizard component (~8700 lines)
+- `utils/importer-ui.js` — all UI business logic (~3350 lines):
   - `buildFlatDryRunRows()` — builds dry-run table rows; uses `formatImporterFieldLabel()` for field name translation
   - `buildFlatImportRunRows()` — builds import-run table rows; uses `report_title` from backend
-  - `formatImporterFieldLabel(fieldId)` — translates Bitrix24 API field IDs to Russian (`TITLE`→`'Название / заголовок'`, `PHONE`→`'Телефон'`, etc.)
-  - `IMPORTER_FIELD_LABELS` — full translation map (~line 1405)
+  - `formatImporterFieldLabel(fieldId, fieldTitle, t)` — translates Bitrix24 API field IDs via i18n (`importer.field_labels.*`), falling back to the `IMPORTER_FIELD_LABELS` Russian map (`TITLE`→`'Название / заголовок'`, `PHONE`→`'Телефон'`, etc.)
+  - `IMPORTER_FIELD_LABELS` — Russian fallback translation map (~line 1500)
   - `dryRunTableColumns` / `importRunTableColumns` — column definitions
 - `stores/api.ts` — `useApiStore` for all backend calls
 - `components/BulkAttachWizard.vue` — S17 bulk file attach feature
@@ -118,7 +118,7 @@ Do not run any git commands without explicit user permission.
 
 ### UI Field Label Translation
 
-When displaying Bitrix24 field names in the UI, always translate via `formatImporterFieldLabel(fieldId)` from `importer-ui.js`. Never show raw API field IDs (like `TITLE`, `PHONE`) to users.
+When displaying Bitrix24 field names in the UI, always translate via `formatImporterFieldLabel(fieldId, fieldTitle, t)` from `importer-ui.js` (pass the i18n `t` for localized labels; without it the function uses the Russian `IMPORTER_FIELD_LABELS` fallback). Never show raw API field IDs (like `TITLE`, `PHONE`) to users.
 
 ### Lead Report Title Fallback
 
