@@ -410,7 +410,11 @@
       "apply_placeholder": "Select template",
       "apply_button": "Apply",
       "download_header": "Template",
-      "download_button": "Download"
+      "download_button": "Download",
+      "card_title": "Template for \"{entity}\"",
+      "card_description": "Download an Excel sample with headers and one test row for the selected import.",
+      "file_card_title": "File for \"{entity}\"",
+      "file_card_description": "No Excel template is needed in this mode: set up the task filter and upload one attachment file."
     },
     "value_mapping": {
       "title": "Value mapping",
@@ -786,7 +790,20 @@
       "company_single": "Company",
       "contact_single": "Contact",
       "deal_single": "Deal",
-      "lead_single": "Lead"
+      "lead_single": "Lead",
+      "task_single": "Task",
+      "task_comment_single": "Task comment",
+      "task_checklist_item_single": "Checklist item",
+      "task_attachment_single": "Task attachment",
+      "user_single": "User",
+      "department_single": "Department",
+      "smart_process_single": "Smart process",
+      "crm_activity_single": "CRM activity",
+      "crm_note_single": "CRM note",
+      "crm_files_lead_single": "CRM file: lead",
+      "crm_files_contact_single": "CRM file: contact",
+      "crm_files_company_single": "CRM file: company",
+      "crm_files_deal_single": "CRM file: deal"
     },
     "modes": {
       "simple_label": "Simple import",

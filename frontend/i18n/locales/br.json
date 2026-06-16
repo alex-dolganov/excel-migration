@@ -410,7 +410,11 @@
       "apply_placeholder": "Selecionar modelo",
       "apply_button": "Aplicar",
       "download_header": "Modelo",
-      "download_button": "Baixar"
+      "download_button": "Baixar",
+      "card_title": "Modelo para «{entity}»",
+      "card_description": "Baixe um exemplo de Excel com cabeçalhos e uma linha de teste para a importação selecionada.",
+      "file_card_title": "Arquivo para «{entity}»",
+      "file_card_description": "Neste modo não é necessário um modelo de Excel: configure o filtro de tarefas e envie um único arquivo anexo."
     },
     "value_mapping": {
       "title": "Mapeamento de valores",
@@ -786,7 +790,20 @@
       "company_single": "Empresa",
       "contact_single": "Contato",
       "deal_single": "Negócio",
-      "lead_single": "Lead"
+      "lead_single": "Lead",
+      "task_single": "Tarefa",
+      "task_comment_single": "Comentário da tarefa",
+      "task_checklist_item_single": "Item do checklist",
+      "task_attachment_single": "Anexo da tarefa",
+      "user_single": "Usuário",
+      "department_single": "Departamento",
+      "smart_process_single": "Processo inteligente",
+      "crm_activity_single": "Atividade CRM",
+      "crm_note_single": "Nota CRM",
+      "crm_files_lead_single": "Arquivo CRM: lead",
+      "crm_files_contact_single": "Arquivo CRM: contato",
+      "crm_files_company_single": "Arquivo CRM: empresa",
+      "crm_files_deal_single": "Arquivo CRM: negócio"
     },
     "modes": {
       "simple_label": "Importação simples",

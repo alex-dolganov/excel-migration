@@ -410,7 +410,11 @@
       "apply_placeholder": "Выберите шаблон",
       "apply_button": "Применить",
       "download_header": "Шаблон",
-      "download_button": "Скачать"
+      "download_button": "Скачать",
+      "card_title": "Шаблон для «{entity}»",
+      "card_description": "Скачайте пример Excel с заголовками и одной тестовой строкой под выбранный импорт.",
+      "file_card_title": "Файл для «{entity}»",
+      "file_card_description": "В этом режиме Excel-шаблон не нужен: настройте фильтр задач и загрузите один файл-вложение."
     },
     "value_mapping": {
       "title": "Сопоставление значений",
@@ -786,7 +790,20 @@
       "company_single": "Компания",
       "contact_single": "Контакт",
       "deal_single": "Сделка",
-      "lead_single": "Лид"
+      "lead_single": "Лид",
+      "task_single": "Задача",
+      "task_comment_single": "Комментарий задачи",
+      "task_checklist_item_single": "Пункт чек-листа",
+      "task_attachment_single": "Вложение задачи",
+      "user_single": "Пользователь",
+      "department_single": "Подразделение",
+      "smart_process_single": "Смарт-процесс",
+      "crm_activity_single": "Активность CRM",
+      "crm_note_single": "Заметка CRM",
+      "crm_files_lead_single": "Файл CRM: лид",
+      "crm_files_contact_single": "Файл CRM: контакт",
+      "crm_files_company_single": "Файл CRM: компания",
+      "crm_files_deal_single": "Файл CRM: сделка"
     },
     "modes": {
       "simple_label": "Простой импорт",

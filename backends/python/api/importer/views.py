@@ -9,6 +9,7 @@ from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
 import xlrd
+from b24pysdk.error import BitrixRequestTimeout
 from kombu.exceptions import OperationalError as KombuOperationalError
 
 from django.conf import settings
@@ -42,6 +43,7 @@ from .services.example_templates import (
     build_smart_process_example_template_xlsx,
 )
 from .services.error_messages import (
+    get_import_error_language,
     normalize_import_language,
     safe_format_import_error,
     set_import_error_language,
@@ -65,6 +67,7 @@ from .services.permissions import (
     resolve_role,
 )
 from .services.preflight import build_mapping_preflight
+from .services.report_metadata import build_report_entity_label
 from .services.user_resolution import BitrixUserResolver, list_bitrix_users
 from .services.validation import build_validation_result
 
@@ -195,6 +198,39 @@ IMPORT_RUN_STATUS_LABELS = {
     "pending_decision": "Ожидает решения",
     "cancelled": "Остановлено",
 }
+IMPORT_RUN_STATUS_LABELS_EN = {
+    "created": "Created",
+    "updated": "Updated",
+    "failed": "Failed",
+    "skipped": "Skipped",
+    "skipped_duplicate": "Duplicate skipped",
+    "pending_decision": "Pending decision",
+    "cancelled": "Cancelled",
+}
+IMPORT_RUN_STATUS_LABELS_BR = {
+    "created": "Criado",
+    "updated": "Atualizado",
+    "failed": "Erro",
+    "skipped": "Ignorado",
+    "skipped_duplicate": "Duplicata ignorada",
+    "pending_decision": "Aguardando decisão",
+    "cancelled": "Cancelado",
+}
+
+REPORT_CSV_HEADERS = {
+    "ru": ["Строка", "Статус", "Дата и время", "Сущность", "Название", "ID в Bitrix24", "Обновлённые поля", "Ошибка"],
+    "en": ["Row", "Status", "Date and time", "Entity", "Title", "Bitrix24 ID", "Updated fields", "Error"],
+    "br": ["Linha", "Status", "Data e hora", "Entidade", "Título", "ID no Bitrix24", "Campos atualizados", "Erro"],
+}
+
+
+def _get_localized_import_run_status_labels() -> dict:
+    language = get_import_error_language()
+    if language == "en":
+        return IMPORT_RUN_STATUS_LABELS_EN
+    if language == "br":
+        return IMPORT_RUN_STATUS_LABELS_BR
+    return IMPORT_RUN_STATUS_LABELS
 
 
 def normalize_dry_run_mode(value: object) -> str:
@@ -1004,21 +1040,17 @@ def is_session_cancel_requested(session_id) -> bool:
     ).exists()
 
 
-def build_import_report_csv(import_run: dict) -> str:
+def build_import_report_csv(import_run: dict, *, entity_type: str = "", entity_config: dict | None = None) -> str:
+    language = get_import_error_language()
     csv_buffer = StringIO()
     csv_writer = csv.writer(csv_buffer, delimiter=";")
-    csv_writer.writerow(
-        [
-            "Строка",
-            "Статус",
-            "Дата и время",
-            "Сущность",
-            "Название",
-            "ID в Bitrix24",
-            "Обновлённые поля",
-            "Ошибка",
-        ]
-    )
+    csv_writer.writerow(REPORT_CSV_HEADERS.get(language, REPORT_CSV_HEADERS["ru"]))
+
+    status_labels = _get_localized_import_run_status_labels()
+    # Recompute the entity label for the current language instead of trusting
+    # report_entity, which is frozen at import time in whatever language was
+    # active back then.
+    localized_entity_label = build_report_entity_label(entity_type, entity_config=entity_config) if entity_type else ""
 
     for item in import_run.get("results", []) if isinstance(import_run, dict) else []:
         if not isinstance(item, dict):
@@ -1030,12 +1062,13 @@ def build_import_report_csv(import_run: dict) -> str:
         report_record_id = str(item.get("report_record_id") or "").strip()
         raw_record_id = item.get("record_id")
         record_id = report_record_id or ("" if raw_record_id in (None, "") else str(raw_record_id))
+        entity_label = localized_entity_label or str(item.get("report_entity") or "").strip()
         csv_writer.writerow(
             [
                 item.get("row_number", ""),
-                IMPORT_RUN_STATUS_LABELS.get(status, status),
+                status_labels.get(status, status),
                 str(item.get("report_date_time") or "").strip(),
-                str(item.get("report_entity") or "").strip(),
+                entity_label,
                 str(item.get("report_title") or "").strip(),
                 record_id,
                 updated_fields_str,
@@ -3283,6 +3316,10 @@ def import_session_run(request: AuthorizedRequest, session_id):
         )
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
+    except BitrixRequestTimeout as error:
+        # Preflight queries Bitrix24 synchronously (e.g. duplicate lookups). A portal
+        # read timeout here must surface a localized, retryable message instead of a raw 500.
+        return JsonResponse({"error": safe_format_import_error(error)}, status=503)
 
     if preflight["blocking_issue_count"] > 0:
         return JsonResponse(
@@ -3375,8 +3412,13 @@ def import_session_report_csv(request: AuthorizedRequest, session_id):
     if not isinstance(import_run, dict) or not isinstance(import_run.get("results"), list):
         return JsonResponse({"error": "Import results are required before report download"}, status=400)
 
+    set_import_error_language(get_session_language(session))
     response = HttpResponse(
-        build_import_report_csv(import_run),
+        build_import_report_csv(
+            import_run,
+            entity_type=session.entity_type,
+            entity_config=get_session_entity_config(session),
+        ),
         content_type="text/csv; charset=utf-8",
     )
     response["Content-Disposition"] = f'attachment; filename="{build_import_report_filename(session.original_filename)}"'

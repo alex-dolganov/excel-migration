@@ -114,13 +114,17 @@ export const useAppInit = (loggerTitle?: string) => {
     localesI18n: ComputedRef<LocaleObject[]>,
     setLocale: (locale: Locale) => Promise<void>
   ) {
-    const b24CurrentLang = $b24.getLang()
-    if (localesI18n.value.filter(i => i.code === b24CurrentLang).length > 0) {
-      await setLocale(b24CurrentLang)
-      $logger.log('setLocale >>>', b24CurrentLang)
-    } else {
-      $logger.warn('not support locale >>>', b24CurrentLang)
-    }
+    // Only ru/en/br are fully translated. Map the portal language onto one of
+    // them so unsupported locales never fall back to untranslated stub files
+    // (which would render raw i18n keys). Rule: ru -> ru, kz -> ru,
+    // br (pt-BR) -> br, everything else -> en.
+    const SUPPORTED_LOCALES = ['ru', 'en', 'br']
+    const rawLang = String($b24.getLang() || '').toLowerCase()
+    const targetLang = SUPPORTED_LOCALES.includes(rawLang)
+      ? rawLang
+      : (rawLang === 'kz' ? 'ru' : 'en')
+    await setLocale(targetLang as Locale)
+    $logger.log('setLocale >>>', rawLang, '->', targetLang)
   }
 
   /**

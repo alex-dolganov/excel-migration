@@ -861,15 +861,31 @@ export function buildExampleTemplateDownloadMeta(entityType) {
 
   if (normalizedEntityType === 'task_attachment') {
     return {
-      title: `Файл для «${summary.selectedLabel}»`,
-      description: 'В этом режиме Excel-шаблон не нужен: настройте фильтр задач и загрузите один файл-вложение.',
+      title: translateImporterUi(
+        'importer.template.file_card_title',
+        { entity: summary.selectedLabel },
+        `Файл для «${summary.selectedLabel}»`,
+      ),
+      description: translateImporterUi(
+        'importer.template.file_card_description',
+        null,
+        'В этом режиме Excel-шаблон не нужен: настройте фильтр задач и загрузите один файл-вложение.',
+      ),
       filename: 'task_attachment-import-example.xlsx',
     }
   }
 
   return {
-    title: `Шаблон для «${summary.selectedLabel}»`,
-    description: 'Скачайте пример Excel с заголовками и одной тестовой строкой под выбранный импорт.',
+    title: translateImporterUi(
+      'importer.template.card_title',
+      { entity: summary.selectedLabel },
+      `Шаблон для «${summary.selectedLabel}»`,
+    ),
+    description: translateImporterUi(
+      'importer.template.card_description',
+      null,
+      'Скачайте пример Excel с заголовками и одной тестовой строкой под выбранный импорт.',
+    ),
     filename: `${normalizedEntityType || 'import'}-import-example.xlsx`,
   }
 }
@@ -1676,7 +1692,7 @@ export function buildValidationIssueRows(validationData) {
   }))
 }
 
-function buildFlatImportRunRows(importRunData) {
+function buildFlatImportRunRows(importRunData, entityType = '') {
   return (Array.isArray(importRunData?.results) ? importRunData.results : []).map((item) => {
     const status = String(item?.status || '')
     const linkedRecords = item?.linked_records && typeof item.linked_records === 'object' ? item.linked_records : null
@@ -1692,7 +1708,7 @@ function buildFlatImportRunRows(importRunData) {
       status,
       statusLabel: getImportRunStatusLabel(status),
       createdAt: buildImportRunCreatedAt(item),
-      entityLabel: buildImportRunEntityLabel(item, linkedRecords),
+      entityLabel: buildImportRunEntityLabel(item, linkedRecords, entityType),
       title: buildImportRunTitle(item, linkedRecords),
       recordId,
       details: [
@@ -2023,7 +2039,7 @@ function buildGroupedLinkedImportRunRows(importRunData, entityType) {
     const linkedRecords = item?.linked_records && typeof item.linked_records === 'object' ? item.linked_records : null
     const primaryRecord = normalizeLinkedRecord(linkedRecords?.[primaryEntity.id])
     if (!primaryRecord) {
-      const flatRow = buildFlatImportRunRows({ results: [item] })[0]
+      const flatRow = buildFlatImportRunRows({ results: [item] }, entityType)[0]
       if (flatRow) {
         fallbackRows.push(flatRow)
       }
@@ -2114,7 +2130,7 @@ export function buildImportRunRows(importRunData, entityType = '') {
     }
   }
 
-  return buildFlatImportRunRows(importRunData)
+  return buildFlatImportRunRows(importRunData, entityType)
 }
 
 const IMPORT_RUN_STATUS_LABELS = {
@@ -2187,13 +2203,25 @@ function buildLinkedEntitySummaryLabel(linkedRecords) {
   return sectionIds.map((sectionId) => getLinkedEntityDisplayMeta(sectionId).singular).join(' + ')
 }
 
-function buildImportRunEntityLabel(item, linkedRecords) {
-  const reportEntity = String(item?.report_entity || '').trim()
-  if (reportEntity) {
-    return reportEntity
+function buildImportRunEntityLabel(item, linkedRecords, entityType = '') {
+  // Translate the entity label from entityType at display time so the import
+  // history follows the current UI language instead of the language frozen
+  // into report_entity at import time.
+  const normalizedType = String(entityType || '').trim()
+  const isLinkedType = isLinkedImportEntityType(normalizedType)
+  if (normalizedType && !isLinkedType) {
+    const translated = translateImporterUi(`importer.entities.${normalizedType}_single`, null, '')
+    if (translated) {
+      return translated
+    }
   }
 
-  return buildLinkedEntitySummaryLabel(linkedRecords)
+  if (isLinkedType || getLinkedRecordSectionIds(linkedRecords).length) {
+    return buildLinkedEntitySummaryLabel(linkedRecords)
+  }
+
+  // Fallback to the value stored by the backend (already localized at import time).
+  return String(item?.report_entity || '').trim() || '—'
 }
 
 function buildImportRunTitle(item, linkedRecords) {
