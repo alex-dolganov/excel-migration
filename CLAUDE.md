@@ -22,12 +22,12 @@ make logs              # Stream all container logs
 
 ```bash
 # Run all backend tests
-docker exec api-python-worker python manage.py test
+docker exec api-python-worker python manage.py test tests
 
 # Run a specific test module
-docker exec api-python-worker python manage.py test api.tests.test_import_report_metadata
+docker exec api-python-worker python manage.py test tests.test_import_report_metadata
 
-# Working directory inside container: /var/www/api
+# Working directory inside container: /var/www/api (so the module path is `tests.*`, not `api.tests.*`)
 ```
 
 Note: There is a pre-existing error (`api.main.utils.decorators` — `RuntimeError: Model class api.main.models.Bitrix24Account doesn't declare an explicit app_label`) that appears in the test output regardless of your changes. It is not caused by import code.
@@ -112,6 +112,10 @@ Linked types: `linked_company_contact`, `linked_company_deal`, `linked_contact_d
 
 Do not run any git commands without explicit user permission.
 
+### MCP Servers (dev tooling)
+
+Two MCP servers are configured via `.mcp.json` at repo root: **b24-dev-mcp** (HTTP, official Bitrix24 REST API docs — use `bitrix-search` / `bitrix-method-details` to verify methods and field formats instead of guessing) and **playwright** (browser automation for e2e wizard checks; importing inside the portal requires an authenticated portal session). Config lives in `.mcp.json`, not local-scope, to avoid a drive-letter case pitfall in `~/.claude.json`. See [instructions/bitrix24/mcp.md](instructions/bitrix24/mcp.md).
+
 ### Bitrix24 Tasks API
 
 `b24pysdk` has no tasks scope. All task-related API calls (`tasks.task.*`) must go through `BitrixAPIRequest` directly — not through the SDK.
@@ -126,7 +130,7 @@ When displaying Bitrix24 field names in the UI, always translate via `formatImpo
 
 ### Tests
 
-- Backend: run via `docker exec api-python-worker python manage.py test` (not directly with `pytest`)
+- Backend: run via `docker exec api-python-worker python manage.py test tests` (not directly with `pytest`)
 - Frontend: `node --test tests/importer-ui.test.mjs`
 - When changing field label output in `importer-ui.js`, update test expectations in `frontend/tests/importer-ui.test.mjs`
 - When changing `build_report_title()` in `report_metadata.py`, update `test_import_report_metadata.py`

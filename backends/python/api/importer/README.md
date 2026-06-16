@@ -26,6 +26,15 @@ Django-приложение со всей логикой импорта Excel/CS
 ### `views.py` (~4150 строк) — API endpoints
 Константы: `MAX_IMPORT_ROWS=100_000` (env `IMPORT_ROW_LIMIT`), `SAMPLE_PREVIEW_ROW_LIMIT=30`.
 
+`POST .../run` перед постановкой в очередь синхронно выполняет **preflight** (`load_session_preflight_context`), который ходит в Bitrix24 (в т.ч. поиск дублей). Таймаут портала здесь перехватывается как `BitrixRequestTimeout` и возвращается локализованным сообщением со статусом **503** (retryable), а не голым 500. Прочие исключения всплывают в `@log_errors` (500 + тикет).
+
+### Троттлинг запросов к Bitrix24 (`services/import_execution.py`)
+Чтобы не упираться в лимиты REST API, между обращениями вставлены паузы (см. `_sleep_if_configured`):
+- `BITRIX_ROW_DELAY` (env, по умолчанию `0.1` сек) — пауза между строками;
+- `BITRIX_BATCH_DELAY` (env, по умолчанию `1.0` сек) — пауза между батчами.
+
+Установить `0`, чтобы отключить паузы (например, в тестах).
+
 ### `urls.py` — карта endpoint'ов (все с префиксом `/api/`)
 
 **Сессии импорта** (`import-sessions`):

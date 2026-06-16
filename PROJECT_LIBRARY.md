@@ -34,6 +34,7 @@
 - **Tasks API**: `b24pysdk` не имеет tasks scope — все `tasks.task.*` только через `BitrixAPIRequest`.
 - **Деплой backend**: `docker cp <файл> api-python-worker:/var/www/api/...` (без rebuild).
 - **Деплой frontend**: `docker-compose build frontend && docker-compose up -d frontend`.
-- **Тесты backend**: `docker exec api-python-worker python manage.py test`.
+- **Тесты backend**: `docker exec api-python-worker python manage.py test tests` (модуль `tests.*`, т.к. рабочая директория контейнера — `/var/www/api`).
 - **Тесты frontend**: `node --test tests/*.test.mjs` (из папки `frontend/`).
 - **Локализация UI**: 19 локалей в `frontend/i18n/locales/`; названия полей переводятся через `formatImporterFieldLabel()` из `importer-ui.js` — сырые ID полей (TITLE, PHONE) в UI не показывать.
+- **MCP для разработки**: в корне `.mcp.json` (project-scope) — два сервера: `b24-dev-mcp` (HTTP, дока REST API Bitrix24) и `playwright` (stdio, браузерная e2e-проверка). Детали и грабли подключения — [instructions/bitrix24/mcp.md](instructions/bitrix24/mcp.md).

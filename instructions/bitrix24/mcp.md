@@ -44,3 +44,28 @@
 
 - Если MCP server недоступен, предложи пользователю подключить **Bitrix24 MCP server** и обязательно укажи ссылку https://apidocs.bitrix24.ru/sdk/mcp.html.
 - Не дублируй большие фрагменты документации в ответе — достаточно ссылок и краткого резюме.
+
+---
+
+## Текущая конфигурация в этом проекте (14.06.2026)
+
+MCP-серверы подключены через файл `.mcp.json` в корне проекта (project-scope — читается по наличию файла, не зависит от регистра пути диска). Health-check обоих: ✔ Connected.
+
+| Сервер | Тип | Адрес/команда | Назначение |
+|---|---|---|---|
+| `b24-dev-mcp` | http | `https://mcp-dev.bitrix24.com/mcp` | Документация REST API Bitrix24 |
+| `playwright` | stdio | `npx @playwright/mcp@latest` | Браузерная автоматизация (e2e-проверка визарда) |
+
+### Инструменты b24-dev-mcp
+- `bitrix-search` — поиск методов/событий/статей по описанию (фильтры `doc_type`, `limit`).
+- `bitrix-method-details` — детали метода по точному имени (параметры, возврат, ошибки, примеры).
+- `bitrix-event-details`, `bitrix-article-details`, `bitrix-app-development-doc-details`.
+
+### Инструменты playwright
+`browser_navigate`, `browser_click`, `browser_type`, `browser_fill_form`, `browser_snapshot`, `browser_take_screenshot`, `browser_wait_for` и др. **Нюанс:** прогон импорта внутри портала упрётся в авторизацию Bitrix24 (приложение работает в iframe портала) — нужна активная сессия портала в браузере.
+
+### Грабли подключения (важно)
+Local-scope записи MCP хранятся в `~/.claude.json` под ключом пути проекта, **чувствительным к регистру буквы диска** (`C:/...` vs `c:/...`). Если сессия резолвит путь в другом регистре, `claude mcp list` покажет «No MCP servers configured». Решение — держать конфиг в `.mcp.json` в корне проекта (как сейчас), а не в local-scope.
+
+### Находка проверки REST API (к сведению, не баг)
+Пакетный путь создания CRM-сущностей в `import_execution.py` (`_CRM_BATCH_CREATE_METHODS`, при `dedup.strategy == "create"`) использует методы `crm.lead.add` / `crm.contact.add` / `crm.company.add` / `crm.deal.add`. По доке Bitrix24 (`bitrix-search`) эти методы помечены **deprecated** в пользу `crm.item.add`. Непакетный путь уже использует `crm.item.add` (строки ~1168/1876/2200). Методы `crm.*.add` пока работают — это технический долг, а не поломка; при рефакторинге свести оба пути на `crm.item.add` (отличается форма параметров: `entityTypeId` + `fields`).

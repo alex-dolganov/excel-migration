@@ -1,7 +1,8 @@
 # tests/ — backend-тесты (Django)
 
-Запуск: `docker exec api-python-worker python manage.py test` (НЕ pytest напрямую).
-Один модуль: `docker exec api-python-worker python manage.py test api.tests.<имя_модуля>`.
+Запуск: `docker exec api-python-worker python manage.py test tests` (НЕ pytest напрямую).
+Один модуль: `docker exec api-python-worker python manage.py test tests.<имя_модуля>`.
+Рабочая директория контейнера — `/var/www/api`, поэтому путь модуля `tests.*`, а не `api.tests.*`.
 
 ## Карта тестов → что покрывают
 
