@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.clickjacking import xframe_options_exempt
 
-from .utils.decorators import auth_required, log_errors
+from .utils.decorators import auth_required, log_errors, rate_limit
 from .utils import AuthorizedRequest
 from .models import ApplicationInstallation, Bitrix24Account
 
@@ -159,19 +159,31 @@ def uninstall(request):
     """Handle ONAPPUNINSTALL event from Bitrix24 marketplace.
 
     Bitrix24 sends: member_id, application_token, event=ONAPPUNINSTALL.
-    We nullify tokens so stale accounts can't make API calls, but keep
-    historical import data intact (portals can reinstall and reuse it).
+    We verify application_token against ApplicationInstallation before acting.
+    Tokens are nullified but import history is preserved for reinstall.
     """
     member_id = request.POST.get("member_id") or request.POST.get("auth[member_id]")
+    application_token = request.POST.get("application_token")
     if not member_id:
         try:
             body = json.loads(request.body)
             member_id = body.get("member_id") or (body.get("auth") or {}).get("member_id")
+            application_token = application_token or body.get("application_token")
         except Exception:
             pass
 
-    if not member_id:
-        return JsonResponse({"error": "member_id required"}, status=400)
+    if not member_id or not application_token:
+        return JsonResponse({"error": "member_id and application_token required"}, status=400)
+
+    # Verify the request is legitimately from Bitrix24 for this portal
+    valid = ApplicationInstallation.objects.filter(
+        bitrix_24_account__member_id=member_id,
+        application_token=application_token,
+    ).exists()
+
+    if not valid:
+        logger.warning("ONAPPUNINSTALL rejected: unknown member_id=%s or wrong token", member_id)
+        return JsonResponse({"error": "Forbidden"}, status=403)
 
     updated = Bitrix24Account.objects.filter(member_id=member_id).update(
         access_token=None,
@@ -187,6 +199,7 @@ def uninstall(request):
 @csrf_exempt
 @require_POST
 @log_errors("get_token")
+@rate_limit("get_token", limit=20, window=60)
 @auth_required
 def get_token(request: AuthorizedRequest):
     bitrix24_account = request.bitrix24_account
