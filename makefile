@@ -1,4 +1,4 @@
-.PHONY: help dev-init create-version delete-version dev-front dev-php dev-python dev-node prod-php prod-python prod-node status ps down down-all logs logs-nginxproxy clean composer-install composer-update composer-dumpautoload composer db-create db-migrate db-migrate-create db-schema-update db-schema-validate queue-up queue-down test-telemetry test-telemetry-null test-telemetry-real test-telemetry-config test-telemetry-factory test-telemetry-di test-telemetry-integration test-telemetry-profiles test-telemetry-attribute-groups test-telemetry-filtering test-telemetry-monolog test-telemetry-monolog-e2e test-telemetry-profiles-e2e test-telemetry-e2e test-telemetry-app-events test-telemetry-app-lifecycle test-telemetry-ui-events test-telemetry-action-events test-telemetry-api-calls test-telemetry-error-tracking test-telemetry-session-context test-telemetry-frontend-events test-telemetry-frontend-e2e
+.PHONY: help dev-init create-version delete-version dev-front dev-php dev-python dev-node prod-php prod-python prod-node vibecode-up vibecode-down vibecode-logs status ps down down-all logs logs-nginxproxy clean composer-install composer-update composer-dumpautoload composer db-create db-migrate db-migrate-create db-schema-update db-schema-validate queue-up queue-down test-telemetry test-telemetry-null test-telemetry-real test-telemetry-config test-telemetry-factory test-telemetry-di test-telemetry-integration test-telemetry-profiles test-telemetry-attribute-groups test-telemetry-filtering test-telemetry-monolog test-telemetry-monolog-e2e test-telemetry-profiles-e2e test-telemetry-e2e test-telemetry-app-events test-telemetry-app-lifecycle test-telemetry-ui-events test-telemetry-action-events test-telemetry-api-calls test-telemetry-error-tracking test-telemetry-session-context test-telemetry-frontend-events test-telemetry-frontend-e2e
 
 # Variables
 DOCKER_COMPOSE = docker-compose
@@ -24,6 +24,11 @@ help: ## Show this help message
 	@echo "  prod-php          Deploy PHP backend to production"
 	@echo "  prod-python       Deploy Python backend to production"
 	@echo "  prod-node         Deploy Node.js backend to production"
+	@echo ""
+	@echo "☁️  Vibecode Black Hole:"
+	@echo "  vibecode-up       Build and start all services on Black Hole"
+	@echo "  vibecode-down     Stop all Black Hole services"
+	@echo "  vibecode-logs     Stream Black Hole container logs"
 	@echo ""
 	@echo "🐘 PHP Tools:"
 	@echo "  composer-install  Install PHP dependencies"
@@ -382,6 +387,18 @@ dev-node:
 	  PROFILES="frontend,node,$$DB_PROFILE$$CLOUDPUB_PROFILE"; \
 	fi; \
 	COMPOSE_PROFILES=$$PROFILES $(DOCKER_COMPOSE) --env-file .env up --build
+
+# Vibecode Black Hole
+vibecode-up:
+	@echo "☁️  Starting Vibecode Black Hole stack..."
+	docker compose -f docker-compose.vibecode.yml --env-file .env.vibecode up -d --build
+
+vibecode-down:
+	@echo "⏹ Stopping Vibecode Black Hole stack..."
+	docker compose -f docker-compose.vibecode.yml --env-file .env.vibecode down
+
+vibecode-logs:
+	docker compose -f docker-compose.vibecode.yml --env-file .env.vibecode logs -f
 
 # Production
 prod-php:
