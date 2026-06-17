@@ -1,3 +1,6 @@
+import json
+import logging
+
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -6,9 +9,11 @@ from django.views.decorators.clickjacking import xframe_options_exempt
 
 from .utils.decorators import auth_required, log_errors
 from .utils import AuthorizedRequest
-from .models import ApplicationInstallation
+from .models import ApplicationInstallation, Bitrix24Account
 
 from config import load_config
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "root",
@@ -17,6 +22,7 @@ __all__ = [
     "get_enum",
     "get_list",
     "install",
+    "uninstall",
     "get_token",
 ]
 
@@ -143,6 +149,38 @@ def install(request: AuthorizedRequest):
     )
 
     return JsonResponse({"message": "Installation successful"})
+
+
+@xframe_options_exempt
+@csrf_exempt
+@require_POST
+@log_errors("uninstall")
+def uninstall(request):
+    """Handle ONAPPUNINSTALL event from Bitrix24 marketplace.
+
+    Bitrix24 sends: member_id, application_token, event=ONAPPUNINSTALL.
+    We nullify tokens so stale accounts can't make API calls, but keep
+    historical import data intact (portals can reinstall and reuse it).
+    """
+    member_id = request.POST.get("member_id") or request.POST.get("auth[member_id]")
+    if not member_id:
+        try:
+            body = json.loads(request.body)
+            member_id = body.get("member_id") or (body.get("auth") or {}).get("member_id")
+        except Exception:
+            pass
+
+    if not member_id:
+        return JsonResponse({"error": "member_id required"}, status=400)
+
+    updated = Bitrix24Account.objects.filter(member_id=member_id).update(
+        access_token=None,
+        refresh_token=None,
+        status="uninstalled",
+    )
+
+    logger.info("ONAPPUNINSTALL: member_id=%s accounts_deactivated=%d", member_id, updated)
+    return JsonResponse({"message": "Uninstalled", "accounts_deactivated": updated})
 
 
 @xframe_options_exempt

@@ -8,5 +8,6 @@ urlpatterns = [
     path('api/enum', get_enum, name='enum'),
     path('api/list', get_list, name='list'),
     path('api/install', install, name='install'),
+    path('api/uninstall', uninstall, name='uninstall'),
     path('api/getToken', get_token, name='get_token'),
 ]

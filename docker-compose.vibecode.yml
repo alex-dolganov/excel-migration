@@ -1,0 +1,126 @@
+# Vibecode Black Hole deployment
+# Builds all images from source (no Harbor registry needed).
+# Access via Vibecode tunnel → port 3000 (frontend) → Nuxt Nitro proxy /api → api-python:8000
+#
+# Usage:
+#   cp .env.vibecode.example .env.vibecode  # fill in values
+#   make vibecode-up
+
+services:
+  database-mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-appdb}
+      MYSQL_USER: ${DB_USER:-appuser}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-apppass}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpass}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infrastructure/database/init-mysql.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p${DB_ROOT_PASSWORD:-rootpass}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      internal-net:
+        aliases:
+          - database
+
+  rabbitmq:
+    image: rabbitmq:3.13-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-queue_user}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-queue_password}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal-net
+
+  api-python:
+    build:
+      context: ./backends/python
+      dockerfile: api/Dockerfile
+      target: production
+    container_name: api-python
+    restart: unless-stopped
+    env_file: .env.vibecode
+    environment:
+      BUILD_TARGET: production
+      DB_HOST: database
+      PORT: 8000
+    expose:
+      - "8000"
+    depends_on:
+      database-mysql:
+        condition: service_healthy
+    networks:
+      - internal-net
+    volumes:
+      - media_data:/var/www/api/media
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  api-python-worker:
+    build:
+      context: ./backends/python
+      dockerfile: api/Dockerfile
+      target: production
+    container_name: api-python-worker
+    restart: unless-stopped
+    env_file: .env.vibecode
+    environment:
+      BUILD_TARGET: production
+      DB_HOST: database
+    command:
+      - sh
+      - ./scripts/start-worker.sh
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      database-mysql:
+        condition: service_healthy
+    networks:
+      - internal-net
+    volumes:
+      - media_data:/var/www/api/media
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: frontend
+    restart: unless-stopped
+    env_file: .env.vibecode
+    environment:
+      NUXT_PUBLIC_APP_URL: ${VIRTUAL_HOST}
+      NUXT_PUBLIC_API_URL: ${VIRTUAL_HOST}
+      NUXT_PUBLIC_IMPORT_MAX_FILE_SIZE_BYTES: ${IMPORT_MAX_FILE_SIZE_BYTES:-52428800}
+      SERVER_HOST: http://api-python:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api-python
+    networks:
+      - internal-net
+
+networks:
+  internal-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  rabbitmq_data:
+  media_data:

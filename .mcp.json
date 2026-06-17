@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "b24-dev-mcp": {
+      "type": "http",
+      "url": "https://mcp-dev.bitrix24.com/mcp"
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["@playwright/mcp@latest", "--cdp-endpoint", "http://127.0.0.1:9222"],
+      "env": {}
+    },
+    "vibecode": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["@bitrix24/mcp-vibecode-api@latest"],
+      "env": {
+        "VIBE_API_KEY": "vibe_api_0etFrPBh72MLIChdGXNvGeWwM2HzQmi8_79efab"
+      }
+    }
+  }
+}
