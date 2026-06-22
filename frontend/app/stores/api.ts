@@ -16,12 +16,73 @@ export const useApiStore = defineStore(
       return tokenJWT.value.length > 2
     })
 
-    const $api = $fetch.create({
+    // «Сырой» клиент без авто-обновления — используется для getToken и как
+    // транспорт внутри $api (чтобы повтор после refresh не уходил в рекурсию).
+    const rawApi = $fetch.create({
       baseURL: apiUrl,
       headers: {
         'Content-Type': 'application/json'
       }
     })
+
+    // Дедупликация одновременных обновлений JWT: все 401 ждут один refresh.
+    let refreshJWTPromise: Promise<void> | null = null
+    const refreshTokenJWT = (): Promise<void> => {
+      if (refreshJWTPromise === null) {
+        refreshJWTPromise = reinitToken().finally(() => {
+          refreshJWTPromise = null
+        })
+      }
+      return refreshJWTPromise
+    }
+
+    // Авторизованный клиент: всегда подставляет актуальный JWT, а при 401
+    // (истёк наш Django-JWT, живёт 8 ч) один раз перевыпускает токен через
+    // reinitToken() (по свежему Bitrix-auth фрейма) и повторяет запрос.
+    // Без этого после протухания JWT спасала только перезагрузка страницы.
+    const $api = async <T = any>(url: string, options: Record<string, any> = {}): Promise<T> => {
+      const withAuth = () => ({
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          Authorization: `Bearer ${tokenJWT.value}`
+        }
+      })
+
+      try {
+        return await rawApi<T>(url, withAuth())
+      } catch (error: any) {
+        const status = error?.status ?? error?.response?.status ?? error?.statusCode
+        if (status === 401 && $b24 !== null) {
+          await refreshTokenJWT()
+          return await rawApi<T>(url, withAuth())
+        }
+        throw error
+      }
+    }
+
+    // Загрузка файлов (multipart) мимо $api — с тем же 401-refresh-retry.
+    const uploadWithAuth = async <T = any>(path: string, formData: FormData): Promise<T> => {
+      const doUpload = () => $fetch<T>(path, {
+        baseURL: apiUrl,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tokenJWT.value}`
+        },
+        body: formData,
+      })
+
+      try {
+        return await doUpload()
+      } catch (error: any) {
+        const status = error?.status ?? error?.response?.status ?? error?.statusCode
+        if (status === 401 && $b24 !== null) {
+          await refreshTokenJWT()
+          return await doUpload()
+        }
+        throw error
+      }
+    }
 
     // Health check
     const checkHealth = async (): Promise<{
@@ -79,7 +140,9 @@ export const useApiStore = defineStore(
     }
 
     const getToken = async (data: Record<string, any>): Promise<{ token: string }> => {
-      return await $api('/api/getToken', {
+      // Через rawApi (не $api) — это сам механизм получения JWT, его 401 не
+      // должен запускать refresh, иначе будет бесконечная петля.
+      return await rawApi('/api/getToken', {
         method: 'POST',
         body: JSON.stringify(data),
       })
@@ -139,14 +202,7 @@ export const useApiStore = defineStore(
       const formData = new FormData()
       formData.append('file', file)
 
-      return await $fetch(`/api/import-sessions/${sessionId}/upload`, {
-        baseURL: apiUrl,
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${tokenJWT.value}`
-        },
-        body: formData,
-      })
+      return await uploadWithAuth(`/api/import-sessions/${sessionId}/upload`, formData)
     }
 
     const getImportPreview = async (sessionId: string): Promise<{ item: Record<string, any> }> => {
@@ -453,11 +509,7 @@ export const useApiStore = defineStore(
     const uploadBulkAttachFile = async (file: File): Promise<{ file_id: string, file_name: string }> => {
       const formData = new FormData()
       formData.append('file', file)
-      return await $fetch(`${apiUrl}/api/bulk-attach-upload`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${tokenJWT.value}` },
-        body: formData,
-      })
+      return await uploadWithAuth('/api/bulk-attach-upload', formData)
     }
 
     const createBulkAttachSession = async (data: {
