@@ -4715,7 +4715,7 @@ class ImportExecutionApiTest(TestCase):
             ),
         )
         get_from_jwt_token.return_value = account
-        bitrix_api_request.return_value = SimpleNamespace(result={"result": True})
+        bitrix_api_request.return_value = SimpleNamespace(result=4501)
 
         session = self.create_uploaded_task_comment_session(
             [
@@ -4759,11 +4759,12 @@ class ImportExecutionApiTest(TestCase):
 
         self.assertEqual(response.status_code, 200, response.json())
         self.assertEqual(response.json()["item"]["created_rows"], 1)
-        self.assertEqual(response.json()["item"]["created_ids"], [])
+        self.assertEqual(response.json()["item"]["created_ids"], [4501])
         self.assertEqual(self._strip_report_meta(response.json()["item"]["results"]), [
             {
                 "row_number": 2,
                 "status": "created",
+                "record_id": 4501,
             }
         ])
         bitrix_api_request.assert_called_once_with(
