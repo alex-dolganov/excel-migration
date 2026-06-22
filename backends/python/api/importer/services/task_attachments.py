@@ -146,11 +146,6 @@ def _extract_int_value(payload, *keys: str) -> int | None:
     return None
 
 
-def _is_insufficient_scope_error(error: Exception) -> bool:
-    normalized_message = str(error or "").strip().lower()
-    return "higher privileges than provided by the access token" in normalized_message
-
-
 def _resolve_task_attachment_storage_id(account) -> int:
     user_id = int(getattr(account, "b24_user_id", 0) or 0)
     if user_id <= 0:
@@ -203,49 +198,23 @@ def _upload_file_to_task_storage(account, *, storage_id: int, file_name: str, co
     return file_id
 
 
-def _attach_file_to_task_legacy(account, *, task_id: int, file_name: str, content: bytes):
-    encoded = base64.b64encode(content).decode("utf-8")
+def attach_file_to_task(account, *, task_id: int, file_name: str, content: bytes, content_type: str = ""):
+    storage_id = _resolve_task_attachment_storage_id(account)
+    file_id = _upload_file_to_task_storage(
+        account,
+        storage_id=storage_id,
+        file_name=file_name,
+        content=content,
+    )
     request = BitrixAPIRequest(
         bitrix_token=account,
-        api_method="task.item.addfile",
+        api_method="tasks.task.files.attach",
         params={
-            "TASK_ID": task_id,
-            "FILE": {
-                "NAME": file_name,
-                "CONTENT": encoded,
-            },
+            "taskId": task_id,
+            "fileId": file_id,
         },
     )
     return request.result
-
-
-def attach_file_to_task(account, *, task_id: int, file_name: str, content: bytes, content_type: str = ""):
-    try:
-        storage_id = _resolve_task_attachment_storage_id(account)
-        file_id = _upload_file_to_task_storage(
-            account,
-            storage_id=storage_id,
-            file_name=file_name,
-            content=content,
-        )
-        request = BitrixAPIRequest(
-            bitrix_token=account,
-            api_method="tasks.task.files.attach",
-            params={
-                "taskId": task_id,
-                "fileId": file_id,
-            },
-        )
-        return request.result
-    except Exception as error:
-        if not _is_insufficient_scope_error(error):
-            raise
-        return _attach_file_to_task_legacy(
-            account,
-            task_id=task_id,
-            file_name=file_name,
-            content=content,
-        )
 
 
 _CRM_UPDATE_API_METHODS = {

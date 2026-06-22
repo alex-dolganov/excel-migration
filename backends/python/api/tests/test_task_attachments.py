@@ -136,36 +136,25 @@ class AttachFileToTaskTest(SimpleTestCase):
         self.assertEqual(attach_call["params"]["fileId"], 6687)
 
     @patch("importer.services.task_attachments.BitrixAPIRequest")
-    def test_attach_file_to_task_falls_back_to_legacy_task_item_addfile_when_disk_scope_is_missing(self, MockRequest):
+    def test_attach_file_to_task_propagates_error_without_legacy_fallback(self, MockRequest):
+        # Современный путь (Диск + tasks.task.files.attach) без legacy-отката:
+        # ошибка загрузки на Диск пробрасывается, а не уходит в task.item.addfile.
         storage_request = MagicMock()
-        storage_result_prop = PropertyMock(
+        type(storage_request).result = PropertyMock(
             side_effect=Exception("The request requires higher privileges than provided by the access token")
         )
-        type(storage_request).result = storage_result_prop
-
-        legacy_request = MagicMock()
-        legacy_result_prop = PropertyMock(return_value={"ATTACHMENT_ID": 1, "FILE_ID": "1455"})
-        type(legacy_request).result = legacy_result_prop
-
-        MockRequest.side_effect = [storage_request, legacy_request]
+        MockRequest.side_effect = [storage_request]
 
         account = SimpleNamespace(member_id="member-1", domain_url="test.bitrix24.ru", b24_user_id=7)
 
-        result = attach_file_to_task(
-            account,
-            task_id=801,
-            file_name="brief.txt",
-            content=b"hello world",
-            content_type="text/plain",
-        )
+        with self.assertRaises(Exception):
+            attach_file_to_task(
+                account,
+                task_id=801,
+                file_name="brief.txt",
+                content=b"hello world",
+                content_type="text/plain",
+            )
 
-        self.assertEqual(result, {"ATTACHMENT_ID": 1, "FILE_ID": "1455"})
-        self.assertEqual(MockRequest.call_count, 2)
-
-        storage_call = MockRequest.call_args_list[0].kwargs
-        self.assertEqual(storage_call["api_method"], "disk.storage.getlist")
-
-        legacy_call = MockRequest.call_args_list[1].kwargs
-        self.assertEqual(legacy_call["api_method"], "task.item.addfile")
-        self.assertEqual(legacy_call["params"]["TASK_ID"], 801)
-        self.assertEqual(legacy_call["params"]["FILE"]["NAME"], "brief.txt")
+        called_methods = [call.kwargs["api_method"] for call in MockRequest.call_args_list]
+        self.assertNotIn("task.item.addfile", called_methods)

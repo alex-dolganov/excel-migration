@@ -1313,11 +1313,13 @@ class ImportExecutionServiceTest(SimpleTestCase):
         )
 
     @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
-    def test_create_task_comment_with_author_uses_comment_api(self, bitrix_api_request):
-        bitrix_api_request.return_value = SimpleNamespace(result=915)
+    def test_create_task_comment_with_author_still_uses_chat_message_api(self, bitrix_api_request):
+        # Современный метод не умеет задавать автора — AUTHOR_ID игнорируется,
+        # комментарий всё равно создаётся через сообщение в чате задачи.
+        bitrix_api_request.return_value = SimpleNamespace(result={"result": True})
         account = SimpleNamespace(client=SimpleNamespace())
 
-        result = create_entity_record(
+        create_entity_record(
             account,
             "task_comment",
             {
@@ -1327,15 +1329,13 @@ class ImportExecutionServiceTest(SimpleTestCase):
             },
         )
 
-        self.assertEqual(result, 915)
         bitrix_api_request.assert_called_once_with(
             bitrix_token=account,
-            api_method="task.commentitem.add",
+            api_method="tasks.task.chat.message.send",
             params={
-                "TASKID": 801,
-                "FIELDS": {
-                    "POST_MESSAGE": "Status update",
-                    "AUTHOR_ID": 59,
+                "fields": {
+                    "taskId": 801,
+                    "text": "Status update",
                 }
             },
         )

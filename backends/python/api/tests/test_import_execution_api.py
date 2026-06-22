@@ -2835,7 +2835,6 @@ class ImportExecutionApiTest(TestCase):
             per_row_decisions=decisions,
         )
 
-    @patch("importer.services.background_jobs._send_import_completion_notify")
     @patch("importer.views.execute_import_session_run_now")
     @patch("importer.services.background_jobs._load_background_context")
     @patch("importer.services.background_jobs._update_session_job_state")
@@ -2844,7 +2843,6 @@ class ImportExecutionApiTest(TestCase):
         _update_session_job_state,
         _load_background_context,
         execute_import_session_run_now,
-        _send_import_completion_notify,
     ):
         from importer.services.background_jobs import execute_import_session_run_background
 
@@ -4779,7 +4777,7 @@ class ImportExecutionApiTest(TestCase):
 
     @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_run_task_comment_uses_author_from_file_before_default(self, get_from_jwt_token, bitrix_api_request):
+    def test_run_task_comment_imports_via_chat_message_api(self, get_from_jwt_token, bitrix_api_request):
         account = SimpleNamespace(
             member_id="member-1",
             domain_url="test.bitrix24.ru",
@@ -4847,12 +4845,11 @@ class ImportExecutionApiTest(TestCase):
         ])
         bitrix_api_request.assert_called_once_with(
             bitrix_token=account,
-            api_method="task.commentitem.add",
+            api_method="tasks.task.chat.message.send",
             params={
-                "TASKID": 801,
-                "FIELDS": {
-                    "POST_MESSAGE": "Status update",
-                    "AUTHOR_ID": 73,
+                "fields": {
+                    "taskId": 801,
+                    "text": "Status update",
                 }
             },
         )

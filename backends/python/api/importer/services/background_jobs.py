@@ -45,38 +45,6 @@ def _update_session_job_state(
     session.summary = summary
 
 
-def _send_import_completion_notify(session: ImportSession, account, *, result: dict) -> None:
-    try:
-        from b24pysdk.bitrix_api.requests import BitrixAPIRequest
-
-        filename = str(session.original_filename or "файл").strip()
-        created = int(result.get("created_rows") or 0)
-        updated = int(result.get("updated_rows") or 0)
-        failed = int(result.get("failed_rows") or 0)
-        cancelled = int(result.get("cancelled_rows") or 0)
-        is_cancelled = bool(result.get("cancelled"))
-
-        if is_cancelled:
-            summary_line = f"Остановлен. Создано: {created}, обновлено: {updated}, не обработано: {cancelled}."
-        elif failed > 0:
-            summary_line = f"Завершён с ошибками. Создано: {created}, обновлено: {updated}, ошибок: {failed}."
-        else:
-            summary_line = f"Успешно завершён. Создано: {created}, обновлено: {updated}."
-
-        message = f'Импорт "{filename}" — {summary_line}'
-        user_id = int(session.created_by_b24_user_id or 0)
-        if not user_id:
-            return
-
-        BitrixAPIRequest(
-            bitrix_token=account,
-            api_method="im.notify.system.add",
-            params={"USER_ID": user_id, "MESSAGE": message},
-        )
-    except Exception as exc:
-        logging.warning("Failed to send import completion notify: %s", exc)
-
-
 def enqueue_import_session_run(session: ImportSession, account, *, per_row_decisions: dict | None = None) -> str:
     from importer.tasks import run_import_session_task
 
@@ -165,28 +133,6 @@ def execute_bulk_attach_background(*, session_id: str, account_id: str):
         session.status = ImportSession.Status.COMPLETED
         session.save(update_fields=["status", "updated_at"])
 
-    try:
-        bulk_config = (session.summary or {}).get("bulk_attach", {})
-        entity_type = str(bulk_config.get("entity_type") or "").strip()
-        file_name = str(bulk_config.get("file_name") or bulk_config.get("file_id") or "файл").strip()
-        total = int(result.get("total") or 0)
-        successful = int(result.get("successful") or 0)
-        failed = int(result.get("failed") or 0)
-        message = (
-            f'Массовое добавление файлов ({entity_type}) — {file_name}. '
-            f'Обработано: {total}, успешно: {successful}, ошибок: {failed}.'
-        )
-        user_id = int(session.created_by_b24_user_id or 0)
-        if user_id:
-            from b24pysdk.bitrix_api.requests import BitrixAPIRequest
-            BitrixAPIRequest(
-                bitrix_token=account,
-                api_method="im.notify.system.add",
-                params={"USER_ID": user_id, "MESSAGE": message},
-            ).result
-    except Exception as exc:
-        logging.warning("Failed to send bulk attach completion notify: %s", exc)
-
     return result
 
 
@@ -217,28 +163,6 @@ def execute_bulk_attach_resume_background(*, session_id: str, account_id: str, r
     if session.status != ImportSession.Status.CANCELLED:
         session.status = ImportSession.Status.COMPLETED
         session.save(update_fields=["status", "updated_at"])
-
-    try:
-        bulk_config = (session.summary or {}).get("bulk_attach", {})
-        entity_type = str(bulk_config.get("entity_type") or "").strip()
-        file_name = str(bulk_config.get("file_name") or bulk_config.get("file_id") or "файл").strip()
-        total = int(result.get("total") or 0)
-        successful = int(result.get("successful") or 0)
-        failed = int(result.get("failed") or 0)
-        message = (
-            f'Массовое добавление файлов ({entity_type}) — {file_name}. '
-            f'Обработано: {total}, успешно: {successful}, ошибок: {failed}.'
-        )
-        user_id = int(session.created_by_b24_user_id or 0)
-        if user_id:
-            from b24pysdk.bitrix_api.requests import BitrixAPIRequest
-            BitrixAPIRequest(
-                bitrix_token=account,
-                api_method="im.notify.system.add",
-                params={"USER_ID": user_id, "MESSAGE": message},
-            ).result
-    except Exception as exc:
-        logging.warning("Failed to send bulk attach resume completion notify: %s", exc)
 
     return result
 
@@ -283,7 +207,6 @@ def execute_import_session_run_background(*, session_id: str, account_id: str, p
         state="cancelled" if session.status == ImportSession.Status.CANCELLED else "completed",
     )
     session.save(update_fields=["summary", "updated_at"])
-    _send_import_completion_notify(session, account, result=result)
     return result
 
 
@@ -349,8 +272,6 @@ def execute_import_session_retry_background(*, session_id: str, account_id: str)
         state="cancelled" if session.status == ImportSession.Status.CANCELLED else "completed",
     )
     session.save(update_fields=["summary", "updated_at"])
-    retry_result = result.get("retry_result") if isinstance(result, dict) else {}
-    _send_import_completion_notify(session, account, result=retry_result if isinstance(retry_result, dict) else result)
     return result
 
 

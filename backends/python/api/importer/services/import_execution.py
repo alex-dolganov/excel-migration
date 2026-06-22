@@ -2163,22 +2163,10 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
 
         if entity_type == "task_comment":
             comment_text = normalize_value(child_fields.get("POST_MESSAGE"))
-            author_id = normalize_record_id(child_fields.get("AUTHOR_ID"))
 
-            if author_id is not None:
-                response = BitrixAPIRequest(
-                    bitrix_token=account,
-                    api_method="task.commentitem.add",
-                    params={
-                        "TASKID": parent_task_id,
-                        "FIELDS": {
-                            "POST_MESSAGE": comment_text,
-                            "AUTHOR_ID": author_id,
-                        },
-                    },
-                )
-                return normalize_record_id(unwrap_bitrix_result(response))
-
+            # Современный метод комментариев — сообщение в чате задачи. Оно пишется
+            # от имени текущего пользователя и не умеет задавать произвольного автора,
+            # поэтому AUTHOR_ID на стороне Bitrix24 не применяется.
             response = BitrixAPIRequest(
                 bitrix_token=account,
                 api_method=TASK_CHILD_API_METHODS[entity_type],
