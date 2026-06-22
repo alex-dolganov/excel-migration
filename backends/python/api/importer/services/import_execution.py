@@ -34,7 +34,7 @@ from .b24_fields import SMART_PROCESS_ENTITY_TYPE, get_linked_import_schema, nor
 
 
 TASK_CHILD_API_METHODS = {
-    "task_comment": "tasks.task.chat.message.send",
+    "task_comment": "task.commentitem.add",
     "task_checklist_item": "tasks.task.checklist.add",
 }
 
@@ -2163,21 +2163,24 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
 
         if entity_type == "task_comment":
             comment_text = normalize_value(child_fields.get("POST_MESSAGE"))
+            author_id = normalize_record_id(child_fields.get("AUTHOR_ID"))
 
-            # Современный метод комментариев — сообщение в чате задачи. Оно пишется
-            # от имени текущего пользователя и не умеет задавать произвольного автора,
-            # поэтому AUTHOR_ID на стороне Bitrix24 не применяется.
+            # Комментарии задач создаются методом task.commentitem.add — современного
+            # аналога tasks.task.* для комментариев в Bitrix24 нет. AUTHOR_ID задаёт
+            # автора комментария; без него автором станет текущий пользователь.
+            comment_payload = {"POST_MESSAGE": comment_text}
+            if author_id is not None:
+                comment_payload["AUTHOR_ID"] = author_id
+
             response = BitrixAPIRequest(
                 bitrix_token=account,
                 api_method=TASK_CHILD_API_METHODS[entity_type],
                 params={
-                    "fields": {
-                        "taskId": parent_task_id,
-                        "text": comment_text,
-                    }
+                    "TASKID": parent_task_id,
+                    "FIELDS": comment_payload,
                 },
             )
-            return _extract_task_comment_message_id(unwrap_bitrix_result(response))
+            return normalize_record_id(unwrap_bitrix_result(response))
 
     if entity_type == "crm_activity":
         owner_type_id = normalize_value(fields.get("OWNER_TYPE_ID"))

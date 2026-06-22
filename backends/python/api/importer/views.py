@@ -3219,9 +3219,16 @@ def execute_import_session_run_now(session: ImportSession, account, *, per_row_d
         "import_progress": (session.summary if isinstance(session.summary, dict) else {}).get("import_progress"),
     }
     terminal_error = str(import_result.get("fatal_error") or import_result.get("auth_error") or "")
-    session.status = ImportSession.Status.CANCELLED if import_result.get("cancelled") else ImportSession.Status.COMPLETED
+    successful_rows = import_result["created_rows"] + import_result.get("updated_rows", 0)
+    if import_result.get("cancelled"):
+        session.status = ImportSession.Status.CANCELLED
+    elif successful_rows == 0 and import_result["failed_rows"] > 0:
+        # Ни одной строки не импортировано, только ошибки — это не успех.
+        session.status = ImportSession.Status.FAILED
+    else:
+        session.status = ImportSession.Status.COMPLETED
     session.processed_rows = import_result["checked_rows"]
-    session.successful_rows = import_result["created_rows"] + import_result.get("updated_rows", 0)
+    session.successful_rows = successful_rows
     session.failed_rows = import_result["failed_rows"]
     session.last_error = terminal_error
     session.save(
@@ -3543,9 +3550,16 @@ def execute_import_session_retry_now(session: ImportSession, account) -> dict:
         "import_run": merged_import_run,
         "retry_runs": retry_runs,
     }
-    session.status = ImportSession.Status.CANCELLED if retry_result.get("cancelled") else ImportSession.Status.COMPLETED
+    merged_successful_rows = merged_import_run["created_rows"] + merged_import_run.get("updated_rows", 0)
+    if retry_result.get("cancelled"):
+        session.status = ImportSession.Status.CANCELLED
+    elif merged_successful_rows == 0 and merged_import_run["failed_rows"] > 0:
+        # Ни одной строки не импортировано, только ошибки — это не успех.
+        session.status = ImportSession.Status.FAILED
+    else:
+        session.status = ImportSession.Status.COMPLETED
     session.processed_rows = merged_import_run["checked_rows"]
-    session.successful_rows = merged_import_run["created_rows"] + merged_import_run.get("updated_rows", 0)
+    session.successful_rows = merged_successful_rows
     session.failed_rows = merged_import_run["failed_rows"]
     session.last_error = str(retry_result.get("fatal_error") or retry_result.get("auth_error") or "")
     session.save(

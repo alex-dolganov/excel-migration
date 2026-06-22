@@ -1287,8 +1287,8 @@ class ImportExecutionServiceTest(SimpleTestCase):
         )
 
     @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
-    def test_create_task_comment_uses_chat_message_api(self, bitrix_api_request):
-        bitrix_api_request.return_value = SimpleNamespace(result={"result": True})
+    def test_create_task_comment_uses_comment_item_api(self, bitrix_api_request):
+        bitrix_api_request.return_value = SimpleNamespace(result=915)
         account = SimpleNamespace(client=SimpleNamespace())
 
         result = create_entity_record(
@@ -1300,23 +1300,22 @@ class ImportExecutionServiceTest(SimpleTestCase):
             },
         )
 
-        self.assertIsNone(result)
+        self.assertEqual(result, 915)
         bitrix_api_request.assert_called_once_with(
             bitrix_token=account,
-            api_method="tasks.task.chat.message.send",
+            api_method="task.commentitem.add",
             params={
-                "fields": {
-                    "taskId": 801,
-                    "text": "Status update",
-                }
+                "TASKID": 801,
+                "FIELDS": {
+                    "POST_MESSAGE": "Status update",
+                },
             },
         )
 
     @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
-    def test_create_task_comment_with_author_still_uses_chat_message_api(self, bitrix_api_request):
-        # Современный метод не умеет задавать автора — AUTHOR_ID игнорируется,
-        # комментарий всё равно создаётся через сообщение в чате задачи.
-        bitrix_api_request.return_value = SimpleNamespace(result={"result": True})
+    def test_create_task_comment_with_author_uses_comment_item_api(self, bitrix_api_request):
+        # AUTHOR_ID задаёт автора комментария (task.commentitem.add это поддерживает).
+        bitrix_api_request.return_value = SimpleNamespace(result=915)
         account = SimpleNamespace(client=SimpleNamespace())
 
         create_entity_record(
@@ -1331,12 +1330,13 @@ class ImportExecutionServiceTest(SimpleTestCase):
 
         bitrix_api_request.assert_called_once_with(
             bitrix_token=account,
-            api_method="tasks.task.chat.message.send",
+            api_method="task.commentitem.add",
             params={
-                "fields": {
-                    "taskId": 801,
-                    "text": "Status update",
-                }
+                "TASKID": 801,
+                "FIELDS": {
+                    "POST_MESSAGE": "Status update",
+                    "AUTHOR_ID": 59,
+                },
             },
         )
 

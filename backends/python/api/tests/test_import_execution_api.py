@@ -2567,6 +2567,8 @@ class ImportExecutionApiTest(TestCase):
         self.assertEqual(first_error, "Bitrix24 не ответил за 10 сек. Повторите импорт.")
 
         session.refresh_from_db()
+        # Все строки упали (0 создано) — статус не "успех", а "ошибка".
+        self.assertEqual(session.status, ImportSession.Status.FAILED)
         self.assertEqual(session.last_error, "")
         self.assertEqual(
             session.summary["import_run"]["results"][0]["error"],
@@ -4701,7 +4703,7 @@ class ImportExecutionApiTest(TestCase):
 
     @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_run_sends_task_chat_message(self, get_from_jwt_token, bitrix_api_request):
+    def test_run_creates_task_comment(self, get_from_jwt_token, bitrix_api_request):
         account = SimpleNamespace(
             member_id="member-1",
             domain_url="test.bitrix24.ru",
@@ -4766,18 +4768,18 @@ class ImportExecutionApiTest(TestCase):
         ])
         bitrix_api_request.assert_called_once_with(
             bitrix_token=account,
-            api_method="tasks.task.chat.message.send",
+            api_method="task.commentitem.add",
             params={
-                "fields": {
-                    "taskId": 801,
-                    "text": "Status update",
-                }
+                "TASKID": 801,
+                "FIELDS": {
+                    "POST_MESSAGE": "Status update",
+                },
             },
         )
 
     @patch("importer.services.import_execution.BitrixAPIRequest", create=True)
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
-    def test_run_task_comment_imports_via_chat_message_api(self, get_from_jwt_token, bitrix_api_request):
+    def test_run_task_comment_imports_with_author(self, get_from_jwt_token, bitrix_api_request):
         account = SimpleNamespace(
             member_id="member-1",
             domain_url="test.bitrix24.ru",
@@ -4845,12 +4847,13 @@ class ImportExecutionApiTest(TestCase):
         ])
         bitrix_api_request.assert_called_once_with(
             bitrix_token=account,
-            api_method="tasks.task.chat.message.send",
+            api_method="task.commentitem.add",
             params={
-                "fields": {
-                    "taskId": 801,
-                    "text": "Status update",
-                }
+                "TASKID": 801,
+                "FIELDS": {
+                    "POST_MESSAGE": "Status update",
+                    "AUTHOR_ID": 73,
+                },
             },
         )
 
