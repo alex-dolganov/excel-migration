@@ -19,7 +19,7 @@ from .validation import (
     row_has_values,
     split_field_values,
 )
-from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, download_attachment_source
+from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, attach_uf_file_field, download_attachment_source
 from .error_messages import (
     get_import_error_text,
     is_daily_invitation_limit_error,
@@ -40,6 +40,11 @@ TASK_CHILD_API_METHODS = {
 
 TASK_ENTITY_TYPES = {"task", "task_comment", "task_checklist_item", "task_attachment"}
 CRM_FILES_ENTITY_TYPES = {"crm_files_lead", "crm_files_contact", "crm_files_company", "crm_files_deal"}
+_UF_FILE_ENTITY_TYPES = frozenset({"lead", "contact", "company", "deal", SMART_PROCESS_ENTITY_TYPE,
+    "linked_company_contact", "linked_company_deal",
+    "linked_contact_company", "linked_contact_deal",
+    "linked_deal_company", "linked_deal_contact"})
+_UF_FILE_FIELD_TYPES = frozenset({"file", "disk_file"})
 CRM_ACTIVITY_ENTITY_TYPES = {"crm_activity", "crm_note"}
 CRM_ACTIVITY_COMMUNICATION_TYPES = {
     "2": "PHONE",
@@ -140,6 +145,59 @@ def _get_batch_size(entity_type: str) -> int:
 
 def _is_batch_eligible(entity_type: str, dedup_settings: dict) -> bool:
     return entity_type in _CRM_BATCH_CREATE_METHODS and dedup_settings.get("strategy") == "create"
+
+
+def _extract_uf_file_fields(row_payload: dict, fields_meta: list) -> tuple[dict, dict]:
+    """Split payload into (uf_file_fields, remaining_payload).
+
+    Returns ({field_id: (url_str, field_type)}, rest_of_payload).
+    Only fields whose metadata type is in _UF_FILE_FIELD_TYPES and whose value is non-empty are extracted.
+    """
+    field_meta_by_id = {str(f.get("id", "")): f for f in (fields_meta or []) if f.get("id")}
+    file_fields: dict = {}
+    rest_payload: dict = {}
+    for field_id, value in row_payload.items():
+        meta = field_meta_by_id.get(str(field_id), {})
+        field_type = str(meta.get("type", "") or "").lower()
+        url_str = str(value or "").strip()
+        if field_type in _UF_FILE_FIELD_TYPES and url_str:
+            file_fields[str(field_id)] = (url_str, field_type)
+        else:
+            rest_payload[field_id] = value
+    return file_fields, rest_payload
+
+
+def _attach_uf_file_fields(
+    account,
+    entity_type: str,
+    record_id: int,
+    file_fields: dict,
+    *,
+    context: dict | None = None,
+) -> list[str]:
+    """Attach UF_ file fields to an existing CRM record. Returns a list of per-field error messages."""
+    entity_type_id = None
+    if entity_type == SMART_PROCESS_ENTITY_TYPE and isinstance(context, dict):
+        entity_config = context.get("entity_config") or {}
+        if isinstance(entity_config, dict):
+            entity_type_id = entity_config.get("entityTypeId")
+
+    resolved_entity_type = get_linked_parent_entity_type(entity_type) if is_linked_import_entity_type(entity_type) else entity_type
+    errors: list[str] = []
+    for field_id, (file_url, field_type) in file_fields.items():
+        try:
+            attach_uf_file_field(
+                account,
+                entity_type=resolved_entity_type,
+                record_id=record_id,
+                field_id=field_id,
+                field_type=field_type,
+                file_url=file_url,
+                entity_type_id=entity_type_id,
+            )
+        except Exception as exc:
+            errors.append(f"{field_id}: {safe_format_import_error(exc)}")
+    return errors
 
 
 def _flush_crm_batch(account, entity_type: str, pending_batch: list) -> tuple:
@@ -606,6 +664,9 @@ def normalize_typed_field_value(field: dict, target_field: str, value, column_ty
             return normalized_value
 
     field_type = resolve_field_validation_type(field, target_field, column_type_override)
+
+    if field_type in {"file", "disk_file"}:
+        return normalized_value
 
     if field_type in {"boolean", "bool"}:
         parsed_boolean_value = parse_boolean_value(normalized_value)
@@ -3382,7 +3443,11 @@ def execute_import(
                 break
             continue
 
-        if use_batch:
+        _row_uf_file_fields: dict = {}
+        if entity_type in _UF_FILE_ENTITY_TYPES:
+            _row_uf_file_fields, row_payload = _extract_uf_file_fields(row_payload, fields)
+
+        if use_batch and not _row_uf_file_fields:
             pending_batch.append((row_number, row_payload))
             if len(pending_batch) >= current_batch_size:
                 _flush_pending_batch()
@@ -3528,6 +3593,10 @@ def execute_import(
                         ),
                     }
                 )
+                if _row_uf_file_fields:
+                    _file_errors = _attach_uf_file_fields(account, entity_type, existing_record_id, _row_uf_file_fields, context=import_context)
+                    if _file_errors:
+                        results[-1]["file_attachment_error"] = "; ".join(_file_errors)
                 continue
             # row_decision == "create" → falls through to create logic below
 
@@ -3578,6 +3647,10 @@ def execute_import(
                     ),
                 }
             )
+            if _row_uf_file_fields:
+                _file_errors = _attach_uf_file_fields(account, entity_type, existing_record_id, _row_uf_file_fields, context=import_context)
+                if _file_errors:
+                    results[-1]["file_attachment_error"] = "; ".join(_file_errors)
             continue
 
         try:
@@ -3626,6 +3699,10 @@ def execute_import(
             created_ids.append(record_id)
             result_item["record_id"] = record_id
         results.append(result_item)
+        if record_id is not None and _row_uf_file_fields:
+            _file_errors = _attach_uf_file_fields(account, entity_type, record_id, _row_uf_file_fields, context=import_context)
+            if _file_errors:
+                results[-1]["file_attachment_error"] = "; ".join(_file_errors)
 
     terminal_abort_error = str(oauth_abort_error or fatal_error or "").strip()
     if terminal_abort_error:

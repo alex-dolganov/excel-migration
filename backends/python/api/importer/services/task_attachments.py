@@ -1,34 +1,58 @@
 import base64
 import ipaddress
+import re
 import socket
 from pathlib import PurePosixPath
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from urllib.request import HTTPRedirectHandler, build_opener
 
 from b24pysdk.bitrix_api.requests import BitrixAPIRequest
 
+from .file_url_resolver import resolve_download_url
+
 _ALLOWED_SCHEMES = {"http", "https"}
 _MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024  # 20 MB
 _DOWNLOAD_TIMEOUT = 15  # seconds
-_REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
-
 _UNSUPPORTED_SCHEME_ERROR = "Ссылка на файл использует неподдерживаемый протокол. Используйте только http или https."
 _MISSING_HOST_ERROR = "В ссылке на файл не указан адрес сайта."
 _HOST_RESOLUTION_ERROR = "Не удалось открыть ссылку на файл: адрес сайта не найден."
 _FORBIDDEN_ADDRESS_ERROR = "Ссылка на файл ведёт на локальный или внутренний адрес. Используйте внешнюю публичную ссылку."
-_REDIRECT_NOT_ALLOWED_ERROR = "Ссылка на файл возвращает перенаправление. Укажите прямую ссылку на файл без перенаправлений."
 _EMPTY_DOWNLOAD_ERROR = "Файл по ссылке пустой."
 
 
-class _NoRedirectHandler(HTTPRedirectHandler):
+_CONTENT_DISPOSITION_FILENAME_RE = re.compile(
+    r"filename\*?=(?:UTF-8'')?[\"']?([^\"';\r\n]+)[\"']?",
+    re.IGNORECASE,
+)
+
+
+class _SafeRedirectHandler(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+        try:
+            _validate_url_for_ssrf(newurl)
+        except ValueError:
+            return None  # block redirects to private/internal addresses
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _fallback_file_name_from_url(file_url: str) -> str:
     parsed_path = PurePosixPath(urlparse(file_url).path or "")
     return parsed_path.name or "attachment.bin"
+
+
+def _extract_filename_from_disposition(header: str) -> str:
+    if not header:
+        return ""
+    match = _CONTENT_DISPOSITION_FILENAME_RE.search(header)
+    if not match:
+        return ""
+    name = match.group(1).strip().strip("\"'")
+    try:
+        name = unquote(name)
+    except Exception:
+        pass
+    return name or ""
 
 
 def _validate_url_for_ssrf(file_url: str) -> None:
@@ -56,16 +80,16 @@ def _validate_url_for_ssrf(file_url: str) -> None:
 
 
 def download_attachment_source(file_url: str) -> dict:
-    _validate_url_for_ssrf(file_url)
+    resolved_url = resolve_download_url(file_url)
+    _validate_url_for_ssrf(resolved_url)
 
-    opener = build_opener(_NoRedirectHandler)
+    opener = build_opener(_SafeRedirectHandler)
     try:
-        with opener.open(file_url, timeout=_DOWNLOAD_TIMEOUT) as response:
+        with opener.open(resolved_url, timeout=_DOWNLOAD_TIMEOUT) as response:
             content = response.read(_MAX_ATTACHMENT_SIZE)
             content_type = response.headers.get_content_type() if response.headers else ""
+            disposition = (response.headers.get("Content-Disposition") or "") if response.headers else ""
     except HTTPError as error:
-        if int(getattr(error, "code", 0) or 0) in _REDIRECT_STATUS_CODES:
-            raise ValueError(_REDIRECT_NOT_ALLOWED_ERROR) from error
         raise ValueError(f"Не удалось скачать файл по ссылке: сервер вернул HTTP {error.code}.") from error
     except URLError as error:
         raise ValueError("Не удалось скачать файл по ссылке. Проверьте, что ссылка доступна извне.") from error
@@ -73,9 +97,14 @@ def download_attachment_source(file_url: str) -> dict:
     if not content:
         raise ValueError(_EMPTY_DOWNLOAD_ERROR)
 
+    file_name = (
+        _extract_filename_from_disposition(disposition)
+        or _fallback_file_name_from_url(resolved_url)
+        or _fallback_file_name_from_url(file_url)
+    )
     return {
         "content": content,
-        "file_name": _fallback_file_name_from_url(file_url),
+        "file_name": file_name,
         "content_type": content_type or "application/octet-stream",
     }
 
@@ -241,4 +270,75 @@ def attach_file_to_crm_entity(account, *, entity_type: str, record_id: int, fiel
             "fields": {field_id: {"fileData": [file_name, encoded]}},
         },
     )
+    return request.result
+
+
+_CRM_UF_FILE_UPDATE_METHODS = {
+    "lead": "crm.lead.update",
+    "contact": "crm.contact.update",
+    "company": "crm.company.update",
+    "deal": "crm.deal.update",
+}
+
+
+def attach_uf_file_field(
+    account,
+    *,
+    entity_type: str,
+    record_id: int,
+    field_id: str,
+    field_type: str,
+    file_url: str,
+    entity_type_id: int | None = None,
+):
+    """Download a file and attach it to a UF_ file field on a CRM record.
+
+    field_type "file":      Base64 via crm.*.update → {"fileData": [name, b64]}
+    field_type "disk_file": upload to user Drive → crm.*.update → "n{drive_id}"
+    """
+    download_result = download_attachment_source(file_url)
+    content: bytes = download_result["content"]
+    file_name: str = download_result["file_name"]
+
+    if field_type == "disk_file":
+        storage_id = _resolve_task_attachment_storage_id(account)
+        file_id = _upload_file_to_task_storage(
+            account,
+            storage_id=storage_id,
+            file_name=file_name,
+            content=content,
+        )
+        file_payload = f"n{file_id}"
+    elif entity_type == "smart_process":
+        # crm.item.update expects [filename, base64] array, not {"fileData": [...]}
+        encoded = base64.b64encode(content).decode("utf-8")
+        file_payload = [file_name, encoded]
+    else:
+        encoded = base64.b64encode(content).decode("utf-8")
+        file_payload = {"fileData": [file_name, encoded]}
+
+    if entity_type == "smart_process":
+        if not entity_type_id:
+            raise ValueError("entityTypeId is required for smart_process UF file field attachment.")
+        request = BitrixAPIRequest(
+            bitrix_token=account,
+            api_method="crm.item.update",
+            params={
+                "entityTypeId": entity_type_id,
+                "id": record_id,
+                "fields": {field_id: file_payload},
+            },
+        )
+    else:
+        api_method = _CRM_UF_FILE_UPDATE_METHODS.get(str(entity_type or ""))
+        if not api_method:
+            raise ValueError(f"UF file field attachment not supported for entity type: {entity_type}")
+        request = BitrixAPIRequest(
+            bitrix_token=account,
+            api_method=api_method,
+            params={
+                "id": record_id,
+                "fields": {field_id: file_payload},
+            },
+        )
     return request.result

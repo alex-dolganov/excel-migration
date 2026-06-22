@@ -16,6 +16,7 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_ALLOWED_RE = re.compile(r"^[\d+\-().\s]+$")
 MULTI_VALUE_SPLIT_RE = re.compile(r"[;\n]+")
 BOOLEAN_VALUES = {"1", "0", "true", "false", "yes", "no", "y", "n", "да", "нет"}
+HTTP_URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 BOOLEAN_TRUE_VALUES = {"1", "true", "yes", "y", "да"}
 BOOLEAN_FALSE_VALUES = {"0", "false", "no", "n", "нет"}
 DATE_FORMATS = (
@@ -441,6 +442,18 @@ def validate_field_value(
                 target_field,
                 "boolean",
                 f'Field "{field_title}" must contain a valid boolean value',
+                normalized_item_value,
+            )
+
+        raw_field_type = str(field.get("type", "") or "").lower()
+        if raw_field_type in {"file", "disk_file"} and not HTTP_URL_RE.match(normalized_item_value):
+            return build_issue(
+                row_number,
+                column,
+                source_header,
+                target_field,
+                "file_url",
+                f'Field "{field_title}" must contain an http/https URL (link to a file)',
                 normalized_item_value,
             )
 

@@ -1039,6 +1039,11 @@ export function buildFieldGuidanceHints(field) {
     hints.push('Допустимые значения: 1, 0, true, false, yes, no, да, нет.')
   }
 
+  if (['file', 'disk_file'].includes(normalizedType)) {
+    hints.push('Вставьте ссылку на файл (http/https).')
+    hints.push('Поддерживаются: прямая ссылка, ссылка «Поделиться» из Яндекс Диска, Google Drive, Dropbox, OneDrive.')
+  }
+
   return hints
 }
 

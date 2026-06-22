@@ -895,6 +895,22 @@ test('builds field guidance hints for multiple, list, date and boolean fields', 
   }), [
     'Допустимые значения: 1, 0, true, false, yes, no, да, нет.',
   ])
+
+  assert.deepEqual(buildFieldGuidanceHints({
+    type: 'file',
+    multiple: false,
+  }), [
+    'Вставьте ссылку на файл (http/https).',
+    'Поддерживаются: прямая ссылка, ссылка «Поделиться» из Яндекс Диска, Google Drive, Dropbox, OneDrive.',
+  ])
+
+  assert.deepEqual(buildFieldGuidanceHints({
+    type: 'disk_file',
+    multiple: false,
+  }), [
+    'Вставьте ссылку на файл (http/https).',
+    'Поддерживаются: прямая ссылка, ссылка «Поделиться» из Яндекс Диска, Google Drive, Dropbox, OneDrive.',
+  ])
 })
 
 test('builds task reference guidance hints for checklist and parent task fields', () => {
