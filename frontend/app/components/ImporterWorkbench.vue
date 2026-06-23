@@ -223,10 +223,16 @@ function formatImportFileSizeLabel(sizeInBytes: number) {
 
 const MAX_IMPORT_FILE_SIZE_BYTES = normalizeImportFileSizeBytes(runtimeConfig.public.importMaxFileSizeBytes)
 const MAX_IMPORT_FILE_SIZE_LABEL = computed(() => formatImportFileSizeLabel(MAX_IMPORT_FILE_SIZE_BYTES))
+// Bulk file attach (массовая загрузка вложений) has its own, larger limit than spreadsheet import.
+const MAX_BULK_ATTACH_FILE_SIZE_BYTES = (() => {
+  const normalized = Number(runtimeConfig.public.bulkAttachMaxFileSizeBytes)
+  return Number.isFinite(normalized) && normalized > 0 ? Math.floor(normalized) : 150 * 1024 * 1024
+})()
+const MAX_BULK_ATTACH_FILE_SIZE_LABEL = computed(() => formatImportFileSizeLabel(MAX_BULK_ATTACH_FILE_SIZE_BYTES))
 const IMPORT_FILE_PICKER_HELPER_TEXT = computed(() => t('importer.file.formats', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
 const IMPORT_FILE_DROPDOWN_LIMIT_TEXT = computed(() => t('importer.file.formats_short', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
-const BULK_ATTACH_FILE_PICKER_HELPER_TEXT = computed(() => t('importer.file.bulk_formats', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
-const BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT = computed(() => t('importer.file.bulk_formats_short', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
+const BULK_ATTACH_FILE_PICKER_HELPER_TEXT = computed(() => t('importer.file.bulk_formats', { size: MAX_BULK_ATTACH_FILE_SIZE_LABEL.value }))
+const BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT = computed(() => t('importer.file.bulk_formats_short', { size: MAX_BULK_ATTACH_FILE_SIZE_LABEL.value }))
 const PER_ROW_DEDUP_DECISION_VALUES = new Set(['create', 'update', 'skip'])
 const DRY_RUN_RESULTS_PAGE_SIZE = 20
 const COLLAPSIBLE_TEXT_LIMIT = 220
