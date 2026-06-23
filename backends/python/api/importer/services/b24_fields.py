@@ -1,7 +1,34 @@
 from typing import Any
 from b24pysdk.bitrix_api.requests import BitrixAPIRequest
 
+from .error_messages import get_import_error_language
 from .task_resolution import invoke_with_fallbacks
+
+
+# Локализованные подписи сущностей-префиксов для связанного импорта и
+# виртуального поля внешнего ключа. Выбор по языку сессии (get_import_error_language).
+_LINKED_ENTITY_PREFIX_LABELS = {
+    "ru": {"company": "Компания", "contact": "Контакт", "deal": "Сделка"},
+    "en": {"company": "Company", "contact": "Contact", "deal": "Deal"},
+    "br": {"company": "Empresa", "contact": "Contato", "deal": "Negócio"},
+}
+
+_LINKED_EXTERNAL_KEY_TITLES = {
+    "ru": "Внешний ключ (XML_ID)",
+    "en": "External key (XML_ID)",
+    "br": "Chave externa (XML_ID)",
+}
+
+
+def _localized_linked_entity_label(entity_id: str, fallback: str) -> str:
+    language = get_import_error_language()
+    labels = _LINKED_ENTITY_PREFIX_LABELS.get(language, _LINKED_ENTITY_PREFIX_LABELS["ru"])
+    return labels.get(str(entity_id or "").strip().lower(), fallback)
+
+
+def _localized_external_key_title() -> str:
+    language = get_import_error_language()
+    return _LINKED_EXTERNAL_KEY_TITLES.get(language, _LINKED_EXTERNAL_KEY_TITLES["ru"])
 
 
 TASK_FIELDS = [
@@ -1723,7 +1750,7 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
             source_fields = normalize_fields_result(source_fields_result, entity_type=source_entity_type)
             source_fields = enrich_standard_crm_status_fields(account, source_entity_type, source_fields)
             prefix = linked_entity["prefix"]
-            entity_label = linked_entity["label"]
+            entity_label = _localized_linked_entity_label(linked_entity["id"], linked_entity["label"])
             excluded_source_ids = set(linked_entity["excluded_source_ids"])
             for source_field in source_fields:
                 source_field_id = str(source_field.get("id") or "")
@@ -1744,7 +1771,7 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
         virtual_fields = [
             {
                 "id": f"{parent_entity['prefix']}EXTERNAL_KEY",
-                "title": f"{parent_entity['label']} / Внешний ключ (XML_ID)",
+                "title": f"{_localized_linked_entity_label(parent_entity['id'], parent_entity['label'])} / {_localized_external_key_title()}",
                 "type": "string",
                 "required": False,
                 "multiple": False,

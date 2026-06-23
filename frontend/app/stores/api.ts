@@ -10,6 +10,16 @@ export const useApiStore = defineStore(
     const config = useRuntimeConfig()
     const apiUrl = withoutTrailingSlash(config.public.apiUrl)
 
+    // Текущая локаль UI — чтобы каталог полей и сообщения приходили на нужном языке.
+    const currentLang = (): string => {
+      try {
+        const loc = (useNuxtApp() as any)?.$i18n?.locale
+        return String(loc && typeof loc === 'object' && 'value' in loc ? loc.value : (loc || ''))
+      } catch {
+        return ''
+      }
+    }
+
     const tokenJWT = ref('')
 
     const isInitTokenJWT = computed(() => {
@@ -253,6 +263,10 @@ export const useApiStore = defineStore(
       if (entityType === 'smart_process' && entityConfig?.entityTypeId) {
         searchParams.set('entity_type_id', String(entityConfig.entityTypeId))
       }
+      const fieldsLang = currentLang()
+      if (fieldsLang) {
+        searchParams.set('lang', fieldsLang)
+      }
 
       return await $api(`/api/import-fields?${searchParams.toString()}`, {
         headers: {
@@ -483,7 +497,7 @@ export const useApiStore = defineStore(
       return await $api('/api/crm-entity-fields', {
         method: 'POST',
         headers: { Authorization: `Bearer ${tokenJWT.value}` },
-        body: JSON.stringify({ entity_type: entityType }),
+        body: JSON.stringify({ entity_type: entityType, lang: currentLang() }),
       })
     }
 
@@ -491,7 +505,7 @@ export const useApiStore = defineStore(
       return await $api('/api/crm-file-fields', {
         method: 'POST',
         headers: { Authorization: `Bearer ${tokenJWT.value}` },
-        body: JSON.stringify({ entity_type: entityType }),
+        body: JSON.stringify({ entity_type: entityType, lang: currentLang() }),
       })
     }
 

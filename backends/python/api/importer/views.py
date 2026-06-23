@@ -129,6 +129,13 @@ def get_max_import_file_size_megabytes() -> int:
     return max(1, get_max_import_file_size_bytes() // (1024 * 1024))
 
 
+_ROW_LIMIT_WARNING_TEMPLATES = {
+    "ru": "Файл содержит {total} строк. Будут импортированы первые {limit}. Остальные {rest} строк загрузите отдельным файлом.",
+    "en": "The file contains {total} rows. Only the first {limit} will be imported. Upload the remaining {rest} rows as a separate file.",
+    "br": "O arquivo contém {total} linhas. Apenas as primeiras {limit} serão importadas. Envie as {rest} linhas restantes em um arquivo separado.",
+}
+
+
 def build_import_row_limit_payload(total_rows: int) -> dict:
     limit = _get_import_row_limit()
     normalized_total_rows = max(0, int(total_rows or 0))
@@ -136,10 +143,13 @@ def build_import_row_limit_payload(total_rows: int) -> dict:
     rows_to_import = min(normalized_total_rows, limit)
     row_limit_warning = ""
     if row_limit_exceeded:
-        row_limit_warning = (
-            f"Файл содержит {normalized_total_rows:,} строк. "
-            f"Будут импортированы первые {limit:,}. "
-            f"Остальные {normalized_total_rows - limit:,} строк загрузите отдельным файлом."
+        template = _ROW_LIMIT_WARNING_TEMPLATES.get(
+            get_import_error_language(), _ROW_LIMIT_WARNING_TEMPLATES["ru"]
+        )
+        row_limit_warning = template.format(
+            total=f"{normalized_total_rows:,}",
+            limit=f"{limit:,}",
+            rest=f"{normalized_total_rows - limit:,}",
         )
     return {
         "total_rows": normalized_total_rows,
@@ -2387,6 +2397,10 @@ def import_fields(request: AuthorizedRequest):
     if not entity_type:
         return JsonResponse({"error": "entity_type is required"}, status=400)
 
+    # Язык каталога полей — из запроса (язык UI), чтобы подписи (связанный импорт,
+    # статические каталоги) приходили на нужном языке, а не по умолчанию.
+    set_import_error_language(normalize_import_language(request_payload.get("lang") or request_payload.get("language")))
+
     try:
         entity_type_str = str(entity_type)
         entity_config = normalize_session_entity_config(entity_type_str, request_payload)
@@ -3727,6 +3741,8 @@ def import_session_preview(request: AuthorizedRequest, session_id):
     elif not can_edit_session(account, session):
         return permission_denied_response()
 
+    set_import_error_language(get_session_language(session))
+
     try:
         sheet_names = extract_sheet_names(session)
     except ValueError as error:
@@ -3888,6 +3904,7 @@ def crm_entity_fields(request: AuthorizedRequest):
     if entity_type not in {"lead", "contact", "company", "deal"}:
         return JsonResponse({"error": f"Unsupported entity type: {entity_type}"}, status=400)
 
+    set_import_error_language(normalize_import_language(payload.get("lang") or payload.get("language")))
     try:
         fields = fetch_entity_fields(account, entity_type)
     except Exception as error:
@@ -3935,6 +3952,7 @@ def crm_file_fields(request: AuthorizedRequest):
     if entity_type not in {"lead", "contact", "company", "deal"}:
         return JsonResponse({"error": f"Unsupported entity type: {entity_type}"}, status=400)
 
+    set_import_error_language(normalize_import_language(payload.get("lang") or payload.get("language")))
     try:
         fields = fetch_entity_fields(account, entity_type)
     except Exception as error:
