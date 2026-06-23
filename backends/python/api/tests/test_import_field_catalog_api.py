@@ -81,6 +81,45 @@ class ImportFieldCatalogApiTest(TestCase):
         )
 
     @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    def test_filters_out_readonly_and_system_uf_fields_from_deal_catalog(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = SimpleNamespace(
+            member_id="member-1",
+            domain_url="test.bitrix24.ru",
+            b24_user_id=7,
+            client=SimpleNamespace(
+                crm=SimpleNamespace(
+                    deal=SimpleNamespace(
+                        fields=lambda: FakeFieldsRequest(
+                            {
+                                "TITLE": {"title": "Deal title", "type": "string", "isRequired": False},
+                                "ID": {"title": "ID", "type": "integer", "isReadOnly": True},
+                                "DATE_CREATE": {"title": "Created", "type": "datetime", "isReadOnly": True},
+                                "UF_CRM_KASSA_ORDER_CRC": {"title": "KASSA crc", "type": "string"},
+                                "UF_CRM_PAYMENT_AMOUNT": {"title": "Payment", "type": "money"},
+                                "UF_CRM_CUSTOM_FIELD": {"title": "My field", "type": "string"},
+                            }
+                        )
+                    )
+                )
+            ),
+        )
+
+        response = self.client.get(
+            reverse("importer:fields"),
+            data={"entity_type": "deal"},
+            HTTP_AUTHORIZATION="Bearer test-token",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        ids = [item["id"] for item in response.json()["items"]]
+        self.assertIn("TITLE", ids)
+        self.assertIn("UF_CRM_CUSTOM_FIELD", ids)
+        self.assertNotIn("ID", ids)
+        self.assertNotIn("DATE_CREATE", ids)
+        self.assertNotIn("UF_CRM_KASSA_ORDER_CRC", ids)
+        self.assertNotIn("UF_CRM_PAYMENT_AMOUNT", ids)
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
     def test_prefers_bitrix_userfield_labels_over_uf_crm_code(self, get_from_jwt_token):
         get_from_jwt_token.return_value = SimpleNamespace(
             member_id="member-1",

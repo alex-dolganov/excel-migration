@@ -933,6 +933,25 @@ def _resolve_bitrix_field_title(field_id: str, field_meta: dict[str, Any]) -> st
     return resolved_title
 
 
+# CRM-сущности, для каталога которых скрываем непригодные для импорта поля.
+_CRM_MAPPING_FIELD_ENTITY_TYPES = {"lead", "contact", "company", "deal"}
+
+# Префиксы системных пользовательских полей CRM (касса/оплата/рассрочка и т.п.) —
+# их добавляют модули, для ручного импорта они не нужны и засоряют сопоставление.
+_SYSTEM_CRM_USERFIELD_PREFIXES = (
+    "UF_CRM_KASSA_",
+    "UF_CRM_PAYMENT_",
+    "UF_CRM_EXPECTED_",
+    "UF_CRM_INSTALLMENT_",
+    "UF_CRM_DEAL_EXCHANGE_",
+)
+
+
+def _is_system_crm_userfield(field_id) -> bool:
+    code = str(field_id or "").strip().upper()
+    return any(code.startswith(prefix) for prefix in _SYSTEM_CRM_USERFIELD_PREFIXES)
+
+
 def normalize_fields_result(fields_result: dict[str, Any], entity_type: str = "") -> list[dict]:
     normalized_fields = []
     for field_id, meta in fields_result.items():
@@ -942,6 +961,20 @@ def normalize_fields_result(fields_result: dict[str, Any], entity_type: str = ""
             or normalize_bitrix_bool(field_meta.get("isImmutable"))
         ):
             continue
+
+        # Для CRM-сущностей убираем то, во что нельзя писать при импорте, и
+        # системные UF модулей — на всех языках (фильтр по флагам и кодам, не по подписям).
+        if entity_type in _CRM_MAPPING_FIELD_ENTITY_TYPES:
+            field_is_required = normalize_bitrix_bool(
+                field_meta.get("isRequired", field_meta.get("required"))
+            )
+            if not field_is_required and (
+                normalize_bitrix_bool(field_meta.get("isReadOnly"))
+                or normalize_bitrix_bool(field_meta.get("isImmutable"))
+            ):
+                continue
+            if _is_system_crm_userfield(field_id):
+                continue
 
         is_required = normalize_bitrix_bool(field_meta.get("isRequired", field_meta.get("required")))
         if entity_type == "contact" and field_id in CONTACT_OPTIONAL_NAME_FIELDS:
