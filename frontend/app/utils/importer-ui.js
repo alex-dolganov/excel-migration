@@ -1052,10 +1052,17 @@ export function getImportEntityLabel(entityType, entityConfig = null) {
   if (normalizedEntityType === 'smart_process') {
     const smartProcessTitle = String(entityConfig?.title || '').trim()
     if (smartProcessTitle) {
-      return `Смарт-процесс: ${smartProcessTitle}`
+      const prefix = translateImporterUi('importer.entities.smart_process_single', null, 'Смарт-процесс')
+      return `${prefix}: ${smartProcessTitle}`
     }
   }
-  return IMPORT_ENTITY_LABELS.get(normalizedEntityType) || normalizedEntityType || '—'
+  if (!normalizedEntityType) {
+    return '—'
+  }
+  // Переводим название типа через i18n по текущей локали UI (RU/EN/BR/…),
+  // с русским хардкодом как запасным значением. Иначе история всегда по-русски.
+  const fallback = IMPORT_ENTITY_LABELS.get(normalizedEntityType) || normalizedEntityType
+  return translateImporterUi(`importer.entities.${normalizedEntityType}`, null, fallback)
 }
 
 export function buildEntityScenarioGuide(entityType) {
