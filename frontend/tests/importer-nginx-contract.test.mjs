@@ -12,13 +12,35 @@ const templateSource = readFileSync(
   'utf8',
 )
 
-test('derives nginx client_max_body_size from IMPORT_MAX_FILE_SIZE_BYTES when override is empty', () => {
+test('derives nginx client_max_body_size from IMPORT_MAX_FILE_SIZE_BYTES when it is the largest limit', () => {
+  assert.equal(
+    deriveNginxClientMaxBodySize({
+      importMaxFileSizeBytes: '52428800',
+      bulkAttachMaxFileSizeBytes: '52428800',
+      nginxClientMaxBodySize: '',
+    }),
+    '50m',
+  )
+})
+
+test('uses the larger bulk-attach limit so big bulk uploads are not rejected at nginx', () => {
+  assert.equal(
+    deriveNginxClientMaxBodySize({
+      importMaxFileSizeBytes: '52428800',
+      bulkAttachMaxFileSizeBytes: '157286400',
+      nginxClientMaxBodySize: '',
+    }),
+    '150m',
+  )
+})
+
+test('defaults bulk-attach limit to 150m when only the import size is provided', () => {
   assert.equal(
     deriveNginxClientMaxBodySize({
       importMaxFileSizeBytes: '52428800',
       nginxClientMaxBodySize: '',
     }),
-    '50m',
+    '150m',
   )
 })
 
@@ -26,6 +48,7 @@ test('prefers explicit nginx client_max_body_size override when it is provided',
   assert.equal(
     deriveNginxClientMaxBodySize({
       importMaxFileSizeBytes: '52428800',
+      bulkAttachMaxFileSizeBytes: '157286400',
       nginxClientMaxBodySize: '64m',
     }),
     '64m',
@@ -43,7 +66,7 @@ test('renders python nginx config from the shared importer env contract', () => 
     },
   })
 
-  assert.equal(rendered.includes('client_max_body_size 50m;'), true)
+  assert.equal(rendered.includes('client_max_body_size 150m;'), true)
   assert.equal(rendered.includes('proxy_send_timeout 600s;'), true)
   assert.equal(rendered.includes('proxy_read_timeout 600s;'), true)
   assert.equal(rendered.includes('__NGINX_CLIENT_MAX_BODY_SIZE__'), false)

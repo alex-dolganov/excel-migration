@@ -198,6 +198,7 @@
       "wizard_progress_desc": "do anexo de arquivo em massa concluído",
       "wizard_no_records": "Nenhuma entidade corresponde ao filtro",
       "wizard_file_error": "Erro ao carregar arquivo",
+      "file_too_large": "O arquivo é muito grande. O máximo para upload em massa é {size} MB.",
       "wizard_stop_error": "Erro ao parar",
       "wizard_resume_error": "Erro ao retomar",
       "wizard_run_error": "Erro de execução",

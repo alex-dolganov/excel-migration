@@ -37,6 +37,13 @@ const emit = defineEmits<{ finish: [] }>()
 const apiStore = useApiStore()
 const { t } = useI18n()
 
+const runtimeConfig = useRuntimeConfig()
+const BULK_ATTACH_MAX_FILE_SIZE_BYTES = Math.max(
+  1,
+  Number(runtimeConfig.public.bulkAttachMaxFileSizeBytes) || 150 * 1024 * 1024,
+)
+const BULK_ATTACH_MAX_FILE_SIZE_MB = Math.floor(BULK_ATTACH_MAX_FILE_SIZE_BYTES / (1024 * 1024))
+
 type FilterFieldItem = { id: string, title: string }
 type FilterFieldCatalogEntry = {
   id: string
@@ -352,6 +359,11 @@ async function handleFileSelect(event: Event) {
   const file = input.files?.[0]
   if (!file) return
   error.value = ''
+  if (file.size > BULK_ATTACH_MAX_FILE_SIZE_BYTES) {
+    error.value = t('importer.bulk.file_too_large', { size: BULK_ATTACH_MAX_FILE_SIZE_MB })
+    input.value = ''
+    return
+  }
   selectedUploadFile.value = file
   uploadingFile.value = true
   uploadedFileId.value = ''

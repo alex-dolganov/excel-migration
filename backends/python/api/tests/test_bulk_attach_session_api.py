@@ -187,6 +187,48 @@ class BulkAttachUploadApiTest(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "File is required")
 
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @override_settings(BULK_ATTACH_MAX_FILE_SIZE_BYTES=4)
+    def test_upload_rejects_file_over_bulk_attach_limit(self, get_from_jwt_token):
+        get_from_jwt_token.return_value = _make_account()
+
+        with tempfile.TemporaryDirectory() as tmp_media:
+            with override_settings(MEDIA_ROOT=tmp_media):
+                file_data = BytesIO(b"way-too-big-for-a-4-byte-limit")
+                file_data.name = "promo.pdf"
+
+                response = self.client.post(
+                    reverse("importer:bulk-attach-upload"),
+                    data={"file": file_data},
+                    HTTP_AUTHORIZATION="Bearer test-token",
+                )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("МБ", response.json()["error"])
+
+    @patch("main.utils.decorators.auth_required.Bitrix24Account.get_from_jwt_token")
+    @override_settings(
+        IMPORT_MAX_FILE_SIZE_BYTES=4,
+        BULK_ATTACH_MAX_FILE_SIZE_BYTES=150 * 1024 * 1024,
+    )
+    def test_upload_allows_file_larger_than_spreadsheet_import_limit(self, get_from_jwt_token):
+        # Bulk attach has its own (larger) limit; a file over the 4-byte spreadsheet
+        # import limit must still be accepted because the bulk limit is 150 MB.
+        get_from_jwt_token.return_value = _make_account()
+
+        with tempfile.TemporaryDirectory() as tmp_media:
+            with override_settings(MEDIA_ROOT=tmp_media):
+                file_data = BytesIO(b"larger-than-the-4-byte-spreadsheet-limit")
+                file_data.name = "promo.pdf"
+
+                response = self.client.post(
+                    reverse("importer:bulk-attach-upload"),
+                    data={"file": file_data},
+                    HTTP_AUTHORIZATION="Bearer test-token",
+                )
+
+        self.assertEqual(response.status_code, 200, response.content)
+
 
 class AttachFileToCrmEntityTest(TestCase):
     @patch("importer.services.task_attachments.BitrixAPIRequest")
