@@ -21,6 +21,7 @@ from .validation import (
 )
 from .task_attachments import attach_file_to_crm_entity, attach_file_to_task, attach_uf_file_field, download_attachment_source
 from .error_messages import (
+    get_import_error_language,
     get_import_error_text,
     is_daily_invitation_limit_error,
     iter_error_messages,
@@ -37,6 +38,26 @@ TASK_CHILD_API_METHODS = {
     "task_comment": "task.commentitem.add",
     "task_checklist_item": "tasks.task.checklist.add",
 }
+
+# Локализованные тексты обязательных полей CRM activity/note/call/email.
+_REQUIRED_FIELD_ERROR_TEMPLATES = {
+    "ru": "{field} обязателен для {entity}",
+    "en": "{field} is required for {entity}",
+    "br": "{field} é obrigatório para {entity}",
+}
+_CRM_REQUIRED_ENTITY_NAMES = {
+    "call": {"ru": "звонка CRM", "en": "a CRM call", "br": "uma chamada CRM"},
+    "email": {"ru": "email CRM", "en": "a CRM email", "br": "um e-mail CRM"},
+    "activity": {"ru": "активности CRM", "en": "a CRM activity", "br": "uma atividade CRM"},
+    "note": {"ru": "заметки CRM", "en": "a CRM note", "br": "uma nota CRM"},
+}
+
+
+def _required_crm_field_error(field: str, entity_key: str) -> str:
+    language = get_import_error_language()
+    template = _REQUIRED_FIELD_ERROR_TEMPLATES.get(language, _REQUIRED_FIELD_ERROR_TEMPLATES["ru"])
+    entity = _CRM_REQUIRED_ENTITY_NAMES.get(entity_key, {}).get(language, entity_key)
+    return template.format(field=field, entity=entity)
 
 TASK_ENTITY_TYPES = {"task", "task_comment", "task_checklist_item", "task_attachment"}
 CRM_FILES_ENTITY_TYPES = {"crm_files_lead", "crm_files_contact", "crm_files_company", "crm_files_deal"}
@@ -893,8 +914,8 @@ def build_crm_activity_communications(fields: dict) -> list[dict]:
     if communication_type:
         if not communication_value:
             if communication_type == "PHONE":
-                raise ValueError("COMMUNICATIONS_VALUE обязателен для звонка CRM")
-            raise ValueError("COMMUNICATIONS_VALUE обязателен для email CRM")
+                raise ValueError(_required_crm_field_error("COMMUNICATIONS_VALUE", "call"))
+            raise ValueError(_required_crm_field_error("COMMUNICATIONS_VALUE", "email"))
         communication["TYPE"] = communication_type
         communication["VALUE"] = communication_value
 
@@ -2188,13 +2209,13 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
         type_id = normalize_value(fields.get("TYPE_ID"))
         subject = normalize_value(fields.get("SUBJECT"))
         if not owner_type_id:
-            raise ValueError("OWNER_TYPE_ID обязателен для активности CRM")
+            raise ValueError(_required_crm_field_error("OWNER_TYPE_ID", "activity"))
         if not owner_id:
-            raise ValueError("OWNER_ID обязателен для активности CRM")
+            raise ValueError(_required_crm_field_error("OWNER_ID", "activity"))
         if not type_id:
-            raise ValueError("TYPE_ID обязателен для активности CRM")
+            raise ValueError(_required_crm_field_error("TYPE_ID", "activity"))
         if not subject:
-            raise ValueError("SUBJECT обязателен для активности CRM")
+            raise ValueError(_required_crm_field_error("SUBJECT", "activity"))
 
         activity_fields = {
             "OWNER_TYPE_ID": int(owner_type_id),
@@ -2223,11 +2244,11 @@ def create_entity_record(account, entity_type: str, fields: dict, *, context: di
         entity_id = normalize_value(fields.get("ENTITY_ID"))
         comment = normalize_value(fields.get("COMMENT"))
         if not entity_type_val:
-            raise ValueError("ENTITY_TYPE обязателен для заметки CRM")
+            raise ValueError(_required_crm_field_error("ENTITY_TYPE", "note"))
         if not entity_id:
-            raise ValueError("ENTITY_ID обязателен для заметки CRM")
+            raise ValueError(_required_crm_field_error("ENTITY_ID", "note"))
         if not comment:
-            raise ValueError("COMMENT обязателен для заметки CRM")
+            raise ValueError(_required_crm_field_error("COMMENT", "note"))
 
         note_fields = {
             "ENTITY_TYPE": entity_type_val.upper(),

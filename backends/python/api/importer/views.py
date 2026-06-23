@@ -173,26 +173,41 @@ def build_import_row_limit_error_response(total_rows: int, *, status: int = 400)
     )
 
 
+_UPLOAD_ERROR_TEXTS = {
+    "empty_name": {"ru": "Имя файла не может быть пустым", "en": "File name cannot be empty", "br": "O nome do arquivo não pode estar vazio"},
+    "bad_format": {"ru": "Недопустимый формат файла '{ext}'. Разрешены: {allowed}", "en": "Unsupported file format '{ext}'. Allowed: {allowed}", "br": "Formato de arquivo não suportado '{ext}'. Permitidos: {allowed}"},
+    "bad_xlsx": {"ru": "Файл не является корректным XLSX (неверная сигнатура файла)", "en": "The file is not a valid XLSX (invalid file signature)", "br": "O arquivo não é um XLSX válido (assinatura de arquivo inválida)"},
+    "bad_xls": {"ru": "Файл не является корректным XLS (неверная сигнатура файла)", "en": "The file is not a valid XLS (invalid file signature)", "br": "O arquivo não é um XLS válido (assinatura de arquivo inválida)"},
+    "too_large": {"ru": "Файл слишком большой. Максимум для импорта — {limit} МБ.", "en": "The file is too large. Maximum for import is {limit} MB.", "br": "O arquivo é muito grande. O máximo para importação é {limit} MB."},
+}
+
+
+def _upload_error_text(key: str, **kwargs) -> str:
+    texts = _UPLOAD_ERROR_TEXTS.get(key, {})
+    template = texts.get(get_import_error_language(), texts.get("ru", ""))
+    return template.format(**kwargs) if kwargs else template
+
+
 def _validate_and_sanitize_upload(upload) -> str:
     """Validate file extension + magic bytes; return sanitized filename. Raises ValueError."""
     raw_name = str(upload.name or "").strip()
     safe_name = os.path.basename(raw_name.replace("\\", "/"))
     if not safe_name:
-        raise ValueError("Имя файла не может быть пустым")
+        raise ValueError(_upload_error_text("empty_name"))
     if len(safe_name) > _MAX_UPLOAD_FILENAME_LENGTH:
         safe_name = safe_name[-_MAX_UPLOAD_FILENAME_LENGTH:]
 
     ext = os.path.splitext(safe_name)[1].lower()
     if ext not in _ALLOWED_UPLOAD_EXTENSIONS:
         allowed = ", ".join(sorted(_ALLOWED_UPLOAD_EXTENSIONS))
-        raise ValueError(f"Недопустимый формат файла '{ext}'. Разрешены: {allowed}")
+        raise ValueError(_upload_error_text("bad_format", ext=ext, allowed=allowed))
 
     header = upload.read(4)
     upload.seek(0)
     if ext == ".xlsx" and not header.startswith(_XLSX_MAGIC):
-        raise ValueError("Файл не является корректным XLSX (неверная сигнатура файла)")
+        raise ValueError(_upload_error_text("bad_xlsx"))
     if ext == ".xls" and not header.startswith(_XLS_MAGIC):
-        raise ValueError("Файл не является корректным XLS (неверная сигнатура файла)")
+        raise ValueError(_upload_error_text("bad_xls"))
 
     return safe_name
 IMPORT_RUN_FAILED_STATUSES = {"failed", "skipped"}
@@ -3701,12 +3716,14 @@ def import_session_upload(request: AuthorizedRequest, session_id):
     if not can_edit_session(account, session):
         return permission_denied_response()
 
+    set_import_error_language(get_session_language(session))
+
     upload = request.FILES.get("file")
     if upload is None:
         return JsonResponse({"error": "File is required"}, status=400)
     if int(getattr(upload, "size", 0) or 0) > get_max_import_file_size_bytes():
         return JsonResponse(
-            {"error": f"Файл слишком большой. Максимум для импорта — {get_max_import_file_size_megabytes()} МБ."},
+            {"error": _upload_error_text("too_large", limit=get_max_import_file_size_megabytes())},
             status=400,
         )
 
