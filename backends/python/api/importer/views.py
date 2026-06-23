@@ -878,6 +878,18 @@ def get_missing_pending_decision_rows(dedup_settings: object, summary: object, p
     return [row_number for row_number in pending_row_numbers if str(row_number) not in normalized_decisions]
 
 
+_IMPORT_PHASE_LABELS = {
+    "new_records": {"ru": "Импорт новых записей", "en": "Importing new records", "br": "Importando novos registros"},
+    "duplicates": {"ru": "Обработка дублей", "en": "Processing duplicates", "br": "Processando duplicados"},
+    "completed": {"ru": "Импорт завершён", "en": "Import completed", "br": "Importação concluída"},
+}
+
+
+def _localized_phase_label(phase_id: str) -> str:
+    labels = _IMPORT_PHASE_LABELS.get(phase_id, {})
+    return labels.get(get_import_error_language(), labels.get("ru", ""))
+
+
 def build_import_phase_items(
     *,
     create_phase_total: int,
@@ -890,13 +902,13 @@ def build_import_phase_items(
     phase_items = [
         {
             "id": "new_records",
-            "label": "Импорт новых записей",
+            "label": _localized_phase_label("new_records"),
             "total_rows": max(0, int(create_phase_total or 0)),
             "processed_rows": max(0, min(int(create_phase_processed or 0), max(0, int(create_phase_total or 0)))),
         },
         {
             "id": "duplicates",
-            "label": "Обработка дублей",
+            "label": _localized_phase_label("duplicates"),
             "total_rows": max(0, int(duplicate_phase_total or 0)),
             "processed_rows": max(0, min(int(duplicate_phase_processed or 0), max(0, int(duplicate_phase_total or 0)))),
         },
@@ -952,7 +964,7 @@ def summarize_import_phase_progress(
 
     return {
         "phase": "completed" if completed else str(current_phase.get("id") or active_phase or "").strip(),
-        "phase_label": "Импорт завершён" if completed else str(current_phase.get("label") or "").strip(),
+        "phase_label": _localized_phase_label("completed") if completed else str(current_phase.get("label") or "").strip(),
         "total_rows": total_rows,
         "processed_rows": processed_rows,
         "phases": phase_items,

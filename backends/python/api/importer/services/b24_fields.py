@@ -31,6 +31,103 @@ def _localized_external_key_title() -> str:
     return _LINKED_EXTERNAL_KEY_TITLES.get(language, _LINKED_EXTERNAL_KEY_TITLES["ru"])
 
 
+# Переводы подписей статических каталогов полей (task/department/activity/note/
+# files/user и опций списков). Ключ — русская подпись. Применяется по языку UI.
+_STATIC_FIELD_TITLE_TRANSLATIONS = {
+    "Название задачи": {"en": "Task title", "br": "Título da tarefa"},
+    "Описание": {"en": "Description", "br": "Descrição"},
+    "Ответственный (ID)": {"en": "Responsible (ID)", "br": "Responsável (ID)"},
+    "Соисполнители (ID)": {"en": "Participants (ID)", "br": "Coexecutores (ID)"},
+    "Наблюдатели (ID)": {"en": "Watchers (ID)", "br": "Observadores (ID)"},
+    "Постановщик (ID)": {"en": "Creator (ID)", "br": "Criador (ID)"},
+    "Рабочая группа (ID)": {"en": "Workgroup (ID)", "br": "Grupo de trabalho (ID)"},
+    "Приоритет": {"en": "Priority", "br": "Prioridade"},
+    "Теги": {"en": "Tags", "br": "Tags"},
+    "Крайний срок": {"en": "Deadline", "br": "Prazo final"},
+    "Плановая дата начала": {"en": "Planned start date", "br": "Data planejada de início"},
+    "Плановая дата завершения": {"en": "Planned end date", "br": "Data planejada de término"},
+    "Внешний ID": {"en": "External ID", "br": "ID externo"},
+    "ID родительской задачи": {"en": "Parent task ID", "br": "ID da tarefa pai"},
+    "ID задачи": {"en": "Task ID", "br": "ID da tarefa"},
+    "Пользователь": {"en": "User", "br": "Usuário"},
+    "Комментарий": {"en": "Comment", "br": "Comentário"},
+    "Пункт чек-листа": {"en": "Checklist item", "br": "Item do checklist"},
+    "Выполнено": {"en": "Completed", "br": "Concluído"},
+    "Ссылка на файл": {"en": "File link", "br": "Link do arquivo"},
+    "Имя файла": {"en": "File name", "br": "Nome do arquivo"},
+    "Имя": {"en": "First name", "br": "Nome"},
+    "Фамилия": {"en": "Last name", "br": "Sobrenome"},
+    "Отчество": {"en": "Middle name", "br": "Nome do meio"},
+    "Email": {"en": "Email", "br": "Email"},
+    "Личный телефон": {"en": "Personal phone", "br": "Telefone pessoal"},
+    "Мобильный телефон": {"en": "Mobile phone", "br": "Telefone celular"},
+    "Рабочий телефон": {"en": "Work phone", "br": "Telefone comercial"},
+    "Должность": {"en": "Position", "br": "Cargo"},
+    "Отдел (ID)": {"en": "Department (ID)", "br": "Departamento (ID)"},
+    "Активен": {"en": "Active", "br": "Ativo"},
+    "Название отдела": {"en": "Department name", "br": "Nome do departamento"},
+    "ID родительского отдела": {"en": "Parent department ID", "br": "ID do departamento pai"},
+    "Руководитель (ID)": {"en": "Head (ID)", "br": "Chefe (ID)"},
+    "Сортировка": {"en": "Sort", "br": "Ordenação"},
+    "ID записи": {"en": "Record ID", "br": "ID do registro"},
+    "ID поля в Bitrix24": {"en": "Bitrix24 field ID", "br": "ID do campo no Bitrix24"},
+    "Тип сущности CRM": {"en": "CRM entity type", "br": "Tipo de entidade CRM"},
+    "ID записи CRM": {"en": "CRM record ID", "br": "ID do registro CRM"},
+    "Тип активности": {"en": "Activity type", "br": "Tipo de atividade"},
+    "Тема / заголовок": {"en": "Subject / title", "br": "Assunto / título"},
+    "Дата начала": {"en": "Start date", "br": "Data de início"},
+    "Дата окончания": {"en": "End date", "br": "Data de término"},
+    "Направление": {"en": "Direction", "br": "Direção"},
+    "Статус": {"en": "Status", "br": "Status"},
+    "Телефон / Email (для звонков и писем)": {"en": "Phone / Email (for calls and emails)", "br": "Telefone / Email (para chamadas e e-mails)"},
+    "Текст заметки": {"en": "Note text", "br": "Texto da nota"},
+    "Дата создания": {"en": "Created date", "br": "Data de criação"},
+    # Опции списков
+    "Лид": {"en": "Lead", "br": "Lead"},
+    "Сделка": {"en": "Deal", "br": "Negócio"},
+    "Контакт": {"en": "Contact", "br": "Contato"},
+    "Компания": {"en": "Company", "br": "Empresa"},
+    "Встреча": {"en": "Meeting", "br": "Reunião"},
+    "Звонок": {"en": "Call", "br": "Chamada"},
+    "Задание": {"en": "Task", "br": "Tarefa"},
+    "Входящее": {"en": "Incoming", "br": "Entrada"},
+    "Исходящее": {"en": "Outgoing", "br": "Saída"},
+    "Новая": {"en": "New", "br": "Nova"},
+    "В работе": {"en": "In progress", "br": "Em andamento"},
+    "Ожидание": {"en": "Waiting", "br": "Aguardando"},
+    "Завершена": {"en": "Completed", "br": "Concluída"},
+    "Низкий": {"en": "Low", "br": "Baixo"},
+    "Средний": {"en": "Medium", "br": "Médio"},
+    "Высокий": {"en": "High", "br": "Alto"},
+}
+
+
+def _localize_static_title(title):
+    language = get_import_error_language()
+    if language == "ru":
+        return title
+    mapping = _STATIC_FIELD_TITLE_TRANSLATIONS.get(str(title or "").strip())
+    if not mapping:
+        return title
+    return mapping.get(language, title)
+
+
+def _localize_static_fields(fields) -> list[dict]:
+    localized_fields = []
+    for field in fields:
+        localized = dict(field)
+        localized["title"] = _localize_static_title(field.get("title"))
+        items = field.get("items")
+        if isinstance(items, list):
+            localized["items"] = [
+                {**item, "title": _localize_static_title(item.get("title"))}
+                if isinstance(item, dict) else item
+                for item in items
+            ]
+        localized_fields.append(localized)
+    return localized_fields
+
+
 TASK_FIELDS = [
     {
         "id": "TITLE",
@@ -1649,7 +1746,7 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
             normalized_task_fields_by_id.setdefault(str(static_field["id"]), dict(static_field))
 
         return sorted(
-            normalized_task_fields_by_id.values(),
+            _localize_static_fields(normalized_task_fields_by_id.values()),
             key=lambda item: (item["is_custom"], item["title"], item["id"]),
         )
 
@@ -1710,13 +1807,13 @@ def fetch_entity_fields(account, entity_type: str, entity_config: dict | None = 
                 }
 
         return sorted(
-            static_fields_by_id.values(),
+            _localize_static_fields(static_fields_by_id.values()),
             key=lambda f: (f["is_custom"], f["title"], f["id"]),
         )
 
     static_catalog = STATIC_FIELD_CATALOGS.get(entity_type)
     if static_catalog is not None:
-        return [dict(field) for field in static_catalog]
+        return _localize_static_fields(static_catalog)
 
     entity_fields_loaders = {
         "lead": lambda client: client.crm.lead.fields().result,
