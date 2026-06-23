@@ -198,7 +198,6 @@
       "wizard_progress_desc": "of bulk file attachment completed",
       "wizard_no_records": "No entities matching the filter",
       "wizard_file_error": "File upload error",
-      "file_too_large": "The file is too large. Maximum for bulk upload is {size} MB.",
       "wizard_stop_error": "Stop error",
       "wizard_resume_error": "Resume error",
       "wizard_run_error": "Execution error",

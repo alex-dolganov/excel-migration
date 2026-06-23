@@ -223,19 +223,10 @@ function formatImportFileSizeLabel(sizeInBytes: number) {
 
 const MAX_IMPORT_FILE_SIZE_BYTES = normalizeImportFileSizeBytes(runtimeConfig.public.importMaxFileSizeBytes)
 const MAX_IMPORT_FILE_SIZE_LABEL = computed(() => formatImportFileSizeLabel(MAX_IMPORT_FILE_SIZE_BYTES))
-// Bulk file attach (массовая загрузка вложений) has its own, larger limit than spreadsheet import.
-const MAX_BULK_ATTACH_FILE_SIZE_BYTES = (() => {
-  const normalized = Number(runtimeConfig.public.bulkAttachMaxFileSizeBytes)
-  return Number.isFinite(normalized) && normalized > 0 ? Math.floor(normalized) : 150 * 1024 * 1024
-})()
-const MAX_BULK_ATTACH_FILE_SIZE_LABEL = computed(() => formatImportFileSizeLabel(MAX_BULK_ATTACH_FILE_SIZE_BYTES))
-// The active file-size cap depends on the flow: bulk attach (150 MB) vs spreadsheet import (50 MB).
-const ACTIVE_MAX_FILE_SIZE_BYTES = computed(() => (isBulkAttachFlow.value ? MAX_BULK_ATTACH_FILE_SIZE_BYTES : MAX_IMPORT_FILE_SIZE_BYTES))
-const ACTIVE_MAX_FILE_SIZE_LABEL = computed(() => (isBulkAttachFlow.value ? MAX_BULK_ATTACH_FILE_SIZE_LABEL.value : MAX_IMPORT_FILE_SIZE_LABEL.value))
 const IMPORT_FILE_PICKER_HELPER_TEXT = computed(() => t('importer.file.formats', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
 const IMPORT_FILE_DROPDOWN_LIMIT_TEXT = computed(() => t('importer.file.formats_short', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
-const BULK_ATTACH_FILE_PICKER_HELPER_TEXT = computed(() => t('importer.file.bulk_formats', { size: MAX_BULK_ATTACH_FILE_SIZE_LABEL.value }))
-const BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT = computed(() => t('importer.file.bulk_formats_short', { size: MAX_BULK_ATTACH_FILE_SIZE_LABEL.value }))
+const BULK_ATTACH_FILE_PICKER_HELPER_TEXT = computed(() => t('importer.file.bulk_formats', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
+const BULK_ATTACH_FILE_DROPDOWN_LIMIT_TEXT = computed(() => t('importer.file.bulk_formats_short', { size: MAX_IMPORT_FILE_SIZE_LABEL.value }))
 const PER_ROW_DEDUP_DECISION_VALUES = new Set(['create', 'update', 'skip'])
 const DRY_RUN_RESULTS_PAGE_SIZE = 20
 const COLLAPSIBLE_TEXT_LIMIT = 220
@@ -1985,7 +1976,7 @@ function setSuccess(message: string) {
 
 function buildImportFileSizeErrorMessage(file: File) {
   const sizeInMegabytes = (Number(file?.size || 0) / (1024 * 1024)).toFixed(1)
-  return t('importer.file.error_size', { size: sizeInMegabytes, max: ACTIVE_MAX_FILE_SIZE_LABEL.value })
+  return t('importer.file.error_size', { size: sizeInMegabytes, max: MAX_IMPORT_FILE_SIZE_LABEL.value })
 }
 
 function clearSelectedFile() {
@@ -3341,7 +3332,7 @@ function handleFileChange(event: Event) {
     setError(t('importer.file.error_unsupported'))
     return
   }
-  if (nextFile && nextFile.size > ACTIVE_MAX_FILE_SIZE_BYTES.value) {
+  if (nextFile && nextFile.size > MAX_IMPORT_FILE_SIZE_BYTES) {
     selectedFile.value = null
     target.value = ''
     setError(buildImportFileSizeErrorMessage(nextFile))
@@ -3370,7 +3361,7 @@ function handleDropFile(event: DragEvent) {
     setError(t('importer.file.error_unsupported'))
     return
   }
-  if (file.size > ACTIVE_MAX_FILE_SIZE_BYTES.value) {
+  if (file.size > MAX_IMPORT_FILE_SIZE_BYTES) {
     setError(buildImportFileSizeErrorMessage(file))
     return
   }
@@ -3400,7 +3391,7 @@ async function startImporterSetup() {
     return
   }
 
-  if (selectedFile.value.size > ACTIVE_MAX_FILE_SIZE_BYTES.value) {
+  if (selectedFile.value.size > MAX_IMPORT_FILE_SIZE_BYTES) {
     setError(buildImportFileSizeErrorMessage(selectedFile.value))
     return
   }

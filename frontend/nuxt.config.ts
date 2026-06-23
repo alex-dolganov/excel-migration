@@ -24,7 +24,6 @@ export default defineNuxtConfig({
       apiUrl: '',
       telemetryEnabled: '',
       importMaxFileSizeBytes: process.env.NUXT_PUBLIC_IMPORT_MAX_FILE_SIZE_BYTES || process.env.IMPORT_MAX_FILE_SIZE_BYTES || '52428800',
-      bulkAttachMaxFileSizeBytes: process.env.NUXT_PUBLIC_BULK_ATTACH_MAX_FILE_SIZE_BYTES || process.env.BULK_ATTACH_MAX_FILE_SIZE_BYTES || '157286400',
     }
   },
 

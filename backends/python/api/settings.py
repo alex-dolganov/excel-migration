@@ -113,15 +113,6 @@ def _read_positive_int_env(name: str, default: int) -> int:
 
 
 IMPORT_MAX_FILE_SIZE_BYTES = _read_positive_int_env("IMPORT_MAX_FILE_SIZE_BYTES", 50 * 1024 * 1024)
-# Bulk file attach (массовая загрузка файлов в задачи/CRM) allows larger files than
-# spreadsheet imports — these are real attachments, not row data. Separate knob so the
-# spreadsheet path keeps its smaller memory/parse limits.
-BULK_ATTACH_MAX_FILE_SIZE_BYTES = _read_positive_int_env(
-    "BULK_ATTACH_MAX_FILE_SIZE_BYTES", 150 * 1024 * 1024
-)
-# DATA_UPLOAD_MAX_MEMORY_SIZE excludes uploaded files, so bulk attach (request.FILES) is
-# not capped by it. FILE_UPLOAD_MAX_MEMORY_SIZE only controls memory→tempfile spillover,
-# so large bulk-attach uploads stream to a temp file instead of RAM — keep it modest.
 DATA_UPLOAD_MAX_MEMORY_SIZE = IMPORT_MAX_FILE_SIZE_BYTES
 FILE_UPLOAD_MAX_MEMORY_SIZE = IMPORT_MAX_FILE_SIZE_BYTES
 

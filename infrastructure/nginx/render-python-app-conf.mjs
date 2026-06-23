@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const DEFAULT_IMPORT_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
-const DEFAULT_BULK_ATTACH_MAX_FILE_SIZE_BYTES = 150 * 1024 * 1024
 const DEFAULT_PROXY_SEND_TIMEOUT = '600s'
 const DEFAULT_PROXY_READ_TIMEOUT = '600s'
 
@@ -26,15 +25,8 @@ export function deriveNginxClientMaxBodySize(options = {}) {
     options.importMaxFileSizeBytes,
     DEFAULT_IMPORT_MAX_FILE_SIZE_BYTES,
   )
-  // Bulk attach allows larger files than spreadsheet import, so nginx must permit the
-  // larger of the two — otherwise 150 MB bulk uploads get rejected at the proxy.
-  const bulkAttachMaxFileSizeBytes = normalizePositiveInteger(
-    options.bulkAttachMaxFileSizeBytes,
-    DEFAULT_BULK_ATTACH_MAX_FILE_SIZE_BYTES,
-  )
-  const maxBytes = Math.max(importMaxFileSizeBytes, bulkAttachMaxFileSizeBytes)
 
-  return `${Math.max(1, Math.ceil(maxBytes / (1024 * 1024)))}m`
+  return `${Math.max(1, Math.ceil(importMaxFileSizeBytes / (1024 * 1024)))}m`
 }
 
 export function renderPythonAppConfig(options = {}) {
@@ -47,7 +39,6 @@ export function renderPythonAppConfig(options = {}) {
   const replacements = {
     '__NGINX_CLIENT_MAX_BODY_SIZE__': deriveNginxClientMaxBodySize({
       importMaxFileSizeBytes: env.IMPORT_MAX_FILE_SIZE_BYTES,
-      bulkAttachMaxFileSizeBytes: env.BULK_ATTACH_MAX_FILE_SIZE_BYTES,
       nginxClientMaxBodySize: env.NGINX_CLIENT_MAX_BODY_SIZE,
     }),
     '__NGINX_PROXY_SEND_TIMEOUT__': String(env.NGINX_PROXY_SEND_TIMEOUT || DEFAULT_PROXY_SEND_TIMEOUT).trim() || DEFAULT_PROXY_SEND_TIMEOUT,

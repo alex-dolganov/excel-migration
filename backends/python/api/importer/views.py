@@ -129,17 +129,6 @@ def get_max_import_file_size_megabytes() -> int:
     return max(1, get_max_import_file_size_bytes() // (1024 * 1024))
 
 
-def get_max_bulk_attach_file_size_bytes() -> int:
-    return int(
-        getattr(settings, "BULK_ATTACH_MAX_FILE_SIZE_BYTES", 150 * 1024 * 1024)
-        or 150 * 1024 * 1024
-    )
-
-
-def get_max_bulk_attach_file_size_megabytes() -> int:
-    return max(1, get_max_bulk_attach_file_size_bytes() // (1024 * 1024))
-
-
 _ROW_LIMIT_WARNING_TEMPLATES = {
     "ru": "Файл содержит {total} строк. Будут импортированы первые {limit}. Остальные {rest} строк загрузите отдельным файлом.",
     "en": "The file contains {total} rows. Only the first {limit} will be imported. Upload the remaining {rest} rows as a separate file.",
@@ -4076,18 +4065,9 @@ def bulk_attach_upload(request: AuthorizedRequest):
     if not has_permission(account, "sessions.create"):
         return permission_denied_response()
 
-    set_import_error_language(
-        normalize_import_language(request.POST.get("lang") or request.GET.get("lang"))
-    )
-
     upload = request.FILES.get("file")
     if upload is None:
         return JsonResponse({"error": "File is required"}, status=400)
-    if int(getattr(upload, "size", 0) or 0) > get_max_bulk_attach_file_size_bytes():
-        return JsonResponse(
-            {"error": _upload_error_text("too_large", limit=get_max_bulk_attach_file_size_megabytes())},
-            status=400,
-        )
 
     file_id = str(uuid.uuid4())
     upload_dir = os.path.join(settings.MEDIA_ROOT, "bulk-attach-uploads", file_id)
