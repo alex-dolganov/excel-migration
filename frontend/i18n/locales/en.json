@@ -1,5 +1,9 @@
 {
   "layout": {},
+  "app": {
+    "init_title": "Initializing the application",
+    "runtime_error": "The page crashed at runtime: {details}"
+  },
   "importer": {
     "home": {
       "title": "Select import type",
@@ -916,6 +920,28 @@
       "viewer": "View only",
       "err_user_id": "Enter a valid Bitrix user ID",
       "err_role": "Select a valid role"
+    },
+    "roles_page": {
+      "title": "Import roles",
+      "intro": "Assign local roles for the import wizard. The portal administrator keeps full access automatically.",
+      "new_assignment": "New assignment",
+      "user_id_placeholder": "For example, 59",
+      "role_field": "Role",
+      "save_button": "Save role",
+      "local_roles_note": "Only the local `operator` and `viewer` roles are managed here. The `portal_admin` role comes from Bitrix24 itself.",
+      "current_assignments": "Current assignments",
+      "current_assignments_subtitle": "List of roles within the current portal.",
+      "refresh_button": "Refresh",
+      "table_empty": "No assignments yet. Operators and viewers can be added manually.",
+      "no_permission": "Role management permissions are not available yet. Update the app to sync the portal administrator status.",
+      "col_role": "Role",
+      "col_granted_by": "Granted by",
+      "col_updated": "Updated",
+      "save_success": "Role saved for user {userId}.",
+      "err_generic": "Failed to perform the action",
+      "err_load": "Failed to load import roles",
+      "err_prepare": "Failed to prepare the role data",
+      "err_save": "Failed to save the import role"
     },
     "field_labels": {
       "ID": "Bitrix24 ID",

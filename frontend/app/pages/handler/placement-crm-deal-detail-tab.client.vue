@@ -87,13 +87,13 @@ onMounted(async () => {
         v-if="pageRenderError"
         color="air-primary-alert"
         title="Client runtime error"
-        :description="`Страница упала в рантайме: ${pageRenderError}`"
+        :description="t('app.runtime_error', { details: pageRenderError })"
       />
 
       <B24Alert
         v-if="isInitStateVisible && !isInit && !pageRenderError"
         color="air-secondary"
-        title="Инициализация приложения"
+        :title="t('app.init_title')"
         :description="initError || initStageDescription"
       />
 

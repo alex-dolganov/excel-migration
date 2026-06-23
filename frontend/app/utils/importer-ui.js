@@ -22,6 +22,202 @@ export function translateImporterUi(key, params = null, fallback = '') {
   )
 }
 
+let importerUiLocale = 'ru'
+
+export function setImporterUiLocale(loc) {
+  importerUiLocale = (typeof loc === 'string' && loc) ? loc : 'ru'
+}
+
+// Translation map for hardcoded Russian strings consumed from data constants
+// (scenarios, guides, hints, labels). We localize at the point of consumption
+// instead of mutating the constants, so default ru behavior (and node tests
+// that never set a locale) keep returning the original Russian text.
+const _RU_TEXT_I18N = {
+  // TASK_IMPORT_SCENARIOS
+  'Задачи и подзадачи': { en: 'Tasks and subtasks', br: 'Tarefas e subtarefas' },
+  'Каждая строка создаёт задачу или подзадачу.': { en: 'Each row creates a task or subtask.', br: 'Cada linha cria uma tarefa ou subtarefa.' },
+  'TITLE': { en: 'TITLE', br: 'TITLE' },
+  'RESPONSIBLE_ID или исполнитель по умолчанию': { en: 'RESPONSIBLE_ID or the default assignee', br: 'RESPONSIBLE_ID ou o responsável padrão' },
+  'Создаёт отдельную задачу. Для подзадач используйте PARENT_ID.': { en: 'Creates a separate task. Use PARENT_ID for subtasks.', br: 'Cria uma tarefa separada. Use PARENT_ID para subtarefas.' },
+  'Импорт задач и подзадач': { en: 'Importing tasks and subtasks', br: 'Importação de tarefas e subtarefas' },
+  'Каждая строка создаёт отдельную задачу. Для подзадач можно указать родительскую задачу через PARENT_ID.': { en: 'Each row creates a separate task. For subtasks, you can specify the parent task via PARENT_ID.', br: 'Cada linha cria uma tarefa separada. Para subtarefas, você pode indicar a tarefa pai via PARENT_ID.' },
+  'Минимум для импорта: TITLE и RESPONSIBLE_ID или выбранный исполнитель по умолчанию.': { en: 'Minimum to import: TITLE and RESPONSIBLE_ID or the selected default assignee.', br: 'Mínimo para importar: TITLE e RESPONSIBLE_ID ou o responsável padrão selecionado.' },
+  'Если нужен внешний ключ для последующих связей, добавьте XML_ID.': { en: 'If you need an external key for later links, add XML_ID.', br: 'Se precisar de uma chave externa para vínculos posteriores, adicione XML_ID.' },
+  'PARENT_ID принимает Bitrix ID задачи или XML_ID.': { en: 'PARENT_ID accepts a Bitrix task ID or XML_ID.', br: 'PARENT_ID aceita um ID de tarefa do Bitrix ou XML_ID.' },
+  'Сообщения в чат задачи': { en: 'Messages to the task chat', br: 'Mensagens no chat da tarefa' },
+  'Каждая строка отправляет одно сообщение в чат выбранной задачи.': { en: 'Each row posts one message to the chat of the selected task.', br: 'Cada linha envia uma mensagem ao chat da tarefa selecionada.' },
+  'TASK_ID': { en: 'TASK_ID', br: 'TASK_ID' },
+  'AUTHOR_ID или пользователь по умолчанию': { en: 'AUTHOR_ID or the default user', br: 'AUTHOR_ID ou o usuário padrão' },
+  'POST_MESSAGE': { en: 'POST_MESSAGE', br: 'POST_MESSAGE' },
+  'Импортирует запись внутрь существующей задачи по TASK_ID.': { en: 'Imports the record into an existing task by TASK_ID.', br: 'Importa o registro para uma tarefa existente por TASK_ID.' },
+  'Импорт сообщений в чат задачи': { en: 'Importing messages to the task chat', br: 'Importação de mensagens para o chat da tarefa' },
+  'Минимум для импорта: TASK_ID, POST_MESSAGE и AUTHOR_ID или выбранный пользователь по умолчанию.': { en: 'Minimum to import: TASK_ID, POST_MESSAGE and AUTHOR_ID or the selected default user.', br: 'Mínimo para importar: TASK_ID, POST_MESSAGE e AUTHOR_ID ou o usuário padrão selecionado.' },
+  'TASK_ID можно передавать как Bitrix ID задачи или XML_ID.': { en: 'TASK_ID can be passed as a Bitrix task ID or XML_ID.', br: 'TASK_ID pode ser informado como ID de tarefa do Bitrix ou XML_ID.' },
+  'Если AUTHOR_ID указан в файле, он имеет приоритет над пользователем по умолчанию.': { en: 'If AUTHOR_ID is set in the file, it takes priority over the default user.', br: 'Se AUTHOR_ID estiver definido no arquivo, ele tem prioridade sobre o usuário padrão.' },
+  'Чек-листы в задачи': { en: 'Checklists into tasks', br: 'Checklists para tarefas' },
+  'Каждая строка создаёт один пункт чек-листа в выбранной задаче.': { en: 'Each row creates one checklist item in the selected task.', br: 'Cada linha cria um item de checklist na tarefa selecionada.' },
+  'Добавляет пункт чек-листа в существующую задачу по TASK_ID.': { en: 'Adds a checklist item to an existing task by TASK_ID.', br: 'Adiciona um item de checklist a uma tarefa existente por TASK_ID.' },
+  'Импорт чек-листов в задачи': { en: 'Importing checklists into tasks', br: 'Importação de checklists para tarefas' },
+  'Минимум для импорта: TASK_ID и TITLE.': { en: 'Minimum to import: TASK_ID and TITLE.', br: 'Mínimo para importar: TASK_ID e TITLE.' },
+  'IS_COMPLETE позволяет сразу отметить пункт выполненным.': { en: 'IS_COMPLETE lets you mark the item as completed right away.', br: 'IS_COMPLETE permite marcar o item como concluído imediatamente.' },
+  'Массовые вложения в задачи': { en: 'Bulk attachments to tasks', br: 'Anexos em massa para tarefas' },
+  'Один файл прикрепляется ко всем найденным задачам по выбранному фильтру.': { en: 'A single file is attached to all tasks found by the selected filter.', br: 'Um único arquivo é anexado a todas as tarefas encontradas pelo filtro selecionado.' },
+  'Фильтр задач': { en: 'Task filter', br: 'Filtro de tarefas' },
+  'Файл-вложение': { en: 'Attachment file', br: 'Arquivo de anexo' },
+  'Находит задачи по фильтру и прикрепляет к каждой выбранный файл.': { en: 'Finds tasks by the filter and attaches the selected file to each.', br: 'Encontra tarefas pelo filtro e anexa o arquivo selecionado a cada uma.' },
+  'Массовое добавление вложений в задачи': { en: 'Bulk adding attachments to tasks', br: 'Adição em massa de anexos a tarefas' },
+  'Настройте фильтр задач, загрузите один файл и прикрепите его ко всем найденным задачам.': { en: 'Set up the task filter, upload one file, and attach it to all the tasks found.', br: 'Configure o filtro de tarefas, envie um arquivo e anexe-o a todas as tarefas encontradas.' },
+  'Excel-файл здесь не нужен: сценарий работает по фильтру задач.': { en: 'No Excel file is needed here: the scenario works by a task filter.', br: 'Nenhum arquivo Excel é necessário aqui: o cenário funciona por um filtro de tarefas.' },
+  'Один загруженный файл будет добавлен во все найденные задачи.': { en: 'A single uploaded file will be added to all tasks found.', br: 'Um único arquivo enviado será adicionado a todas as tarefas encontradas.' },
+  'Перед запуском можно проверить выборку и количество найденных задач.': { en: 'Before running, you can review the selection and the number of tasks found.', br: 'Antes de executar, você pode revisar a seleção e o número de tarefas encontradas.' },
+  // CRM_IMPORT_SCENARIOS
+  'Импорт встреч/звонков CRM': { en: 'Importing CRM meetings/calls', br: 'Importação de reuniões/chamadas do CRM' },
+  'Каждая строка создаёт отдельную активность CRM для существующей записи.': { en: 'Each row creates a separate CRM activity for an existing record.', br: 'Cada linha cria uma atividade de CRM separada para um registro existente.' },
+  'OWNER_TYPE_ID': { en: 'OWNER_TYPE_ID', br: 'OWNER_TYPE_ID' },
+  'OWNER_ID': { en: 'OWNER_ID', br: 'OWNER_ID' },
+  'TYPE_ID': { en: 'TYPE_ID', br: 'TYPE_ID' },
+  'SUBJECT': { en: 'SUBJECT', br: 'SUBJECT' },
+  'Импортирует активность в таймлайн выбранной CRM-записи.': { en: 'Imports the activity into the timeline of the selected CRM record.', br: 'Importa a atividade para a linha do tempo do registro de CRM selecionado.' },
+  'Минимум для импорта: OWNER_TYPE_ID, OWNER_ID, TYPE_ID и SUBJECT.': { en: 'Minimum to import: OWNER_TYPE_ID, OWNER_ID, TYPE_ID and SUBJECT.', br: 'Mínimo para importar: OWNER_TYPE_ID, OWNER_ID, TYPE_ID e SUBJECT.' },
+  'Для звонков и email обязательно заполните COMMUNICATIONS_VALUE телефоном или email.': { en: 'For calls and emails, be sure to fill COMMUNICATIONS_VALUE with a phone number or email.', br: 'Para chamadas e e-mails, preencha COMMUNICATIONS_VALUE com um telefone ou e-mail.' },
+  'OWNER_TYPE_ID принимает тип сущности CRM: 1 — лид, 2 — сделка, 3 — контакт, 4 — компания.': { en: 'OWNER_TYPE_ID accepts a CRM entity type: 1 — lead, 2 — deal, 3 — contact, 4 — company.', br: 'OWNER_TYPE_ID aceita um tipo de entidade do CRM: 1 — lead, 2 — negócio, 3 — contato, 4 — empresa.' },
+  'Импорт комментариев CRM': { en: 'Importing CRM comments', br: 'Importação de comentários do CRM' },
+  'Каждая строка добавляет комментарий в таймлайн существующей CRM-записи.': { en: 'Each row adds a comment to the timeline of an existing CRM record.', br: 'Cada linha adiciona um comentário à linha do tempo de um registro de CRM existente.' },
+  'ENTITY_TYPE': { en: 'ENTITY_TYPE', br: 'ENTITY_TYPE' },
+  'ENTITY_ID': { en: 'ENTITY_ID', br: 'ENTITY_ID' },
+  'COMMENT': { en: 'COMMENT', br: 'COMMENT' },
+  'Импортирует комментарий напрямую в таймлайн выбранной CRM-сущности.': { en: 'Imports the comment directly into the timeline of the selected CRM entity.', br: 'Importa o comentário diretamente para a linha do tempo da entidade de CRM selecionada.' },
+  'Минимум для импорта: ENTITY_TYPE, ENTITY_ID и COMMENT.': { en: 'Minimum to import: ENTITY_TYPE, ENTITY_ID and COMMENT.', br: 'Mínimo para importar: ENTITY_TYPE, ENTITY_ID e COMMENT.' },
+  'ENTITY_TYPE можно передавать как код сущности: lead, contact, company или deal.': { en: 'ENTITY_TYPE can be passed as an entity code: lead, contact, company or deal.', br: 'ENTITY_TYPE pode ser informado como código da entidade: lead, contact, company ou deal.' },
+  'Комментарий попадёт в таймлайн записи как обычная заметка CRM.': { en: 'The comment will appear in the record timeline as a regular CRM note.', br: 'O comentário aparecerá na linha do tempo do registro como uma nota comum do CRM.' },
+  // CRM_IMPORT_SCENARIO_GUIDES
+  'Импорт контактов': { en: 'Importing contacts', br: 'Importação de contatos' },
+  'Каждая строка создаёт или обновляет отдельный контакт в CRM.': { en: 'Each row creates or updates a separate contact in CRM.', br: 'Cada linha cria ou atualiza um contato separado no CRM.' },
+  'Название компании в обычном импорте контактов не создаёт связь автоматически.': { en: 'A company name in a regular contact import does not create a link automatically.', br: 'O nome da empresa em uma importação comum de contatos não cria um vínculo automaticamente.' },
+  'Для привязки к существующей компании используйте поле COMPANY_ID и передавайте Bitrix24 ID компании.': { en: 'To link to an existing company, use the COMPANY_ID field and pass the Bitrix24 company ID.', br: 'Para vincular a uma empresa existente, use o campo COMPANY_ID e informe o ID da empresa no Bitrix24.' },
+  'Если в исходном файле есть только название компании, используйте тип импорта «Компания + Контакт».': { en: 'If the source file has only the company name, use the "Company + Contact" import type.', br: 'Se o arquivo de origem tiver apenas o nome da empresa, use o tipo de importação "Empresa + Contato".' },
+  // HR_IMPORT_SCENARIOS
+  'Пользователи портала': { en: 'Portal users', br: 'Usuários do portal' },
+  'Каждая строка создаёт или обновляет сотрудника портала Bitrix24.': { en: 'Each row creates or updates a Bitrix24 portal employee.', br: 'Cada linha cria ou atualiza um funcionário do portal Bitrix24.' },
+  'NAME': { en: 'NAME', br: 'NAME' },
+  'EMAIL': { en: 'EMAIL', br: 'EMAIL' },
+  'Создаёт нового пользователя или обновляет существующего по EMAIL.': { en: 'Creates a new user or updates an existing one by EMAIL.', br: 'Cria um novo usuário ou atualiza um existente por EMAIL.' },
+  'Импорт пользователей': { en: 'Importing users', br: 'Importação de usuários' },
+  'Каждая строка файла создаёт нового сотрудника или обновляет существующего.': { en: 'Each file row creates a new employee or updates an existing one.', br: 'Cada linha do arquivo cria um novo funcionário ou atualiza um existente.' },
+  'Минимум для создания: NAME и EMAIL.': { en: 'Minimum to create: NAME and EMAIL.', br: 'Mínimo para criar: NAME e EMAIL.' },
+  'Для обновления существующих пользователей выберите стратегию дублей «Обновить» и укажите EMAIL как ключ.': { en: 'To update existing users, choose the "Update" duplicate strategy and set EMAIL as the key.', br: 'Para atualizar usuários existentes, escolha a estratégia de duplicatas "Atualizar" e defina EMAIL como chave.' },
+  'UF_DEPARTMENT принимает числовой ID отдела, несколько отделов — через запятую.': { en: 'UF_DEPARTMENT accepts a numeric department ID; multiple departments are separated by commas.', br: 'UF_DEPARTMENT aceita um ID numérico de departamento; vários departamentos são separados por vírgulas.' },
+  'ACTIVE: «Да» / «1» — активен, «Нет» / «0» — заблокирован.': { en: 'ACTIVE: "Yes" / "1" — active, "No" / "0" — blocked.', br: 'ACTIVE: "Sim" / "1" — ativo, "Não" / "0" — bloqueado.' },
+  'Организационная структура': { en: 'Organizational structure', br: 'Estrutura organizacional' },
+  'Каждая строка создаёт или обновляет отдел в структуре компании.': { en: 'Each row creates or updates a department in the company structure.', br: 'Cada linha cria ou atualiza um departamento na estrutura da empresa.' },
+  'Создаёт отдел или обновляет существующий по названию.': { en: 'Creates a department or updates an existing one by name.', br: 'Cria um departamento ou atualiza um existente pelo nome.' },
+  'Импорт отделов': { en: 'Importing departments', br: 'Importação de departamentos' },
+  'Каждая строка создаёт отдел или обновляет существующий по точному совпадению названия.': { en: 'Each row creates a department or updates an existing one by exact name match.', br: 'Cada linha cria um departamento ou atualiza um existente por correspondência exata do nome.' },
+  'Минимум для создания: NAME (название отдела).': { en: 'Minimum to create: NAME (department name).', br: 'Mínimo para criar: NAME (nome do departamento).' },
+  'PARENT — ID родительского отдела для построения иерархии.': { en: 'PARENT — the parent department ID for building the hierarchy.', br: 'PARENT — o ID do departamento pai para construir a hierarquia.' },
+  'UF_HEAD — ID пользователя Bitrix24, который станет руководителем отдела.': { en: 'UF_HEAD — the Bitrix24 user ID who will become the department head.', br: 'UF_HEAD — o ID do usuário Bitrix24 que será o chefe do departamento.' },
+  'Для обновления выберите стратегию дублей «Обновить» и «Название» как ключ.': { en: 'To update, choose the "Update" duplicate strategy and "Name" as the key.', br: 'Para atualizar, escolha a estratégia de duplicatas "Atualizar" e "Nome" como chave.' },
+  // LINKED_IMPORT_SCENARIOS — labels
+  'Компания': { en: 'Company', br: 'Empresa' },
+  'Контакт': { en: 'Contact', br: 'Contato' },
+  'Сделка': { en: 'Deal', br: 'Negócio' },
+  // LINKED_IMPORT_SCENARIOS — titles/descriptions/fields
+  'Связанный импорт компании и контакта': { en: 'Linked import of company and contact', br: 'Importação vinculada de empresa e contato' },
+  'Каждая строка создаёт или обновляет компанию и контакт с автоматической привязкой.': { en: 'Each row creates or updates a company and a contact with automatic linking.', br: 'Cada linha cria ou atualiza uma empresa e um contato com vínculo automático.' },
+  'COMPANY__TITLE': { en: 'COMPANY__TITLE', br: 'COMPANY__TITLE' },
+  'CONTACT__NAME или CONTACT__LAST_NAME': { en: 'CONTACT__NAME or CONTACT__LAST_NAME', br: 'CONTACT__NAME ou CONTACT__LAST_NAME' },
+  'Сначала обрабатывает компанию, затем контакт и связывает их автоматически.': { en: 'Processes the company first, then the contact, and links them automatically.', br: 'Processa primeiro a empresa, depois o contato, e os vincula automaticamente.' },
+  'Одна строка Excel создаёт или обновляет компанию и связанный с ней контакт.': { en: 'One Excel row creates or updates a company and its linked contact.', br: 'Uma linha do Excel cria ou atualiza uma empresa e o contato vinculado a ela.' },
+  'Компания и контакт загружаются из одной строки и связываются автоматически.': { en: 'The company and contact are loaded from one row and linked automatically.', br: 'A empresa e o contato são carregados de uma linha e vinculados automaticamente.' },
+  'Для компании используйте колонки с префиксом COMPANY__, для контакта с префиксом CONTACT__.': { en: 'Use columns prefixed with COMPANY__ for the company and CONTACT__ for the contact.', br: 'Use colunas com o prefixo COMPANY__ para a empresa e CONTACT__ para o contato.' },
+  'Если в строке заполнена только одна часть, импортируется только она.': { en: 'If only one part is filled in a row, only that part is imported.', br: 'Se apenas uma parte estiver preenchida em uma linha, apenas ela é importada.' },
+  'Связанный импорт компании и сделки': { en: 'Linked import of company and deal', br: 'Importação vinculada de empresa e negócio' },
+  'Каждая строка создаёт или обновляет компанию и связанную с ней сделку.': { en: 'Each row creates or updates a company and its linked deal.', br: 'Cada linha cria ou atualiza uma empresa e o negócio vinculado a ela.' },
+  'DEAL__TITLE': { en: 'DEAL__TITLE', br: 'DEAL__TITLE' },
+  'Сначала обрабатывает компанию, затем создаёт или обновляет сделку и связывает её с компанией.': { en: 'Processes the company first, then creates or updates the deal and links it to the company.', br: 'Processa primeiro a empresa, depois cria ou atualiza o negócio e o vincula à empresa.' },
+  'Одна строка Excel создаёт или обновляет компанию и связанную с ней сделку.': { en: 'One Excel row creates or updates a company and its linked deal.', br: 'Uma linha do Excel cria ou atualiza uma empresa e o negócio vinculado a ela.' },
+  'Компания и сделка загружаются из одной строки и связываются автоматически.': { en: 'The company and deal are loaded from one row and linked automatically.', br: 'A empresa e o negócio são carregados de uma linha e vinculados automaticamente.' },
+  'Для компании используйте колонки с префиксом COMPANY__, для сделки с префиксом DEAL__.': { en: 'Use columns prefixed with COMPANY__ for the company and DEAL__ for the deal.', br: 'Use colunas com o prefixo COMPANY__ para a empresa e DEAL__ para o negócio.' },
+  'Если для сделки нужны суммы и этапы, используйте DEAL__OPPORTUNITY, DEAL__CURRENCY_ID и DEAL__STAGE_ID.': { en: 'If the deal needs amounts and stages, use DEAL__OPPORTUNITY, DEAL__CURRENCY_ID and DEAL__STAGE_ID.', br: 'Se o negócio precisar de valores e etapas, use DEAL__OPPORTUNITY, DEAL__CURRENCY_ID e DEAL__STAGE_ID.' },
+  'Связанный импорт контакта и компании': { en: 'Linked import of contact and company', br: 'Importação vinculada de contato e empresa' },
+  'Каждая строка создаёт или обновляет контакт и компанию с автоматической привязкой.': { en: 'Each row creates or updates a contact and a company with automatic linking.', br: 'Cada linha cria ou atualiza um contato e uma empresa com vínculo automático.' },
+  'Сначала обрабатывает контакт, затем создаёт или обновляет компанию и связывает её с контактом.': { en: 'Processes the contact first, then creates or updates the company and links it to the contact.', br: 'Processa primeiro o contato, depois cria ou atualiza a empresa e a vincula ao contato.' },
+  'Одна строка Excel создаёт или обновляет контакт и связанную с ним компанию.': { en: 'One Excel row creates or updates a contact and its linked company.', br: 'Uma linha do Excel cria ou atualiza um contato e a empresa vinculada a ele.' },
+  'Контакт и компания загружаются из одной строки и связываются автоматически.': { en: 'The contact and company are loaded from one row and linked automatically.', br: 'O contato e a empresa são carregados de uma linha e vinculados automaticamente.' },
+  'Для контакта используйте колонки с префиксом CONTACT__, для компании с префиксом COMPANY__.': { en: 'Use columns prefixed with CONTACT__ for the contact and COMPANY__ for the company.', br: 'Use colunas com o prefixo CONTACT__ para o contato e COMPANY__ para a empresa.' },
+  'Для нескольких компаний у одного контакта повторяйте строки с одним CONTACT__EXTERNAL_KEY.': { en: 'For several companies under one contact, repeat rows with the same CONTACT__EXTERNAL_KEY.', br: 'Para várias empresas em um único contato, repita as linhas com o mesmo CONTACT__EXTERNAL_KEY.' },
+  'Связанный импорт контакта и сделки': { en: 'Linked import of contact and deal', br: 'Importação vinculada de contato e negócio' },
+  'Каждая строка создаёт или обновляет контакт и связанную с ним сделку.': { en: 'Each row creates or updates a contact and its linked deal.', br: 'Cada linha cria ou atualiza um contato e o negócio vinculado a ele.' },
+  'Сначала обрабатывает контакт, затем создаёт или обновляет сделку и связывает её с контактом.': { en: 'Processes the contact first, then creates or updates the deal and links it to the contact.', br: 'Processa primeiro o contato, depois cria ou atualiza o negócio e o vincula ao contato.' },
+  'Одна строка Excel создаёт или обновляет контакт и связанную с ним сделку.': { en: 'One Excel row creates or updates a contact and its linked deal.', br: 'Uma linha do Excel cria ou atualiza um contato e o negócio vinculado a ele.' },
+  'Контакт и сделка загружаются из одной строки и связываются автоматически.': { en: 'The contact and deal are loaded from one row and linked automatically.', br: 'O contato e o negócio são carregados de uma linha e vinculados automaticamente.' },
+  'Для контакта используйте колонки с префиксом CONTACT__, для сделки с префиксом DEAL__.': { en: 'Use columns prefixed with CONTACT__ for the contact and DEAL__ for the deal.', br: 'Use colunas com o prefixo CONTACT__ para o contato e DEAL__ para o negócio.' },
+  'Связанный импорт сделки и компании': { en: 'Linked import of deal and company', br: 'Importação vinculada de negócio e empresa' },
+  'Сначала обрабатывает сделку, затем создаёт или обновляет компанию и привязывает её к сделке.': { en: 'Processes the deal first, then creates or updates the company and links it to the deal.', br: 'Processa primeiro o negócio, depois cria ou atualiza a empresa e a vincula ao negócio.' },
+  'Одна строка Excel создаёт или обновляет сделку и связанную с ней компанию.': { en: 'One Excel row creates or updates a deal and its linked company.', br: 'Uma linha do Excel cria ou atualiza um negócio e a empresa vinculada a ele.' },
+  'Сделка и компания загружаются из одной строки и связываются автоматически.': { en: 'The deal and company are loaded from one row and linked automatically.', br: 'O negócio e a empresa são carregados de uma linha e vinculados automaticamente.' },
+  'Для сделки используйте колонки с префиксом DEAL__, для компании с префиксом COMPANY__.': { en: 'Use columns prefixed with DEAL__ for the deal and COMPANY__ for the company.', br: 'Use colunas com o prefixo DEAL__ para o negócio e COMPANY__ para a empresa.' },
+  'У одной сделки может быть только одна компания, поэтому в шаблоне достаточно данных самой сделки и компании.': { en: 'A deal can have only one company, so the deal and company data alone are enough in the template.', br: 'Um negócio pode ter apenas uma empresa, então os dados do próprio negócio e da empresa bastam no modelo.' },
+  'Связанный импорт сделки и контакта': { en: 'Linked import of deal and contact', br: 'Importação vinculada de negócio e contato' },
+  'Каждая строка создаёт или обновляет сделку и привязывает к ней контакт.': { en: 'Each row creates or updates a deal and links a contact to it.', br: 'Cada linha cria ou atualiza um negócio e vincula um contato a ele.' },
+  'Сначала обрабатывает сделку, затем создаёт или обновляет контакт и привязывает его к сделке.': { en: 'Processes the deal first, then creates or updates the contact and links it to the deal.', br: 'Processa primeiro o negócio, depois cria ou atualiza o contato e o vincula ao negócio.' },
+  'Одна строка Excel создаёт или обновляет сделку и связанный с ней контакт.': { en: 'One Excel row creates or updates a deal and its linked contact.', br: 'Uma linha do Excel cria ou atualiza um negócio e o contato vinculado a ele.' },
+  'Сделка и контакт загружаются из одной строки и связываются автоматически.': { en: 'The deal and contact are loaded from one row and linked automatically.', br: 'O negócio e o contato são carregados de uma linha e vinculados automaticamente.' },
+  'Для нескольких контактов к одной сделке повторяйте строки с одним DEAL__EXTERNAL_KEY.': { en: 'For several contacts on one deal, repeat rows with the same DEAL__EXTERNAL_KEY.', br: 'Para vários contatos em um único negócio, repita as linhas com o mesmo DEAL__EXTERNAL_KEY.' },
+  'Для сделки используйте колонки с префиксом DEAL__, для контакта с префиксом CONTACT__.': { en: 'Use columns prefixed with DEAL__ for the deal and CONTACT__ for the contact.', br: 'Use colunas com o prefixo DEAL__ para o negócio e CONTACT__ para o contato.' },
+  // generic crm fallback (buildScenarioSelectionSummary / buildEntityScenarioGuide)
+  'Каждая строка создаёт или обновляет отдельную CRM-запись в выбранном разделе.': { en: 'Each row creates or updates a separate CRM record in the selected section.', br: 'Cada linha cria ou atualiza um registro de CRM separado na seção selecionada.' },
+  'Импортирует записи напрямую в выбранную CRM-сущность.': { en: 'Imports records directly into the selected CRM entity.', br: 'Importa registros diretamente para a entidade de CRM selecionada.' },
+  'Выберите файл, проверьте структуру, сопоставьте обязательные поля и запустите импорт.': { en: 'Select a file, check the structure, map the required fields, and run the import.', br: 'Selecione um arquivo, verifique a estrutura, mapeie os campos obrigatórios e execute a importação.' },
+  'На шаге соответствия полей обязательно сопоставьте поля с пометкой «Обязательное».': { en: 'On the field mapping step, be sure to map fields marked "Required".', br: 'Na etapa de mapeamento de campos, mapeie os campos marcados como "Obrigatório".' },
+  'Перед запуском проверьте найденные ошибки и потенциальные дубли.': { en: 'Before running, review the detected errors and potential duplicates.', br: 'Antes de executar, revise os erros encontrados e as duplicatas potenciais.' },
+  // buildFieldGuidanceHints
+  'Укажите задачу, в которую нужно импортировать запись.': { en: 'Specify the task into which the record should be imported.', br: 'Indique a tarefa para a qual o registro deve ser importado.' },
+  'Поддерживаются Bitrix ID задачи и внешний ключ XML_ID.': { en: 'A Bitrix task ID and the XML_ID external key are supported.', br: 'São aceitos o ID de tarefa do Bitrix e a chave externa XML_ID.' },
+  'Используйте поле для импорта подзадач с привязкой к родительской задаче.': { en: 'Use this field to import subtasks linked to a parent task.', br: 'Use este campo para importar subtarefas vinculadas a uma tarefa pai.' },
+  'Укажите Bitrix24 ID компании, чтобы привязать запись к существующей компании.': { en: 'Specify the Bitrix24 company ID to link the record to an existing company.', br: 'Informe o ID da empresa no Bitrix24 para vincular o registro a uma empresa existente.' },
+  'Если у вас есть только название компании, используйте тип импорта «Компания + Контакт».': { en: 'If you only have the company name, use the "Company + Contact" import type.', br: 'Se você tiver apenas o nome da empresa, use o tipo de importação "Empresa + Contato".' },
+  'Выберите соответствие значений в блоке маппинга списков ниже.': { en: 'Choose the value matches in the list mapping block below.', br: 'Escolha as correspondências de valores no bloco de mapeamento de listas abaixo.' },
+  'Несколько значений можно передавать через ";" или с новой строки.': { en: 'Multiple values can be passed separated by ";" or on a new line.', br: 'Vários valores podem ser informados separados por ";" ou em uma nova linha.' },
+  'Поддерживаются форматы: YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, MM/DD/YYYY.': { en: 'Supported formats: YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, MM/DD/YYYY.', br: 'Formatos suportados: YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, MM/DD/YYYY.' },
+  'Для чисел поддерживаются значения с точкой или запятой.': { en: 'For numbers, values with a dot or a comma are supported.', br: 'Para números, são aceitos valores com ponto ou vírgula.' },
+  'Допустимые значения: 1, 0, true, false, yes, no, да, нет.': { en: 'Allowed values: 1, 0, true, false, yes, no, yes, no.', br: 'Valores permitidos: 1, 0, true, false, yes, no, sim, não.' },
+  'Вставьте ссылку на файл (http/https).': { en: 'Paste a link to the file (http/https).', br: 'Cole um link para o arquivo (http/https).' },
+  'Поддерживаются: прямая ссылка, ссылка «Поделиться» из Яндекс Диска, Google Drive, Dropbox, OneDrive.': { en: 'Supported: a direct link, or a "Share" link from Yandex Disk, Google Drive, Dropbox, OneDrive.', br: 'Suportado: um link direto ou um link de "Compartilhar" do Yandex Disk, Google Drive, Dropbox, OneDrive.' },
+  // FILE_ATTACH_IMPORT_SCENARIOS
+  'Массовый импорт файлов в лиды': { en: 'Bulk file import into leads', br: 'Importação em massa de arquivos para leads' },
+  'Каждая строка прикрепляет файл к лиду по его ID.': { en: 'Each row attaches a file to a lead by its ID.', br: 'Cada linha anexa um arquivo a um lead pelo seu ID.' },
+  'ID': { en: 'ID', br: 'ID' },
+  'FILE_URL': { en: 'FILE_URL', br: 'FILE_URL' },
+  'Прикрепляет файл к полю типа «Файл» существующего лида по ID.': { en: 'Attaches the file to a "File" type field of an existing lead by ID.', br: 'Anexa o arquivo a um campo do tipo "Arquivo" de um lead existente pelo ID.' },
+  'Массовый импорт файлов в контакты': { en: 'Bulk file import into contacts', br: 'Importação em massa de arquivos para contatos' },
+  'Каждая строка прикрепляет файл к контакту по его ID.': { en: 'Each row attaches a file to a contact by its ID.', br: 'Cada linha anexa um arquivo a um contato pelo seu ID.' },
+  'Прикрепляет файл к полю типа «Файл» существующего контакта по ID.': { en: 'Attaches the file to a "File" type field of an existing contact by ID.', br: 'Anexa o arquivo a um campo do tipo "Arquivo" de um contato existente pelo ID.' },
+  'Массовый импорт файлов в компании': { en: 'Bulk file import into companies', br: 'Importação em massa de arquivos para empresas' },
+  'Каждая строка прикрепляет файл к компании по её ID.': { en: 'Each row attaches a file to a company by its ID.', br: 'Cada linha anexa um arquivo a uma empresa pelo seu ID.' },
+  'Прикрепляет файл к полю типа «Файл» существующей компании по ID.': { en: 'Attaches the file to a "File" type field of an existing company by ID.', br: 'Anexa o arquivo a um campo do tipo "Arquivo" de uma empresa existente pelo ID.' },
+  'Массовый импорт файлов в сделки': { en: 'Bulk file import into deals', br: 'Importação em massa de arquivos para negócios' },
+  'Каждая строка прикрепляет файл к сделке по её ID.': { en: 'Each row attaches a file to a deal by its ID.', br: 'Cada linha anexa um arquivo a um negócio pelo seu ID.' },
+  'Прикрепляет файл к полю типа «Файл» существующей сделки по ID.': { en: 'Attaches the file to a "File" type field of an existing deal by ID.', br: 'Anexa o arquivo a um campo do tipo "Arquivo" de um negócio existente pelo ID.' },
+  // misc last-resort fallbacks
+  'Поле': { en: 'Field', br: 'Campo' },
+  'Связанная запись': { en: 'Linked record', br: 'Registro vinculado' },
+  'Связанные записи': { en: 'Linked records', br: 'Registros vinculados' },
+  'Без описания': { en: 'No description', br: 'Sem descrição' },
+  // roleLabels
+  'Оператор': { en: 'Operator', br: 'Operador' },
+  'Только просмотр': { en: 'View only', br: 'Somente visualização' },
+  // throw messages
+  'Укажите корректный Bitrix user ID': { en: 'Enter a valid Bitrix user ID', br: 'Insira um ID de usuário Bitrix válido' },
+  'Выберите корректную роль': { en: 'Select a valid role', br: 'Selecione uma função válida' },
+}
+
+function localizeRu(text) {
+  if (importerUiLocale === 'ru' || !text) return text
+  const m = _RU_TEXT_I18N[String(text).trim()]
+  return m ? (m[importerUiLocale] || text) : text
+}
+
 export const EMPTY_MAPPING_SELECT_VALUE = '__skip_import__'
 export const SUPPORTED_DEDUP_FIELDS = ['EMAIL', 'PHONE', 'TITLE']  // legacy list kept for reference
 const _DEDUP_FIELD_RE = /^[A-Za-z][A-Za-z0-9_]*$/
@@ -712,10 +908,10 @@ export function buildScenarioSelectionSummary(entityType) {
       family: 'task',
       familyLabel: translateImporterUi('importer.families.task_title', null, TASK_IMPORT_FAMILY_LABEL),
       selectedLabel: translateImportEntityLabel(normalizedEntityType, taskScenario.label),
-      title: taskScenario.title,
-      description: taskScenario.description,
-      minimumFields: [...taskScenario.minimumFields],
-      destinationLabel: taskScenario.destinationLabel,
+      title: localizeRu(taskScenario.title),
+      description: localizeRu(taskScenario.description),
+      minimumFields: taskScenario.minimumFields.map((value) => localizeRu(value)),
+      destinationLabel: localizeRu(taskScenario.destinationLabel),
     }
   }
 
@@ -725,10 +921,10 @@ export function buildScenarioSelectionSummary(entityType) {
       family: 'crm',
       familyLabel: translateImporterUi('importer.families.crm_title', null, CRM_IMPORT_FAMILY_LABEL),
       selectedLabel: translateImportEntityLabel(normalizedEntityType, crmScenario.label),
-      title: crmScenario.title,
-      description: crmScenario.description,
-      minimumFields: [...crmScenario.minimumFields],
-      destinationLabel: crmScenario.destinationLabel,
+      title: localizeRu(crmScenario.title),
+      description: localizeRu(crmScenario.description),
+      minimumFields: crmScenario.minimumFields.map((value) => localizeRu(value)),
+      destinationLabel: localizeRu(crmScenario.destinationLabel),
     }
   }
 
@@ -738,10 +934,10 @@ export function buildScenarioSelectionSummary(entityType) {
       family: 'linked',
       familyLabel: translateImporterUi('importer.families.linked_title', null, LINKED_IMPORT_FAMILY_LABEL),
       selectedLabel: translateImportEntityLabel(normalizedEntityType, linkedScenario.label),
-      title: linkedScenario.title,
-      description: linkedScenario.description,
-      minimumFields: [...linkedScenario.minimumFields],
-      destinationLabel: linkedScenario.destinationLabel,
+      title: localizeRu(linkedScenario.title),
+      description: localizeRu(linkedScenario.description),
+      minimumFields: linkedScenario.minimumFields.map((value) => localizeRu(value)),
+      destinationLabel: localizeRu(linkedScenario.destinationLabel),
     }
   }
 
@@ -751,10 +947,10 @@ export function buildScenarioSelectionSummary(entityType) {
       family: 'hr',
       familyLabel: translateImporterUi('importer.families.hr_title', null, HR_IMPORT_FAMILY_LABEL),
       selectedLabel: translateImportEntityLabel(normalizedEntityType, hrScenario.label),
-      title: hrScenario.title,
-      description: hrScenario.description,
-      minimumFields: [...hrScenario.minimumFields],
-      destinationLabel: hrScenario.destinationLabel,
+      title: localizeRu(hrScenario.title),
+      description: localizeRu(hrScenario.description),
+      minimumFields: hrScenario.minimumFields.map((value) => localizeRu(value)),
+      destinationLabel: localizeRu(hrScenario.destinationLabel),
     }
   }
 
@@ -764,10 +960,10 @@ export function buildScenarioSelectionSummary(entityType) {
       family: 'crm_files',
       familyLabel: translateImporterUi('importer.families.crm_files_title', null, FILE_ATTACH_IMPORT_FAMILY_LABEL),
       selectedLabel: translateImportEntityLabel(normalizedEntityType.replace(/^crm_files_/, ''), fileAttachScenario.label),
-      title: fileAttachScenario.title,
-      description: fileAttachScenario.description,
-      minimumFields: [...fileAttachScenario.minimumFields],
-      destinationLabel: fileAttachScenario.destinationLabel,
+      title: localizeRu(fileAttachScenario.title),
+      description: localizeRu(fileAttachScenario.description),
+      minimumFields: fileAttachScenario.minimumFields.map((value) => localizeRu(value)),
+      destinationLabel: localizeRu(fileAttachScenario.destinationLabel),
     }
   }
 
@@ -777,9 +973,9 @@ export function buildScenarioSelectionSummary(entityType) {
     familyLabel: translateImporterUi('importer.families.crm_title', null, CRM_IMPORT_FAMILY_LABEL),
     selectedLabel,
     title: selectedLabel,
-    description: 'Каждая строка создаёт или обновляет отдельную CRM-запись в выбранном разделе.',
+    description: localizeRu('Каждая строка создаёт или обновляет отдельную CRM-запись в выбранном разделе.'),
     minimumFields: [],
-    destinationLabel: 'Импортирует записи напрямую в выбранную CRM-сущность.',
+    destinationLabel: localizeRu('Импортирует записи напрямую в выбранную CRM-сущность.'),
   }
 }
 
@@ -849,7 +1045,7 @@ export function buildLinkedImportEntityGroups(entityType) {
 
   return linkedScenario.linkedEntities.map((item) => ({
     id: String(item?.id || ''),
-    label: String(item?.label || ''),
+    label: localizeRu(String(item?.label || '')),
     sourceEntityType: String(item?.sourceEntityType || ''),
     prefix: String(item?.prefix || ''),
   })).filter((item) => item.id && item.sourceEntityType && item.prefix)
@@ -999,20 +1195,20 @@ export function buildFieldGuidanceHints(field) {
   const hints = []
 
   if (fieldId === 'TASK_ID') {
-    hints.push('Укажите задачу, в которую нужно импортировать запись.')
-    hints.push('Поддерживаются Bitrix ID задачи и внешний ключ XML_ID.')
+    hints.push(localizeRu('Укажите задачу, в которую нужно импортировать запись.'))
+    hints.push(localizeRu('Поддерживаются Bitrix ID задачи и внешний ключ XML_ID.'))
     return hints
   }
 
   if (fieldId === 'PARENT_ID') {
-    hints.push('Используйте поле для импорта подзадач с привязкой к родительской задаче.')
-    hints.push('Поддерживаются Bitrix ID задачи и внешний ключ XML_ID.')
+    hints.push(localizeRu('Используйте поле для импорта подзадач с привязкой к родительской задаче.'))
+    hints.push(localizeRu('Поддерживаются Bitrix ID задачи и внешний ключ XML_ID.'))
     return hints
   }
 
   if (fieldId === 'COMPANY_ID') {
-    hints.push('Укажите Bitrix24 ID компании, чтобы привязать запись к существующей компании.')
-    hints.push('Если у вас есть только название компании, используйте тип импорта «Компания + Контакт».')
+    hints.push(localizeRu('Укажите Bitrix24 ID компании, чтобы привязать запись к существующей компании.'))
+    hints.push(localizeRu('Если у вас есть только название компании, используйте тип импорта «Компания + Контакт».'))
     return hints
   }
 
@@ -1020,28 +1216,28 @@ export function buildFieldGuidanceHints(field) {
     ['enumeration', 'list', 'crm_status', 'crm_category'].includes(normalizedType)
     || (Array.isArray(field?.items) && field.items.length > 0)
   ) {
-    hints.push('Выберите соответствие значений в блоке маппинга списков ниже.')
+    hints.push(localizeRu('Выберите соответствие значений в блоке маппинга списков ниже.'))
   }
 
   if (field?.multiple) {
-    hints.push('Несколько значений можно передавать через ";" или с новой строки.')
+    hints.push(localizeRu('Несколько значений можно передавать через ";" или с новой строки.'))
   }
 
   if (normalizedType === 'date' || normalizedType === 'datetime') {
-    hints.push('Поддерживаются форматы: YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, MM/DD/YYYY.')
+    hints.push(localizeRu('Поддерживаются форматы: YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, MM/DD/YYYY.'))
   }
 
   if (['integer', 'int', 'double', 'float', 'money', 'number'].includes(normalizedType)) {
-    hints.push('Для чисел поддерживаются значения с точкой или запятой.')
+    hints.push(localizeRu('Для чисел поддерживаются значения с точкой или запятой.'))
   }
 
   if (['boolean', 'bool'].includes(normalizedType)) {
-    hints.push('Допустимые значения: 1, 0, true, false, yes, no, да, нет.')
+    hints.push(localizeRu('Допустимые значения: 1, 0, true, false, yes, no, да, нет.'))
   }
 
   if (['file', 'disk_file'].includes(normalizedType)) {
-    hints.push('Вставьте ссылку на файл (http/https).')
-    hints.push('Поддерживаются: прямая ссылка, ссылка «Поделиться» из Яндекс Диска, Google Drive, Dropbox, OneDrive.')
+    hints.push(localizeRu('Вставьте ссылку на файл (http/https).'))
+    hints.push(localizeRu('Поддерживаются: прямая ссылка, ссылка «Поделиться» из Яндекс Диска, Google Drive, Dropbox, OneDrive.'))
   }
 
   return hints
@@ -1065,34 +1261,50 @@ export function getImportEntityLabel(entityType, entityConfig = null) {
   return translateImporterUi(`importer.entities.${normalizedEntityType}`, null, fallback)
 }
 
+function localizeScenarioGuide(guide) {
+  if (!guide) {
+    return guide
+  }
+  return {
+    ...guide,
+    title: localizeRu(guide.title),
+    description: localizeRu(guide.description),
+    highlights: Array.isArray(guide.highlights) ? guide.highlights.map((value) => localizeRu(value)) : guide.highlights,
+  }
+}
+
 export function buildEntityScenarioGuide(entityType) {
   const normalizedEntityType = String(entityType || '').trim()
   const taskScenario = TASK_IMPORT_SCENARIOS[normalizedEntityType]
   if (taskScenario) {
-    return taskScenario.guide
+    return localizeScenarioGuide(taskScenario.guide)
   }
 
   const crmScenario = CRM_IMPORT_SCENARIOS[normalizedEntityType]
   if (crmScenario) {
-    return crmScenario.guide
+    return localizeScenarioGuide(crmScenario.guide)
   }
 
   const crmGuide = CRM_IMPORT_SCENARIO_GUIDES[normalizedEntityType]
   if (crmGuide) {
-    return crmGuide
+    return localizeScenarioGuide(crmGuide)
   }
 
   const linkedScenario = LINKED_IMPORT_SCENARIOS[normalizedEntityType]
   if (linkedScenario) {
-    return linkedScenario.guide
+    return localizeScenarioGuide(linkedScenario.guide)
   }
 
   return {
-    title: `Импорт в раздел «${getImportEntityLabel(normalizedEntityType)}»`,
-    description: 'Выберите файл, проверьте структуру, сопоставьте обязательные поля и запустите импорт.',
+    title: importerUiLocale === 'ru'
+      ? `Импорт в раздел «${getImportEntityLabel(normalizedEntityType)}»`
+      : (importerUiLocale === 'br'
+        ? `Importação para a seção "${getImportEntityLabel(normalizedEntityType)}"`
+        : `Import into the "${getImportEntityLabel(normalizedEntityType)}" section`),
+    description: localizeRu('Выберите файл, проверьте структуру, сопоставьте обязательные поля и запустите импорт.'),
     highlights: [
-      'На шаге соответствия полей обязательно сопоставьте поля с пометкой «Обязательное».',
-      'Перед запуском проверьте найденные ошибки и потенциальные дубли.',
+      localizeRu('На шаге соответствия полей обязательно сопоставьте поля с пометкой «Обязательное».'),
+      localizeRu('Перед запуском проверьте найденные ошибки и потенциальные дубли.'),
     ],
     exampleColumns: [],
   }
@@ -1334,7 +1546,7 @@ export function buildRequiredFieldSummary({ fields, mappingRows, defaultFieldIds
     .filter((field) => Boolean(field?.required) && !ignoredFieldIds.has(String(field?.id || '').trim()))
     .map((field) => ({
       id: String(field?.id || '').trim(),
-      title: String(field?.title || field?.id || '').trim() || 'Поле',
+      title: String(field?.title || field?.id || '').trim() || localizeRu('Поле'),
     }))
     .filter((field) => field.id.length > 0)
 
@@ -2192,8 +2404,8 @@ function getLinkedEntityDisplayMeta(sectionId) {
   const meta = LINKED_ENTITY_DISPLAY_META[normalizedSectionId]
   if (!meta) {
     return {
-      singular: normalizedSectionId || 'Связанная запись',
-      plural: normalizedSectionId || 'Связанные записи',
+      singular: normalizedSectionId || localizeRu('Связанная запись'),
+      plural: normalizedSectionId || localizeRu('Связанные записи'),
       emptyTitle: translateImporterUi('importer.common.untitled', null, 'Без названия'),
     }
   }
@@ -2249,7 +2461,7 @@ function buildImportRunTitle(item, linkedRecords) {
 }
 
 function normalizeImportRunReason(item) {
-  return String(item?.error || '').trim() || 'Без описания'
+  return String(item?.error || '').trim() || localizeRu('Без описания')
 }
 
 export function buildImportRunStatusFilters(importRunData, entityType = '') {
@@ -3371,7 +3583,7 @@ export function buildRoleAssignmentsRows(items) {
       key: String(item?.id || `${item?.b24_user_id || ''}:${role}`),
       userId: String(item?.b24_user_id || '').trim() || '—',
       role,
-      roleLabel: roleLabels[role] || role || '—',
+      roleLabel: localizeRu(roleLabels[role]) || role || '—',
       grantedByUserId: String(item?.granted_by_b24_user_id || '').trim() || '—',
       updatedAt: String(item?.updated_at || '').trim() || '—',
     }
@@ -3382,12 +3594,12 @@ export function buildRoleAssignmentPayload({ userId, role } = {}) {
   const normalizedUserId = String(userId || '').trim()
   const parsedUserId = Number.parseInt(normalizedUserId, 10)
   if (!normalizedUserId || !Number.isInteger(parsedUserId) || parsedUserId <= 0) {
-    throw new Error('Укажите корректный Bitrix user ID')
+    throw new Error(localizeRu('Укажите корректный Bitrix user ID'))
   }
 
   const normalizedRole = String(role || '').trim()
   if (!ASSIGNABLE_IMPORTER_ROLES.includes(normalizedRole)) {
-    throw new Error('Выберите корректную роль')
+    throw new Error(localizeRu('Выберите корректную роль'))
   }
 
   return {

@@ -1,5 +1,9 @@
 {
   "layout": {},
+  "app": {
+    "init_title": "Inicializando o aplicativo",
+    "runtime_error": "A página falhou em tempo de execução: {details}"
+  },
   "importer": {
     "home": {
       "title": "Selecione o tipo de importação",
@@ -916,6 +920,28 @@
       "viewer": "Somente visualização",
       "err_user_id": "Insira um ID de usuário Bitrix válido",
       "err_role": "Selecione uma função válida"
+    },
+    "roles_page": {
+      "title": "Funções de importação",
+      "intro": "Atribua funções locais para o assistente de importação. O administrador do portal mantém acesso total automaticamente.",
+      "new_assignment": "Nova atribuição",
+      "user_id_placeholder": "Por exemplo, 59",
+      "role_field": "Função",
+      "save_button": "Salvar função",
+      "local_roles_note": "Aqui são gerenciadas apenas as funções locais `operator` e `viewer`. A função `portal_admin` vem do próprio Bitrix24.",
+      "current_assignments": "Atribuições atuais",
+      "current_assignments_subtitle": "Lista de funções dentro do portal atual.",
+      "refresh_button": "Atualizar",
+      "table_empty": "Ainda não há atribuições. Operadores e visualizadores podem ser adicionados manualmente.",
+      "no_permission": "As permissões de gerenciamento de funções ainda não estão disponíveis. Atualize o aplicativo para sincronizar o status de administrador do portal.",
+      "col_role": "Função",
+      "col_granted_by": "Concedido por",
+      "col_updated": "Atualizado",
+      "save_success": "Função salva para o usuário {userId}.",
+      "err_generic": "Não foi possível executar a ação",
+      "err_load": "Não foi possível carregar as funções de importação",
+      "err_prepare": "Não foi possível preparar os dados da função",
+      "err_save": "Não foi possível salvar a função de importação"
     },
     "field_labels": {
       "ID": "Bitrix24 ID",

@@ -51,6 +51,7 @@ import {
   resolveMappingSelectValue,
   buildSessionHistoryRows,
   setImporterUiTranslator,
+  setImporterUiLocale,
   buildFileAttachEntityOptions,
 } from '~/utils/importer-ui'
 import { sleepAction } from '~/utils/sleep'
@@ -198,6 +199,7 @@ const userStore = useUserStore()
 const runtimeConfig = useRuntimeConfig()
 const { t, locale } = useI18n()
 setImporterUiTranslator(t)
+watch(locale, (l) => setImporterUiLocale(String(l)), { immediate: true })
 const DEFAULT_MAX_IMPORT_FILE_SIZE_BYTES = 50 * 1024 * 1024
 
 function normalizeImportFileSizeBytes(value: unknown) {

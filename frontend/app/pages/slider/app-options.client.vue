@@ -45,10 +45,10 @@ const importerRoleError = ref('')
 const importerRoleSuccess = ref('')
 const importerRoleBusyAction = ref('')
 const canManageImporterRoles = computed(() => user.hasImporterPermission('roles.manage'))
-const importerRoleOptions = [
-  { value: 'operator', label: 'Оператор' },
-  { value: 'viewer', label: 'Только просмотр' },
-]
+const importerRoleOptions = computed(() => [
+  { value: 'operator', label: t('importer.permission.operator') },
+  { value: 'viewer', label: t('importer.permission.viewer') },
+])
 const importerRoleAssignments = computed(() => buildRoleAssignmentsRows(importerRoleItems.value))
 const importerRoleTableColumns = computed(() => [
   {
@@ -63,7 +63,7 @@ const importerRoleTableColumns = computed(() => [
   },
   {
     accessorKey: 'roleLabel',
-    header: 'Роль',
+    header: t('importer.roles_page.col_role'),
     meta: {
       class: {
         th: 'w-[180px]',
@@ -72,7 +72,7 @@ const importerRoleTableColumns = computed(() => [
   },
   {
     accessorKey: 'grantedByUserId',
-    header: 'Кем выдано',
+    header: t('importer.roles_page.col_granted_by'),
     meta: {
       class: {
         th: 'w-[140px]',
@@ -81,7 +81,7 @@ const importerRoleTableColumns = computed(() => [
   },
   {
     accessorKey: 'updatedAt',
-    header: 'Обновлено',
+    header: t('importer.roles_page.col_updated'),
     meta: {
       class: {
         th: 'min-w-[220px]',
@@ -96,7 +96,7 @@ const infoItems = computed(() => [
     slot: 'history'
   },
   {
-    label: 'Роли импорта',
+    label: t('importer.roles_page.title'),
     icon: Settings5Icon,
     slot: 'roles'
   },
@@ -128,7 +128,7 @@ function resetImporterRoleMessages() {
   importerRoleSuccess.value = ''
 }
 
-function describeError(error: unknown, fallback = 'Не удалось выполнить действие') {
+function describeError(error: unknown, fallback = t('importer.roles_page.err_generic')) {
   if (error instanceof AjaxError) {
     return error.message || fallback
   }
@@ -153,7 +153,7 @@ async function loadImporterRoles() {
     const response = await apiStore.getImportRoles()
     importerRoleItems.value = Array.isArray(response.items) ? response.items : []
   } catch (error) {
-    importerRoleError.value = describeError(error, 'Не удалось загрузить роли импорта')
+    importerRoleError.value = describeError(error, t('importer.roles_page.err_load'))
   } finally {
     importerRoleBusyAction.value = ''
   }
@@ -171,7 +171,7 @@ async function saveImporterRole() {
       role: importerRoleValue.value,
     })
   } catch (error) {
-    importerRoleError.value = describeError(error, 'Не удалось подготовить данные роли')
+    importerRoleError.value = describeError(error, t('importer.roles_page.err_prepare'))
     return
   }
 
@@ -182,9 +182,9 @@ async function saveImporterRole() {
     importerRoleUserId.value = ''
     importerRoleValue.value = 'viewer'
     await loadImporterRoles()
-    importerRoleSuccess.value = `Роль сохранена для пользователя ${response.item?.b24_user_id ?? payload.b24_user_id}.`
+    importerRoleSuccess.value = t('importer.roles_page.save_success', { userId: response.item?.b24_user_id ?? payload.b24_user_id })
   } catch (error) {
-    importerRoleError.value = describeError(error, 'Не удалось сохранить роль импорта')
+    importerRoleError.value = describeError(error, t('importer.roles_page.err_save'))
   } finally {
     importerRoleBusyAction.value = ''
   }
@@ -372,24 +372,24 @@ onUnmounted(() => {
           <div class="flex flex-col gap-[18px]">
             <B24Alert
               color="air-secondary"
-              description="Назначайте локальные роли для мастера импорта. Администратор портала сохраняет полный доступ автоматически."
+              :description="t('importer.roles_page.intro')"
               :b24ui="{ description: 'text-(--ui-color-base-70)' }"
             />
 
             <template v-if="canManageImporterRoles">
               <div class="grid gap-4 xl:grid-cols-[minmax(260px,320px),1fr]">
                 <section class="rounded-[18px] border border-[#dce7f7] bg-[linear-gradient(180deg,#f5faff_0%,#edf5ff_100%)] p-4">
-                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Новое назначение</div>
+                  <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.roles_page.new_assignment') }}</div>
                   <div class="mt-3 flex flex-col gap-3">
                     <B24FormField description="Bitrix user ID">
                       <B24Input
                         v-model="importerRoleUserId"
                         size="lg"
                         class="w-full"
-                        placeholder="Например, 59"
+                        :placeholder="t('importer.roles_page.user_id_placeholder')"
                       />
                     </B24FormField>
-                    <B24FormField description="Роль">
+                    <B24FormField :description="t('importer.roles_page.role_field')">
                       <B24Select
                         v-model="importerRoleValue"
                         :items="importerRoleOptions"
@@ -398,7 +398,7 @@ onUnmounted(() => {
                       />
                     </B24FormField>
                     <B24Button
-                      label="Сохранить роль"
+                      :label="t('importer.roles_page.save_button')"
                       color="air-primary"
                       size="lg"
                       :loading="importerRoleBusyAction === 'save'"
@@ -407,18 +407,18 @@ onUnmounted(() => {
                     />
                   </div>
                   <div class="mt-3 text-xs text-[#7f92a7]">
-                    Здесь управляются только локальные роли `operator` и `viewer`. Роль `portal_admin` приходит из самого Bitrix24.
+                    {{ t('importer.roles_page.local_roles_note') }}
                   </div>
                 </section>
 
                 <section class="rounded-[18px] border border-[#e4e9ef] bg-white p-4">
                   <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">Текущие назначения</div>
-                      <div class="mt-1 text-sm text-[#5f7285]">Список ролей внутри текущего портала.</div>
+                      <div class="text-xs font-semibold uppercase tracking-[0.12em] text-[#8ea0b2]">{{ t('importer.roles_page.current_assignments') }}</div>
+                      <div class="mt-1 text-sm text-[#5f7285]">{{ t('importer.roles_page.current_assignments_subtitle') }}</div>
                     </div>
                     <B24Button
-                      label="Обновить"
+                      :label="t('importer.roles_page.refresh_button')"
                       color="air-tertiary"
                       size="sm"
                       :loading="importerRoleBusyAction === 'load'"
@@ -449,7 +449,7 @@ onUnmounted(() => {
                       loading-animation="loading"
                       :columns="importerRoleTableColumns"
                       :data="importerRoleAssignments"
-                      empty="Назначений пока нет. Операторов и наблюдателей можно добавить вручную."
+                      :empty="t('importer.roles_page.table_empty')"
                     >
                       <template #roleLabel-cell="{ row }">
                         <B24Badge
@@ -469,7 +469,7 @@ onUnmounted(() => {
             <B24Alert
               v-else
               color="air-primary-alert"
-              description="Права на управление ролями пока недоступны. Обновите приложение, чтобы синхронизировать статус администратора портала."
+              :description="t('importer.roles_page.no_permission')"
               :b24ui="{ description: 'text-(--ui-color-base-80)' }"
             />
           </div>
