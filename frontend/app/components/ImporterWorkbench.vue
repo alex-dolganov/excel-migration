@@ -875,6 +875,11 @@ const canApplyTemplate = computed(() => (
   && Boolean(mappingData.value)
   && !busyAction.value
 ))
+const canDeleteTemplate = computed(() => (
+  importerPermissionState.value.canManageTemplates
+  && selectedTemplateId.value.trim().length > 0
+  && !busyAction.value
+))
 const currentDedupSettingsPayload = computed(() => buildCurrentDedupPayload())
 const savedDedupSettingsPayload = computed(() => buildDedupPayload(mappingData.value?.saved_dedup || {}))
 const hasPendingDedupChanges = computed(() => (
@@ -3564,6 +3569,31 @@ async function saveImportAliasRule(row: MappingRow) {
   }
 }
 
+async function deleteAliasRule(rule: Record<string, any>) {
+  const ruleId = String(rule?.id || '')
+  if (!ruleId || busyAction.value || !importerPermissionState.value.canManageTemplates) {
+    return
+  }
+
+  resetMessages()
+  busyAction.value = 'alias-rule-delete'
+
+  try {
+    const result = await apiStore.deleteImportAliasRule(ruleId)
+    if (Number(result?.deleted) > 0) {
+      importAliasRules.value = importAliasRules.value.filter((item) => String(item?.id || '') !== ruleId)
+      setSuccess(t('importer.success.alias_deleted'))
+    } else {
+      // Правило уже удалено (напр. другим пользователем) — синхронизируемся с сервером.
+      await refreshAliasRules()
+    }
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
+  } finally {
+    busyAction.value = ''
+  }
+}
+
 function onMappingDragStart(index: number, event: DragEvent) {
   mappingDragSourceIndex.value = index
   if (event.dataTransfer) {
@@ -3818,6 +3848,29 @@ async function applyTemplate() {
     await refreshMapping()
     currentStep.value = 4
     setSuccess(t('importer.success.template_applied'))
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
+  } finally {
+    busyAction.value = ''
+  }
+}
+
+async function deleteTemplate() {
+  const templateId = selectedTemplateId.value.trim()
+  if (!templateId || busyAction.value || !importerPermissionState.value.canManageTemplates) {
+    return
+  }
+
+  resetMessages()
+  busyAction.value = 'template-delete'
+
+  try {
+    const result = await apiStore.deleteImportTemplate(templateId)
+    selectedTemplateId.value = ''
+    await refreshTemplates()
+    if (Number(result?.deleted) > 0) {
+      setSuccess(t('importer.success.template_deleted'))
+    }
   } catch (error) {
     setError(error instanceof Error ? error.message : String(error))
   } finally {
@@ -6680,9 +6733,20 @@ onUnmounted(() => {
                   <div
                     v-for="rule in importAliasRules"
                     :key="String(rule.id || `${rule.source_label}:${rule.target_field_id}`)"
-                    class="rounded-full border border-[#d7e7ff] bg-white px-3 py-1.5 text-xs font-medium text-[#314256]"
+                    class="flex items-center gap-1.5 rounded-full border border-[#d7e7ff] bg-white px-3 py-1.5 text-xs font-medium text-[#314256]"
                   >
-                    {{ String(rule.source_label || '—') }} → {{ String(rule.target_field_title || rule.target_field_id || '—') }}
+                    <span>{{ String(rule.source_label || '—') }} → {{ String(rule.target_field_title || rule.target_field_id || '—') }}</span>
+                    <button
+                      v-if="importerPermissionState.canManageTemplates"
+                      type="button"
+                      class="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full text-base leading-none text-[#8ea0b2] transition hover:bg-[#ffe9e4] hover:text-[#d0442b] disabled:cursor-not-allowed disabled:opacity-40"
+                      :disabled="Boolean(busyAction)"
+                      :title="t('importer.alias_rules.delete')"
+                      :aria-label="t('importer.alias_rules.delete')"
+                      @click="deleteAliasRule(rule)"
+                    >
+                      <span aria-hidden="true">×</span>
+                    </button>
                   </div>
                 </div>
                 <div v-else class="rounded-[14px] border border-dashed border-[#d7e7ff] bg-white/80 px-4 py-3 text-sm text-[#6f8194]">
@@ -6796,6 +6860,14 @@ onUnmounted(() => {
                     :loading="busyAction === 'template-apply'"
                     :disabled="!canApplyTemplate"
                     @click="applyTemplate"
+                  />
+                  <B24Button
+                    :label="t('importer.template.delete_button')"
+                    color="air-tertiary"
+                    size="lg"
+                    :loading="busyAction === 'template-delete'"
+                    :disabled="!canDeleteTemplate"
+                    @click="deleteTemplate"
                   />
                 </div>
               </section>

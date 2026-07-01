@@ -381,6 +381,19 @@ export const useApiStore = defineStore(
       })
     }
 
+    const deleteImportTemplate = async (
+      templateId: string,
+    ): Promise<{ deleted: number }> => {
+      const searchParams = new URLSearchParams()
+      searchParams.set('id', templateId)
+      return await $api(`/api/import-templates?${searchParams.toString()}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${tokenJWT.value}`
+        }
+      })
+    }
+
     const saveImportAliasRule = async (
       sessionId: string,
       sourceLabel: string,
@@ -396,6 +409,19 @@ export const useApiStore = defineStore(
           source_label: sourceLabel,
           target_field_id: targetFieldId,
         }),
+      })
+    }
+
+    const deleteImportAliasRule = async (
+      ruleId: string,
+    ): Promise<{ deleted: number }> => {
+      const searchParams = new URLSearchParams()
+      searchParams.set('id', ruleId)
+      return await $api(`/api/import-alias-rules?${searchParams.toString()}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${tokenJWT.value}`
+        }
       })
     }
 
@@ -675,7 +701,9 @@ export const useApiStore = defineStore(
       saveImportMapping,
       saveImportRole,
       saveImportTemplate,
+      deleteImportTemplate,
       saveImportAliasRule,
+      deleteImportAliasRule,
       applyImportTemplate,
       validateImportSession,
       dryRunImportSession,

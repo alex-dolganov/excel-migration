@@ -370,7 +370,8 @@
       "empty": "Ainda não há regras salvas. Use o botão \"Lembrar regra\" na linha desejada.",
       "save_button": "Lembrar regra",
       "saved": "Regra salva",
-      "saved_hint": "Essa correspondência já será considerada na próxima correspondência automática."
+      "saved_hint": "Essa correspondência já será considerada na próxima correspondência automática.",
+      "delete": "Excluir regra"
     },
     "preflight": {
       "title": "Verificação pré-execução",
@@ -413,6 +414,7 @@
       "apply_title": "Aplicar modelo",
       "apply_placeholder": "Selecionar modelo",
       "apply_button": "Aplicar",
+      "delete_button": "Excluir",
       "download_header": "Modelo",
       "download_button": "Baixar",
       "card_title": "Modelo para «{entity}»",
@@ -515,8 +517,10 @@
       "mapping_saved_unmapped": "Mapeamento de campos salvo. Valores restantes para mapear: {count}.",
       "alias_saved": "Regra salva: \"{source}\" → \"{target}\".",
       "alias_exists": "Esta regra de mapeamento já está salva.",
+      "alias_deleted": "Regra de mapeamento excluída.",
       "template_saved": "Modelo de importação salvo.",
       "template_applied": "Modelo aplicado à sessão atual.",
+      "template_deleted": "Modelo de importação excluído.",
       "validation_complete": "Validação concluída. Nenhum erro crítico encontrado.",
       "validation_issues": "Validação concluída. Corrija as linhas com erros antes do próximo passo.",
       "test_run": "Importação de teste concluída. Arquivo completo verificado, você pode executar a importação real.",

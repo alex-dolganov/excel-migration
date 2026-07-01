@@ -2003,7 +2003,7 @@ def import_sessions(request: AuthorizedRequest):
 
 @xframe_options_exempt
 @csrf_exempt
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET", "POST", "DELETE"])
 @log_errors("import_templates")
 @auth_required
 def import_templates(request: AuthorizedRequest):
@@ -2034,6 +2034,25 @@ def import_templates(request: AuthorizedRequest):
             templates = templates.filter(entity_scope_key=build_template_entity_scope(entity_type, entity_config))
 
         return JsonResponse({"items": [serialize_template(item) for item in templates.order_by("name")]})
+
+    if request.method == "DELETE":
+        import uuid as uuid_lib
+
+        if not has_permission(account, "templates.manage"):
+            return permission_denied_response()
+        template_id = str((request.GET or {}).get("id") or "").strip()
+        if not template_id:
+            return JsonResponse({"error": "id is required"}, status=400)
+        try:
+            uuid_lib.UUID(template_id)
+        except (ValueError, TypeError):
+            return JsonResponse({"error": "invalid template id"}, status=400)
+        deleted_count, _ = ImportTemplate.objects.filter(
+            portal_member_id=portal_member_id,
+            portal_domain=portal_domain,
+            id=template_id,
+        ).delete()
+        return JsonResponse({"deleted": deleted_count})
 
     payload = request.data or {}
     template_name = str(payload.get("name") or "").strip()
@@ -2111,7 +2130,7 @@ def import_templates(request: AuthorizedRequest):
 
 @xframe_options_exempt
 @csrf_exempt
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET", "POST", "DELETE"])
 @log_errors("import_alias_rules")
 @auth_required
 def import_alias_rules(request: AuthorizedRequest):
@@ -2153,6 +2172,23 @@ def import_alias_rules(request: AuthorizedRequest):
             entity_scope_key=build_template_entity_scope(entity_type, entity_config),
         )
         return JsonResponse({"items": [serialize_alias_rule(item, field_titles) for item in alias_rules]})
+
+    if request.method == "DELETE":
+        import uuid as uuid_lib
+
+        rule_id = str((request.GET or {}).get("id") or "").strip()
+        if not rule_id:
+            return JsonResponse({"error": "id is required"}, status=400)
+        try:
+            uuid_lib.UUID(rule_id)
+        except (ValueError, TypeError):
+            return JsonResponse({"error": "invalid rule id"}, status=400)
+        deleted_count, _ = ImportAliasRule.objects.filter(
+            portal_member_id=portal_member_id,
+            portal_domain=portal_domain,
+            id=rule_id,
+        ).delete()
+        return JsonResponse({"deleted": deleted_count})
 
     payload = request.data or {}
     source_label = str(payload.get("source_label") or "").strip()

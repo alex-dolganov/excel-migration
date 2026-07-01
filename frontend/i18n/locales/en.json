@@ -370,7 +370,8 @@
       "empty": "No saved rules yet. Use the \"Remember rule\" button on the desired row.",
       "save_button": "Remember rule",
       "saved": "Rule saved",
-      "saved_hint": "This match will already be considered in the next auto-match."
+      "saved_hint": "This match will already be considered in the next auto-match.",
+      "delete": "Delete rule"
     },
     "preflight": {
       "title": "Pre-run check",
@@ -413,6 +414,7 @@
       "apply_title": "Apply template",
       "apply_placeholder": "Select template",
       "apply_button": "Apply",
+      "delete_button": "Delete",
       "download_header": "Template",
       "download_button": "Download",
       "card_title": "Template for \"{entity}\"",
@@ -515,8 +517,10 @@
       "mapping_saved_unmapped": "Field mapping saved. Values left to map: {count}.",
       "alias_saved": "Rule saved: \"{source}\" → \"{target}\".",
       "alias_exists": "This mapping rule is already saved.",
+      "alias_deleted": "Mapping rule deleted.",
       "template_saved": "Import template saved.",
       "template_applied": "Template applied to the current session.",
+      "template_deleted": "Import template deleted.",
       "validation_complete": "Validation complete. No critical errors found.",
       "validation_issues": "Validation complete. Fix rows with errors before the next step.",
       "test_run": "Test import complete. Full file checked, you can run the real import.",
